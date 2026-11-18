@@ -188,7 +188,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     # ---------------------------------------------------------------- laser, with no windows at all
     real_enum = appmod.enumerate_windows
     pet.stop_minigame()
-    appmod.enumerate_windows = lambda pid: []   # type: ignore[assignment]
+    appmod.enumerate_windows = lambda pid, include=frozenset(): []   # type: ignore[assignment]
     pet._refresh_windows()
     pet._begin_game("laser")
     g = pet.mini

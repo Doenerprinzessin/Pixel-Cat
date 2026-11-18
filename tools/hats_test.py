@@ -25,7 +25,7 @@ from pixelcat.engine.animations import all_poses  # noqa: E402
 from pixelcat.sprites import cat_art, hats  # noqa: E402
 from pixelcat.sprites.cat_art import Pose  # noqa: E402
 from pixelcat.sprites.library import SpriteLibrary  # noqa: E402
-from pixelcat.sprites.palettes import EARIN  # noqa: E402
+from pixelcat.sprites.palettes import EARIN, RIM  # noqa: E402
 
 results: list[tuple[str, bool, str]] = []
 
@@ -93,6 +93,17 @@ def main() -> int:
     party_ears = sum(row.count(EARIN) for row in lib._canvas(sit, False)[0].px)
     check("big hats (wizard) cover the ears, small ones (party hat) leave them out",
           bare_ears > 0 and wiz_ears == 0 and party_ears > 0, f"{bare_ears} / {wiz_ears} / {party_ears}")
+    # nothing touches the frame's edge (the tail's outline and rim used to be cut off)
+    lib.set_worn("")
+    lib._canvases.clear()
+    cut = []
+    for pose in poses:
+        cv, _ox, _oy = lib._canvas(pose, False)
+        edge = cv.px[0] + cv.px[-1] + [row[0] for row in cv.px] + [row[-1] for row in cv.px]
+        if any(v not in (0, RIM) for v in edge):         # (the light rim is the outermost ring)
+            cut.append(pose.body)
+    check(f"no pose is cut at the frame edge - the tail keeps its outline and light rim ({len(poses)} poses)",
+          not cut, ", ".join(sorted(set(cut))[:6]))
     # the catalogue and the pass
     new = [k for k in hats.HATS if k not in hats.FIRST]
     check("115 hats: the first 15 plus 100 new ones, each with a name, a group and a tier",
@@ -113,7 +124,9 @@ def main() -> int:
     # off again: the bare cat
     lib.set_worn("")
     cv, ox, oy = lib._canvas(sit, False)
-    check("taking it off gives the bare 32x32 cat again", (cv.w, cv.h, ox, oy) == (32, 32, 0, 0)
+    pad = cat_art.PAD
+    check("taking it off gives the bare cat again (32x32 + room for its outline)",
+          (cv.w, cv.h, ox, oy) == (32 + 2 * pad, 32 + 2 * pad, pad, pad)
           and not hat_pixels(cv) and cv.px == cat_art.render(sit).px)
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)}/{len(results)} checks passed", flush=True)

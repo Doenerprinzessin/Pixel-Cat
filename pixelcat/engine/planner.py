@@ -39,6 +39,14 @@ class Planner:
             gap, dirn = 0, 0
 
         if dy >= -max_up:
+            inside = "ledge" in (a.kind, b.kind) and a.hwnd == b.hwnd   # both on the same window's face
+            if dy > 6 * s and dirn == 0 and (inside or b.kind == "ledge") and dy <= 260 * s:
+                # a ledge inside a window right below: hop down in front of the window (no edge needed)
+                lo, hi = max(a.x1, b.x1) + m, min(a.x2, b.x2) - m
+                if lo <= hi:
+                    tx = min(hi, max(lo, ax))
+                    cost = abs(ax - tx) + 45 + dy * 0.15
+                    return cost, [Step("walk", tx), Step("drop", tx, b, tx)], tx
             if dy > 6 * s:  # going down: leave over an edge
                 best: tuple[float, list[Step], float] | None = None
                 edges = ((a.x1, -1), (a.x2, 1)) if dirn == 0 else (((a.x2, 1),) if dirn > 0 else ((a.x1, -1),))
@@ -90,9 +98,18 @@ class Planner:
         return best
 
     def plan(self, smap: SurfaceMap, start: Surface, start_x: float, goal: Surface, goal_x: float,
-             s: int, max_nodes: int = 60) -> list[Step] | None:
+             s: int, max_nodes: int = 70) -> list[Step] | None:
         """Cheapest step list from (start, start_x) to (goal, goal_x), or None."""
-        nodes = smap.surfaces[:max_nodes]
+        nodes = smap.surfaces
+        if len(nodes) > max_nodes:      # lots of ledges: the floors plus what is near the start and the goal
+            mx, my = (start_x + goal_x) / 2, (start.y + goal.y) / 2
+            rest = sorted((n for n in nodes if n.kind != "floor"),
+                          key=lambda n: min(abs((n.x1 + n.x2) / 2 - mx), abs(n.x1 - mx), abs(n.x2 - mx))
+                          + abs(n.y - my) * 0.7)
+            nodes = list(smap.floors) + rest[:max_nodes - len(smap.floors)]
+            for extra in (start, goal):
+                if not any(n == extra for n in nodes):
+                    nodes.append(extra)
         idx_start = next((i for i, n in enumerate(nodes) if n == start), None)
         if idx_start is None:
             nodes = [start] + nodes

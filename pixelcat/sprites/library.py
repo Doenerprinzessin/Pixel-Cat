@@ -69,38 +69,37 @@ class CatFrame:
         return False
 
 
-def apply_pattern(cv: Canvas, pattern: str) -> Canvas:
-    """Markings on the fur: tabby stripes, calico patches, Siamese points, galaxy stars."""
+def apply_pattern(cv: Canvas, pattern: str, ox: int = 0, oy: int = 0) -> Canvas:
+    """Markings on the fur: calico patches, Siamese points, galaxy stars.  (ox, oy): where the
+    32x32 cat box starts in the canvas (a hat makes the canvas bigger) - the markings stay put."""
     from .palettes import BASE, LIGHT, PATCH_A, PATCH_B, SHADE, SHEEN, STAR, STAR2, STRIPE
 
     fur = (BASE, SHADE, SHEEN)
     out = Canvas(cv.w, cv.h)
     out.px = [row[:] for row in cv.px]
-    for y in range(cv.h):
-        for x in range(cv.w):
-            c = cv.px[y][x]
+    for yy in range(cv.h):
+        for xx in range(cv.w):
+            c = cv.px[yy][xx]
             if c not in fur:
                 continue
-            if pattern == "stripes":
-                if (x + y // 2) % 5 == 0:
-                    out.px[y][x] = STRIPE
-            elif pattern == "patches":
+            x, y = xx - ox, yy - oy
+            if pattern == "patches":
                 h = (x // 6 * 73856093) ^ ((y + (x // 6) % 3) // 6 * 19349663)
                 v = h % 7
                 if v in (0, 1):
-                    out.px[y][x] = PATCH_A
+                    out.px[yy][xx] = PATCH_A
                 elif v == 2:
-                    out.px[y][x] = PATCH_B
+                    out.px[yy][xx] = PATCH_B
             elif pattern == "points":
                 # darker ears, face mask and tail tip: fur far from the body's middle
                 if y < 9 or (y > 25 and (x < 9 or x > 24)):
-                    out.px[y][x] = STRIPE
+                    out.px[yy][xx] = STRIPE
             elif pattern == "stars":
                 h = (x * 92821 + y * 68917) % 97
                 if h == 0:
-                    out.px[y][x] = STAR
+                    out.px[yy][xx] = STAR
                 elif h == 41:
-                    out.px[y][x] = STAR2
+                    out.px[yy][xx] = STAR2
     if pattern == "patches":                   # the belly stays white
         for y in range(cv.h):
             for x in range(cv.w):
@@ -142,7 +141,7 @@ class SpriteLibrary:
         if got is None:
             cv, ox, oy = cat_art.render_worn(pose, self.worn or None)
             if self.skin.pattern:
-                cv = apply_pattern(cv, self.skin.pattern)
+                cv = apply_pattern(cv, self.skin.pattern, ox, oy)
             if mirrored:
                 cv = cv.flipped()
                 ox = cv.w - cat_art.SIZE - ox
@@ -183,7 +182,7 @@ class SpriteLibrary:
 
     def export_sheet(self, poses: list[Pose], out_path: object, scale: int = 4, cols: int = 12) -> None:
         rows = (len(poses) + cols - 1) // cols
-        cell = 32 * scale
+        cell = (32 + 2 * cat_art.PAD) * scale
         sheet = QImage(cols * cell, max(1, rows) * cell, QImage.Format.Format_ARGB32)
         sheet.fill(QColor(236, 230, 246))
         painter = QPainter(sheet)

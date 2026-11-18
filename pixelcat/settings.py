@@ -61,7 +61,7 @@ class Tuning:
     ride_max_jump: float = 400.0       # window moved farther than this in 1 refresh -> fall
 
     # --- calm behaviour --------------------------------------------------
-    min_travel_gap_s: float = 50.0     # minimum seconds between self-chosen trips
+    min_travel_gap_s: float = 35.0     # minimum seconds between self-chosen trips
     stay_local_prob: float = 0.55      # chance a trip stays on the current surface
     short_walk_max: float = 90.0       # art px for "small movements"
     sneeze_chance_per_min: float = 0.05
@@ -112,6 +112,7 @@ class Config:
     num_ctx: int = 65536               # model context: 64k tokens (qwen3.5 allows 262k; 64k costs ~1 GB extra)
     keep_alive: str = "10m"            # Ollama frees the GPU after this much idle time
     preload_on_start: bool = True      # start Ollama and load the model when the cat starts
+    explore_windows: bool = True       # the cat also sits on borders inside windows (looks at the screen)
     think: bool | str | None = "auto"  # "auto": think when planning a request and after a failed step;
     #                                    true/false: always/never; null: model default
     think_max_tokens: int = 1500       # cap for one answer incl. thinking (runaway guard, then answers without)

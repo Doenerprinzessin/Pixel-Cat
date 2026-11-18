@@ -24,8 +24,9 @@ from .engine.animations import all_poses
 from .engine.ballgame import BallGame
 from .engine.brain import Brain, Ctx
 from .engine.needs import Needs
-from .engine.states import S
-from .engine.surfaces import SurfaceMap
+from .engine.states import STATES, S
+from .engine.surfaces import WINDOW_KINDS, SurfaceMap
+from .desktop.ledges import LedgeFinder
 from .desktop.escwatch import EscWatcher
 from .llm.agent import ToolOutput
 from .llm.model_status import ModelStatus
@@ -139,6 +140,10 @@ class PixelCatApp(QObject):
         # the minigames: their things (mice, shelves, the laser dot...) are small windows of their own
         self.mini: MiniGame | None = None
         self._real_wins: list[Any] = []                  # the last window list (props come on top)
+        self.ledges = LedgeFinder()                      # borders inside windows the cat can sit on
+        self._ledge_t = -100.0
+        self._ledge_sig: tuple = ()
+        self._own_hwnds: set[int] = set()
         self._popups: list[PopupWin] = []
         self.host = QtHost(self.brain, self.sprites, lambda: self._real_wins, self.scale_for,
                            self.t.min_surface_len, on_world=self._rebuild_world, work_area=self._game_work,
@@ -353,6 +358,7 @@ class PixelCatApp(QObject):
             ctx = Ctx(cursor=self.activity.cursor, busy=self.activity.busy(self.t.busy_grace_s),
                       user_idle=self.activity.idle_seconds(), hour=datetime.now().hour, quiet=self.quiet,
                       scale=scale, cursor_over_cat=self.overlay.cursor_over)
+            self._ride_window()
             self.brain.update(dt, ctx)
             mini = self.mini
             if mini is not None and mini.active:
@@ -369,30 +375,100 @@ class PixelCatApp(QObject):
             if interval != self.tick_timer.interval():
                 self.tick_timer.setInterval(interval)
 
+    def _own_surfaces(self) -> set[int]:
+        """Our own windows the cat may sit on: the chat, the menu, popups."""
+        out: set[int] = set()
+        for w in [self.chat, self.menu, self.model_menu, *self._popups]:
+            try:
+                if w is not None and w.isVisible():
+                    out.add(int(w.winId()))
+            except RuntimeError:          # (a popup that was just deleted)
+                pass
+        return out
+
     def _refresh_windows(self) -> None:
         if self.hidden_fullscreen:
             return
         try:
-            wins = enumerate_windows(self.own_pid)
+            self._own_hwnds = self._own_surfaces()
+            wins = enumerate_windows(self.own_pid, self._own_hwnds)
             self._real_wins = wins
             rects = {w.hwnd: w.rect for w in wins}
             if self._known_hwnds is not None and self.brain.mode == "ground" and not self._mini_active():
                 cat = self.overlay.cat_rect()
                 s = self.scale_for(monitor_at(self.monitors, self.brain.x, self.brain.y - 1))
                 for w in wins:
-                    if w.hwnd not in self._known_hwnds and _rect_gap(w.rect, cat) < self.t.startle_radius * s:
+                    if (w.hwnd not in self._known_hwnds and w.hwnd not in self._own_hwnds
+                            and _rect_gap(w.rect, cat) < self.t.startle_radius * s):
                         self.brain.startle()
                         break
             self._known_hwnds = set(rects)
+            self._look_for_ledges()
             self._rebuild_world()
         except Exception:  # noqa: BLE001
             self.rl.exception("windows", "window refresh failed")
 
+    def _ledges_on(self) -> bool:
+        return self.cfg.explore_windows and not self._mini_active() and not self.game.active
+
+    def _look_for_ledges(self) -> None:
+        """Borders inside the windows near the cat, searched in the background: soon after the
+        windows there change (and once more to confirm new lines), otherwise every 20 s."""
+        if not self._ledges_on():
+            return
+        self.ledges.poll()
+        b = self.brain
+        if (self.ledges.busy() or STATES[b.state].asleep or b.mode != "ground" or b.plan or b.ride_t > 0
+                or b.state == S.HELD):
+            return                                       # (only while the cat stands still)
+        mon = monitor_at(self.monitors, b.x, b.y - 1)
+        s = self.scale_for(mon)
+        reach = 1000 * s // 3                            # the part of the screen around the cat
+        area = (max(mon.work[0], int(b.x) - reach), mon.work[1], min(mon.work[2], int(b.x) + reach), mon.work[3])
+        others = [w for w in self._real_wins if w.hwnd not in self._own_hwnds]
+        near = tuple(sorted((w.hwnd, w.rect) for w in others if w.left < area[2] and area[0] < w.right))
+        now = time.monotonic()
+        if near != self._ledge_sig:                      # windows opened/moved/resized: look again soon
+            self._ledge_sig = near
+            self._ledge_t = min(self._ledge_t, now - 20.0 + 1.5)
+        wait = 3.0 if self.ledges.unconfirmed() else 20.0
+        if now - self._ledge_t < wait:
+            return
+        self._ledge_t = now
+        own = [w.rect for w in self._real_wins if w.hwnd in self._own_hwnds]
+        g = self.overlay.geometry()
+        own.append((g.x(), g.y(), g.x() + g.width(), g.y() + g.height()))     # the cat itself
+        self.ledges.start(others, area, own, int(self.t.min_surface_len * 1.6 * s), s)
+
     def _rebuild_world(self) -> None:
-        """The cat's surfaces: real windows plus the game's furniture (it is always on top)."""
+        """The cat's surfaces: real windows (and the chat, the menu) with the borders inside
+        them, plus the game's furniture (it is always on top)."""
         wins = list(self._real_wins) + self.host.prop_infos()
-        smap = SurfaceMap.build(self.monitors, wins, self.scale_for, self.t.min_surface_len)
+        inner = self.ledges.current(self._real_wins) if self._ledges_on() else None
+        smap = SurfaceMap.build(self.monitors, wins, self.scale_for, self.t.min_surface_len, inner)
         self.brain.set_world(smap, {w.hwnd: w.rect for w in wins})
+
+    def _ride_window(self) -> None:
+        """Every frame: the window the cat stands on or climbs - dragged around, it carries the
+        cat along smoothly; closed or minimised, the cat falls from where it is."""
+        b = self.brain
+        hwnd = 0
+        if b.mode == "ground" and b.surf is not None and b.surf.kind in WINDOW_KINDS:
+            hwnd = b.surf.hwnd
+        elif b.mode in ("climb", "hang") and b.wall is not None:
+            hwnd = b.wall.hwnd
+        if hwnd <= 0 or any(p.hwnd == hwnd for p in self.host.props):
+            return
+        u = win32.user32
+        try:
+            rect = None
+            if u.IsWindow(hwnd) and u.IsWindowVisible(hwnd) and not u.IsIconic(hwnd) and not win32.is_cloaked(hwnd):
+                rect = win32.frame_bounds(hwnd)
+        except Exception:  # noqa: BLE001
+            return
+        if rect is None:
+            self._ledge_t = 0.0
+        b.ride_window(hwnd, rect)
 
     def _refresh_monitors(self) -> None:
         try:
@@ -510,6 +586,7 @@ class PixelCatApp(QObject):
         self.menu.subtitle = b.state.value.replace("_", " ")
         mon = monitor_at(self.monitors, b.x, b.y - 1)
         self.menu.popup_near(self.overlay.cat_rect(), mon.work, self.ui_unit(mon))
+        QTimer.singleShot(60, self._refresh_windows)       # the menu is something to sit on, too
 
     def _menu_items(self) -> list[MenuItem]:
         """Pause, Chat and Quit on top; everything else in the Minigames, Cosmetics and Settings sections."""
@@ -534,7 +611,8 @@ class PixelCatApp(QObject):
             MenuItem("quiet", "Quiet mode", checked=self.quiet, separator_before=True),
             MenuItem("autostart", "Start with Windows", checked=system.autostart_enabled()),
             MenuItem("automode", "Chat auto mode", checked=self.saved.auto_mode),
-            MenuItem("preload_ai", "Load AI at start", checked=self.cfg.preload_on_start)]
+            MenuItem("preload_ai", "Load AI at start", checked=self.cfg.preload_on_start),
+            MenuItem("explore", "Sit inside windows", checked=self.cfg.explore_windows)]
         return [
             MenuItem("pause", "Resume" if b.paused else "Pause", "play" if b.paused else "pause"),
             MenuItem("chat", "Chat", "chat"),
@@ -807,6 +885,15 @@ class PixelCatApp(QObject):
                 save_user_setting("preload_on_start", self.cfg.preload_on_start)
                 if self.cfg.preload_on_start and not self.selftest:
                     self.model_status.ensure()
+            elif key == "explore":
+                from .settings import save_user_setting
+
+                self.cfg.explore_windows = not self.cfg.explore_windows
+                save_user_setting("explore_windows", self.cfg.explore_windows)
+                if not self.cfg.explore_windows:
+                    self.ledges.clear()
+                self._ledge_t = 0.0
+                self._rebuild_world()
             elif key == "find":
                 self.stop_minigame()              # (hide and seek: no cheating - the round ends)
                 p = primary(self.monitors)
@@ -1077,6 +1164,7 @@ class PixelCatApp(QObject):
         assert self.chat is not None
         mon = monitor_at(self.monitors, self.brain.x, self.brain.y - 1)
         self.chat.show_near(self.overlay.cat_rect(), mon.work, self.ui_unit(mon))
+        QTimer.singleShot(60, self._refresh_windows)
         if not self.selftest:
             self.model_status.ensure()   # Ollama and the model up? (if not: started, and the chat says so)
 

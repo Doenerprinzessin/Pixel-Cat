@@ -317,7 +317,7 @@ class BallGame:
         return left, right, top
 
     def _floor_y(self, x: float) -> float:
-        return float(self.brain.smap.floor_at(x).y) if self.brain.smap else 1080.0
+        return float(self.brain.smap.floor_at(x, self.brain.y).y) if self.brain.smap else 1080.0
 
     def _clamp_ball(self) -> None:
         ball = self.ball
@@ -569,7 +569,7 @@ class BallGame:
         b = self.brain
         if b.smap is None:
             return
-        floor = b.smap.floor_at(x)
+        floor = b.smap.floor_at(x, b.y)
         x = floor.clamp(x, 12 * self.s)
         if self.run_goal is not None and abs(self.run_goal - x) < 18 * self.s and b.plan and self.clock - self.run_t < 0.6:
             return
@@ -809,7 +809,7 @@ class BallGame:
     def _run_lap(self) -> None:
         b = self.brain
         x = self.lap.pop(0)
-        floor = b.smap.floor_at(b.x)
+        floor = b.smap.floor_at(b.x, b.y)
         if not b.go_to(floor, floor.clamp(x, 20 * self.s), "zoom_lap"):
             self.lap.clear()
 
@@ -870,7 +870,7 @@ class BallGame:
                 self._set_anim("aim")
                 return
             if abs(ball.x - b.x) > 40 * s:
-                there = b.smap.floor_at(ball.x)
+                there = b.smap.floor_at(ball.x, b.y)
                 if b.surf is None or there.same(b.surf):
                     self._run_to(ball.x - math.copysign(20 * s, ball.x - b.x), "run")
                     return

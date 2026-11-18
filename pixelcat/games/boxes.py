@@ -36,7 +36,7 @@ class BoxFort(MiniGame):
         b, s = self.brain, self.s
         self.boxes: list[Box] = []
         l, _t, r, _bt = self.monitor().work
-        self.floor = b.smap.floor_at(b.x).y
+        self.floor = b.smap.floor_at(b.x, b.y).y
         side = 1 if b.x < (l + r) / 2 else -1
         self.pile = self.host.sprite("box_s", min(r - 40 * s, max(l + 40 * s, b.x + side * 60 * s)),
                                      self.floor - 9 * s, clickable=True)
@@ -250,12 +250,12 @@ class BoxFort(MiniGame):
                 side = 1 if b.x < bx.prop.x else -1
                 self.goal = bx
                 self.activity = "push"
-                self.go(b.smap.floor_at(bx.prop.x), bx.prop.x - side * (bx.prop.size[0] / 2 + 8 * s), "run")
+                self.go(b.smap.floor_at(bx.prop.x, self.floor), bx.prop.x - side * (bx.prop.size[0] / 2 + 8 * s), "run")
                 return
             self.activity, self.act_t = "rest", 2.0
         else:
             l, _t, r_, _b = self.monitor().work
-            self.go(b.smap.floor_at(b.x), l + (r_ - l) * self.rng.uniform(0.1, 0.9), "zoom")
+            self.go(b.smap.floor_at(b.x, b.y), l + (r_ - l) * self.rng.uniform(0.1, 0.9), "zoom")
             self.activity, self.act_t = "rest", 3.0
 
     def _hop_in(self, bx: Box) -> None:

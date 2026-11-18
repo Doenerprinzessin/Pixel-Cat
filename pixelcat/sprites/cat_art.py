@@ -485,9 +485,22 @@ def render(p: Pose) -> Canvas:
     return render_worn(p, None)[0]
 
 
+PAD = 2   # room around the 32x32 box: the outline and the light rim of a tail (or paw, or
+#           whisker) that touches the box edge are not cut off
+
+
+def _padded(cv: Canvas, pad: int) -> Canvas:
+    big = Canvas(cv.w + 2 * pad, cv.h + 2 * pad)
+    for y in range(cv.h):
+        big.px[y + pad][pad:pad + cv.w] = cv.px[y]
+    big.post = [(x + pad, y + pad, c) for x, y, c in cv.post]
+    return big
+
+
 def render_worn(p: Pose, hat_name: str | None = None) -> tuple[Canvas, int, int]:
-    """Render one pose wearing a hat (or none).  A hat can stick out of the 32x32 box, so the
-    canvas may be bigger: returns (canvas, ox, oy) - where the 32x32 box starts inside it."""
+    """Render one pose wearing a hat (or none).  The canvas is bigger than the 32x32 box (the
+    outline and rim around it, a hat sticking out): returns (canvas, ox, oy) - where the 32x32
+    box starts inside it."""
     from . import hats
 
     hat = hats.get(hat_name) if hat_name else None
@@ -495,13 +508,15 @@ def render_worn(p: Pose, hat_name: str | None = None) -> tuple[Canvas, int, int]
     try:
         cv = Canvas(SIZE, SIZE)
         BODIES.get(p.body, _stand)(cv, p)
+        cv = _padded(cv, PAD)
         cv.outline(OUT)
         sheen(cv)
         cv.apply_post()
-        ox = oy = 0
+        ox = oy = PAD
         if hat is not None and _WEAR["head"] is not None:
             c, ht = _WEAR["head"]  # type: ignore[misc]
-            cv, ox, oy = _put_on(cv, hat, c, ht)
+            cv, hx, hy = _put_on(cv, hat, c + PAD, ht + PAD)
+            ox, oy = ox + hx, oy + hy
         cv.rim(RIM, OUT)
         if p.rot % 4:
             if (cv.w, cv.h) != (SIZE, SIZE):

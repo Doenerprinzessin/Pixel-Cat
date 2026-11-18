@@ -336,13 +336,13 @@ class MiniGame:
         smap = self.brain.smap
         mon = self.monitor()
         l, t, r, b = mon.rect
-        floor = smap.floor_at((l + r) / 2)
+        floor = smap.floor_at((l + r) / 2, mon.work[3])
         return [floor] + [s for s in smap.tops if s.x2 > l and s.x1 < r and t < s.y < b]
 
     def surface_under(self, x: float, y: float) -> Surface:
         """The highest surface at x that is at or below y (else the floor)."""
         smap = self.brain.smap
-        best = smap.floor_at(x)
+        best = smap.floor_at(x, y)
         for s in smap.tops:
             if s.contains(x) and y - 4 * self.s <= s.y < best.y:
                 best = s
@@ -352,7 +352,7 @@ class MiniGame:
         """The surface of window ``hwnd`` (0: the floor) at or nearest to x - it may have moved."""
         smap = self.brain.smap
         if not hwnd:
-            return smap.floor_at(x)
+            return smap.floor_at(x, self.brain.y)
         segs = smap.tops_of(hwnd)
         if not segs:
             return None
@@ -412,7 +412,7 @@ class MiniGame:
     def reachable(self, surf: Surface) -> bool:
         """Can the cat get there (jumping, climbing) from where it is?"""
         b = self.brain
-        start = b.surf or b.smap.floor_at(b.x)
+        start = b.surf or b.smap.floor_at(b.x, b.y)
         if start.same(surf):
             return True
         return b.planner.plan(b.smap, start, b.x, surf, (surf.x1 + surf.x2) / 2, self.s) is not None
@@ -423,7 +423,7 @@ class MiniGame:
         (higher ones would mean long climbs up a window side)."""
         mon = self.monitor()
         l, t, r, b = mon.work
-        floor = self.brain.smap.floor_at((l + r) / 2).y
+        floor = self.brain.smap.floor_at((l + r) / 2, b).y
         tops = [s for s in self.brain.smap.tops if s.length >= min_len_art * self.s and s.x1 >= l - 5
                 and s.x2 <= r + 5 and t + 60 * self.s < s.y < b - 25 * self.s and s.y >= floor - max_up_art * self.s]
         return [s for s in tops if self.reachable(s)] if reachable else tops
@@ -433,7 +433,7 @@ class MiniGame:
         b = self.brain
         if surf.kind == "floor" or (b.surf is not None and b.surf.same(surf)):
             return True
-        floor = b.smap.floor_at(surf.x1).y
+        floor = b.smap.floor_at(surf.x1, surf.y).y
         return surf.y >= floor - 140 * self.s and self.reachable(surf)
 
     def ensure_platforms(self, need: int, kinds: tuple[str, ...] = ("shelf", "table", "shelf")) -> list[Prop]:
@@ -444,7 +444,7 @@ class MiniGame:
         made: list[Prop] = []
         l, _t, r, _b = self.monitor().work
         s = self.s
-        floor = self.brain.smap.floor_at((l + r) / 2).y
+        floor = self.brain.smap.floor_at((l + r) / 2, _b).y
         width = r - l
         # furniture the cat can climb: a table with a shelf above it (stairs), and low shelves.
         # (x as part of the screen width, art px from the floor up to the top, kind)

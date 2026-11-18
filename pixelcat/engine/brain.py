@@ -11,7 +11,7 @@ import logging
 import math
 import random
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..settings import Tuning
 from ..sprites.cat_art import HEAD_POS, Pose
@@ -20,7 +20,7 @@ from .needs import Needs
 from .particles import Bubble, Particle, Yarn
 from .planner import Planner, Step
 from .states import STATES, S
-from .surfaces import Surface, SurfaceMap, Wall
+from .surfaces import WINDOW_KINDS, Surface, SurfaceMap, Wall
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +112,10 @@ class Brain:
         # ball game ---------------------------------------------------------
         self.game = None              # BallGame (set by the app): drives the cat while playing
         self.floor_only = False       # while playing, jumps land on the floor (like the ball)
+        # windows ---------------------------------------------------------
+        self.ride_t = 0.0             # >0 while the window under the cat is being moved (it holds on)
+        self.explore_legs = 0         # a curious cat hops on from surface to surface
+        self.hop_wait = 0.0
 
     # ================================================================ setup
     def place(self, x: float, y: float) -> None:
@@ -129,35 +133,34 @@ class Brain:
         self.smap, self.win_rects = smap, win_rects
         s = self.scale
         if self.mode == "ground" and self.surf is not None:
-            if self.surf.kind == "top":
+            if self.surf.kind in WINDOW_KINDS:
                 hwnd = self.surf.hwnd
                 r, o = win_rects.get(hwnd), old.get(hwnd)
                 if r is None:
                     self._fall_off(startle=True)
                     return
-                if o is not None and (r[0], r[1]) != (o[0], o[1]):
-                    dx, dy = r[0] - o[0], r[1] - o[1]
-                    if abs(dx) + abs(dy) > self.t.ride_max_jump * s:
-                        self._fall_off(startle=True)
+                if o is not None and r != o:
+                    if self.window_jumped(o, r):
+                        self._fall_off(startle=True)   # snapped, maximised, closing: fall from here
                         return
+                    dx, dy = r[0] - o[0], r[1] - o[1]
                     self.x += dx  # ride along with the moving window
-                    self.y = r[1]
+                    self.y += dy
                     if self.plan:
                         self._replan()
-                seg = smap.top_of(hwnd, self.x)
+                ref = replace(self.surf, y=int(self.y))
+                seg = smap.resolve(ref, self.x)
+                if seg is not None and not seg.contains(self.x, -4 * s):
+                    seg = None
                 if seg is None:
-                    segs = smap.tops_of(hwnd)
-                    near = [g for g in segs if g.contains(self.x, -4 * s)]
-                    if near:
-                        seg = near[0]
-                        self.x = seg.clamp(self.x, 2)
-                if seg is None:
-                    self._fall_off(startle=True)
+                    # its window top/ledge is gone (covered, scrolled away): a ledge just drops it
+                    self._fall_off(startle=self.surf.kind == "top")
                     return
+                self.x = seg.clamp(self.x, 2)
                 self.surf = seg
                 self.y = seg.y
             else:
-                f = smap.floor_at(self.x)
+                f = smap.floor_at(self.x, self.y)
                 if not f.contains(self.x):
                     self.x = f.clamp(self.x, self.t.edge_margin * s)
                 if f.y > self.y + 2:
@@ -184,6 +187,81 @@ class Brain:
                     self._replan()
                     break
 
+    @staticmethod
+    def window_jumped(o: tuple[int, int, int, int], r: tuple[int, int, int, int]) -> bool:
+        """Did the window jump (snapped, maximised, restored, hidden for closing) instead of
+        being dragged or resized?  Dragged windows keep their size; a resize keeps one edge."""
+        ow, oh, nw, nh = o[2] - o[0], o[3] - o[1], r[2] - r[0], r[3] - r[1]
+        if nw <= 2 or nh <= 2:
+            return True
+        if abs(nw - ow) <= 2 and abs(nh - oh) <= 2:
+            return False                                  # moved (dragged, any distance)
+        top_stays = abs(r[1] - o[1]) <= 3
+        bottom_stays = abs(r[3] - o[3]) <= 3 and abs(r[1] - o[1]) < 120
+        sides = abs(r[0] - o[0]) <= 3 or abs(r[2] - o[2]) <= 3
+        return not ((top_stays or bottom_stays) and sides)
+
+    def ride_window(self, hwnd: int, rect: tuple[int, int, int, int] | None) -> None:
+        """Every frame: the window the cat stands on (or climbs) is at ``rect`` now (None: it
+        is gone - closed, hidden, minimised).  Dragged windows carry the cat along smoothly;
+        it holds on until the window stops."""
+        on_surf = (self.mode == "ground" and self.surf is not None and self.surf.kind in WINDOW_KINDS
+                   and self.surf.hwnd == hwnd)
+        on_wall = self.mode in ("climb", "hang") and self.wall is not None and self.wall.hwnd == hwnd
+        old = self.win_rects.get(hwnd)
+        if rect is None:
+            if hwnd in self.win_rects and self.smap is not None:   # its surfaces go at once
+                sm = self.smap
+                self.smap = SurfaceMap(sm.floors, [t for t in sm.tops if t.hwnd != hwnd],
+                                       [w for w in sm.walls if w.hwnd != hwnd], sm.monitors,
+                                       [g for g in sm.ledges if g.hwnd != hwnd])
+                self.win_rects = {h: r for h, r in self.win_rects.items() if h != hwnd}
+            if on_surf or on_wall:
+                self._fall_off(startle=True)              # its window closed: it falls from right here
+            return
+        if old is None or old == rect:
+            return
+        self.win_rects = dict(self.win_rects)
+        self.win_rects[hwnd] = rect
+        if not (on_surf or on_wall):
+            return
+        if self.window_jumped(old, rect):
+            self._fall_off(startle=True)
+            return
+        s = self.scale
+        dx, dy = rect[0] - old[0], rect[1] - old[1]
+        if on_surf and self.surf is not None:
+            sf = self.surf
+            x1, x2 = sf.x1 + dx, sf.x2 + dx
+            if sf.kind == "top":
+                if abs(sf.x1 - old[0]) <= 2:
+                    x1 = rect[0]                          # the segment follows a resized window
+                if abs(sf.x2 - old[2]) <= 2:
+                    x2 = rect[2]
+                y = rect[1]
+            else:
+                y = sf.y + dy
+            self.surf = replace(sf, x1=int(x1), x2=int(max(x1 + 1, x2)), y=int(y))
+            self.x += dx
+            self.y = float(y)
+            if not self.surf.contains(self.x, 2 * s):
+                self.x = self.surf.clamp(self.x, 2 * s)
+            if self.smap is not None and not any(m.contains(self.x, self.y - 24 * s) for m in self.smap.monitors):
+                self._fall_off(startle=True)              # carried off the top of the screen
+                return
+            if abs(dx) + abs(dy) > 1:
+                self.plan.clear()                         # it stops and holds on
+                self.goal = None
+                self.prejump = 0.0
+                self.ride_t = 0.4
+        else:
+            w = self.wall
+            assert w is not None
+            self.wall = replace(w, x=w.x + dx, y_top=w.y_top + dy, y_bottom=w.y_bottom + dy)
+            self.x += dx
+            self.y += dy
+            self.ride_t = 0.4
+
     # ================================================================ tick
     def update(self, dt: float, ctx: Ctx) -> None:
         dt = min(dt, 0.1)
@@ -199,6 +277,7 @@ class Brain:
             if self.bubble.time_left <= 0:
                 self.bubble = None
         self.anim_t += dt
+        self.ride_t = max(0.0, self.ride_t - dt)
         if self.state == S.HELD:
             return
         self._overlays(dt, ctx)
@@ -209,6 +288,12 @@ class Brain:
             if self.oneshot_t >= ANIMS[self.oneshot].length:
                 self._next_oneshot()
         if self.mode == "ground" and not self.plan and not self.oneshot and not self._game_owns():
+            if self.explore_legs > 0 and self.ride_t <= 0 and not ctx.quiet and not self.paused:
+                self.hop_wait -= dt
+                if self.hop_wait <= 0:
+                    self._explore_hop()
+                    if self.plan:
+                        return
             self.state_t += dt
             self._idle_behaviour(dt, ctx)
             if self.state_t >= self.state_dur:
@@ -388,7 +473,7 @@ class Brain:
         s = self.scale
         mon = min(self.smap.monitors, key=lambda m: m.distance2(self.x, self.y - 1))
         corner_x = mon.work[2] - 24 * s
-        floor = self.smap.floor_at(corner_x)
+        floor = self.smap.floor_at(corner_x, mon.work[3])
         if self.surf.same(floor) and abs(self.x - corner_x) < 30 * s:
             return False
         self.go_to(floor, corner_x, "walk")
@@ -404,7 +489,7 @@ class Brain:
             self.go_to(self.surf, x, "walk")
         else:  # cornered: go to the floor instead
             if self.smap is not None:
-                f = self.smap.floor_at(self.x)
+                f = self.smap.floor_at(self.x, self.y)
                 self.go_to(f, f.clamp(self.x + away * 200 * s, 30 * s), "walk")
 
     # ================================================================ overlays / props
@@ -456,6 +541,37 @@ class Brain:
         goal = self._pick_goal()
         if goal is not None:
             self.go_to(goal[0], goal[1], speed)
+        if self.plan and self.state in (S.CURIOUS, S.PLAYFUL, S.BORED, S.HAPPY):
+            # explore: after getting there, hop on to a surface or two nearby
+            self.explore_legs = self.rng.choice((1, 2, 2, 3)) if self.state == S.CURIOUS else self.rng.choice((0, 1, 2))
+            self.hop_wait = self.rng.uniform(0.8, 2.5)
+
+    def _explore_hop(self) -> None:
+        """One hop to a neighbouring surface - up onto a window or a ledge, down, or across a
+        gap - that the cat reaches in one jump, drop or climb.  Prefers going up and new places."""
+        self.explore_legs -= 1
+        self.hop_wait = self.rng.uniform(0.8, 2.5)
+        if self.smap is None or self.surf is None or self.mode != "ground":
+            return
+        s = self.scale
+        options: list[tuple[float, Surface, float]] = []
+        for sf in self.smap.surfaces:
+            if sf.same(self.surf) or abs((sf.x1 + sf.x2) / 2 - self.x) > 900 * s / 3:
+                continue
+            tr = self.planner._transition(self.smap, self.surf, self.x, sf, s)
+            if tr is None:
+                continue
+            cost, _steps, land = tr
+            up = self.surf.y - sf.y
+            wt = (2.0 if up > 0 else 1.0) * (1.6 if sf.kind == "ledge" else 1.0) / (1.0 + cost / 300.0)
+            options.append((wt, sf, land))
+        if not options:
+            self.explore_legs = 0
+            return
+        _wt, sf, land = self.rng.choices(options, weights=[o[0] for o in options])[0]
+        m = self.t.edge_margin * s
+        x = sf.clamp(land + self.rng.uniform(-30, 30) * s, m)
+        self.go_to(sf, x, "run" if self.state == S.PLAYFUL else "walk")
 
     def _maybe_edge_climb(self, force: bool = False) -> bool:
         """Energetic moods sometimes climb the side of the screen - most often when
@@ -551,6 +667,8 @@ class Brain:
                     wt = 1.0
                     if sf.kind == "top":
                         wt = 3.0 if self.state in (S.CURIOUS, S.SLEEPY, S.PLAYFUL) else 1.6
+                    elif sf.kind == "ledge":             # borders inside windows: a cat loves a shelf
+                        wt = 2.4 if self.state in (S.CURIOUS, S.SLEEPY, S.PLAYFUL, S.BORED) else 1.3
                     if abs((sf.x1 + sf.x2) / 2 - self.x) < 1500 * s / 3:
                         wt *= 2.5
                     weights.append(wt)
@@ -572,7 +690,7 @@ class Brain:
         for sf in self.smap.surfaces:
             if sf.contains(cx) and sf.y >= cy - 10 * s and (best is None or sf.y < best.y):
                 best = sf
-        best = best or self.smap.floor_at(cx)
+        best = best or self.smap.floor_at(cx, cy)
         side = -1 if self.x < cx else 1
         self.set_state(S.HAPPY, travel=False)
         self.go_to(best, best.clamp(cx + side * 26 * s, self.t.edge_margin * s), "run")
@@ -639,7 +757,7 @@ class Brain:
                         self._land(hit)
                         return
                 if not self.smap.any_below(self.x, self.y):
-                    f = self.smap.floor_at(self.x)
+                    f = self.smap.floor_at(self.x, self.y)
                     self.x = f.clamp(self.x, 8 * s)
                     if self.y > f.y:
                         self._land(f)
@@ -716,8 +834,9 @@ class Brain:
         d = 1 if step.land_x >= self.x else -1
         self.facing = d
         drop_h = (step.target.y - self.y) if step.target else 0
-        if self.surf is not None and self.surf.kind == "top" and drop_h > 60 * s and self.rng.random() < self.t.hang_chance:
-            edge = self.surf.x2 if d > 0 else self.surf.x1
+        edge = (self.surf.x2 if d > 0 else self.surf.x1) if self.surf is not None else self.x
+        if (self.surf is not None and self.surf.kind in WINDOW_KINDS and drop_h > 60 * s and abs(edge - self.x) < 12 * s
+                and self.rng.random() < self.t.hang_chance):
             self.mode = "hang"
             self.cling = False
             self.hang_after = "drop"
@@ -729,7 +848,11 @@ class Brain:
             self.surf = None
             return
         self.mode = "air"
-        self.vx, self.vy = d * 28 * s, -45 * s
+        if abs(step.land_x - self.x) < 4 * s:            # straight down onto a ledge below: step off
+            self.vx, self.vy = d * 4 * s, 25 * s
+            self.y += 2                                   # (not back onto the line it stands on)
+        else:
+            self.vx, self.vy = d * 28 * s, -45 * s
         self.air_start_y = self.y
         self.surf = None
 
@@ -797,7 +920,7 @@ class Brain:
                 self.bad_landings = 0
         if self.after_land is not None:
             nxt, self.after_land = self.after_land, None
-            if self.dropped and surf.kind != "top":
+            if self.dropped and surf.kind not in WINDOW_KINDS:
                 nxt = self.rng.choice((S.SITTING, S.CURIOUS, S.HAPPY))
             self.dropped = False
             self.plan.clear()
@@ -888,6 +1011,7 @@ class Brain:
             self.state_t = min(self.state_t, self.state_dur - 3)
 
     def pick_up(self) -> None:
+        self.explore_legs = 0
         self.plan.clear()
         self.queue.clear()
         self.oneshot = None
@@ -1030,6 +1154,8 @@ class Brain:
             return ("cling" if self.cling else "hang"), self.anim_t
         if self.prejump > 0:
             return "prejump", 0.0
+        if self.ride_t > 0 and self.mode == "ground":
+            return "hold_on", self.anim_t                 # its window is being dragged around
         if self.oneshot:
             return self.oneshot, self.oneshot_t
         if self.plan and self.plan[0].kind == "walk":
@@ -1071,6 +1197,8 @@ class Brain:
         t = self.t
         if self.game is not None and (self.game.active or self.game.fx):
             return t.fps_game
+        if self.ride_t > 0:
+            return t.fps_game                             # riding a dragged window: as smooth as it moves
         if self.state == S.HELD or self.mode != "ground" or self.plan or self.prejump > 0:
             return t.fps_active
         if STATES[self.state].asleep:

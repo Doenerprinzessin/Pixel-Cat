@@ -85,7 +85,7 @@ def main() -> int:
           f"{len(cos[2].children) - 1} groups, {len(hat_rows)} hats, {cos[2].children[1].note}")
     check("Settings: Style, Accent color, Size, Font, AI model, then the on/off settings",
           [c.key for c in sets] == ["set_style", "set_accent", "set_size", "set_font", "set_model", "quiet",
-                                    "autostart", "automode", "preload_ai"], str([c.label for c in sets]))
+                                    "autostart", "automode", "preload_ai", "explore"], str([c.label for c in sets]))
     styles = sets[0].children
     check("10 styles to choose from, the current one marked", len(styles) == 10
           and sum(1 for c in styles if c.checked) == 1 and styles[0].label == "Cat Chat", str([c.label for c in styles]))
@@ -295,6 +295,43 @@ def main() -> int:
         seen.add(m._rows[m._hover][0].key)
     check("keyboard skips the Cat Pass info rows", not any(k.startswith("pass:") or k == "pass_total" for k in seen),
           str(sorted(seen)))
+    # dragging the menu by its title moves it; it stays there when sections fold open
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    m.expanded = set()
+    m.items = pet._menu_items()
+    m._work = (0, 0, 1920, 1080)
+    m._avoid = (900, 500, 996, 596)
+    m._user_pos = None
+    m._reposition()
+    start = m.pos()
+    grab_at = QPointF(30, 8)
+
+    def mev(kind, local):  # type: ignore[no-untyped-def]
+        glob = QPointF(m.pos().x() + local.x(), m.pos().y() + local.y())
+        btn = Qt.MouseButton.LeftButton
+        return QMouseEvent(kind, local, glob, btn, btn if kind != QEvent.Type.MouseButtonRelease else
+                           Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
+
+    fired: list[str] = []
+    m.triggered.connect(fired.append)
+    m.mousePressEvent(mev(QEvent.Type.MouseButtonPress, grab_at))
+    for i in range(1, 11):
+        m.mouseMoveEvent(mev(QEvent.Type.MouseMove, QPointF(grab_at.x() - 40 + (m.pos().x() - start.x()) * 0 - 0,
+                                                            grab_at.y() + 0)) if False else
+                         QMouseEvent(QEvent.Type.MouseMove, grab_at,
+                                     QPointF(start.x() + grab_at.x() - 40 * i, start.y() + grab_at.y() - 25 * i),
+                                     Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+                                     Qt.KeyboardModifier.NoModifier))
+    m.mouseReleaseEvent(mev(QEvent.Type.MouseButtonRelease, grab_at))
+    moved = m.pos()
+    check("the menu can be dragged by its title (and letting go isn't a click)",
+          (moved.x(), moved.y()) == (start.x() - 400, start.y() - 250) and not fired,
+          f"{(start.x(), start.y())} -> {(moved.x(), moved.y())}")
+    m._activate(row("games"))
+    check("...and stays where you put it when a section folds open", (m.pos().x(), m.pos().y()) ==
+          (moved.x(), moved.y()), f"{(m.pos().x(), m.pos().y())}")
     from pixelcat.desktop import system
 
     check("'Start with Windows' shows the real setting (not changed by this test)",

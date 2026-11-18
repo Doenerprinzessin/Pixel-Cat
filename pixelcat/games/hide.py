@@ -32,7 +32,7 @@ class HideSeek(MiniGame):
         self.furniture = []
         if len(self._spots()) < 2:
             l, t, r, b = self.monitor().work
-            floor = self.brain.smap.floor_at((l + r) / 2).y
+            floor = self.brain.smap.floor_at((l + r) / 2, b).y
             kinds = list(FURNITURE)
             self.rng.shuffle(kinds)
             for i, fx in enumerate((0.2, 0.5, 0.8)):

@@ -104,7 +104,7 @@ class LaserGame(MiniGame):
         else:                                     # dot in the air: get below it, chatter, jump for it
             below = self.surface_under(cx, cy)
             if below.kind != "floor" and not self._can_reach(below):
-                below = b.smap.floor_at(cx)
+                below = b.smap.floor_at(cx, cy)
             target = (below.clamp(cx, 6 * s), below.y)
             if same and abs(cx - b.x) < 30 * s:
                 b.plan.clear()
@@ -120,4 +120,4 @@ class LaserGame(MiniGame):
             self.last_target = target
             dest = self.surface_under(target[0], target[1] + 2)
             if not self.go(dest, target[0], "chase"):
-                self.go(b.smap.floor_at(target[0]), target[0], "chase")
+                self.go(b.smap.floor_at(target[0], target[1]), target[0], "chase")

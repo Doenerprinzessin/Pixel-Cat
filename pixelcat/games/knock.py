@@ -121,7 +121,7 @@ class KnockGame(MiniGame):
                 if self.saved % 4 == 0:
                     self.speed = min(2.6, self.speed * 1.18)
                 continue
-            floor = b.smap.floor_at(x).y
+            floor = b.smap.floor_at(x, y).y
             if y >= floor:
                 self.lives -= 1
                 fragile = th.kind in art.FRAGILE

@@ -48,7 +48,7 @@ class Fishing(MiniGame):
     def setup(self) -> None:
         b, s = self.brain, self.s
         l, _t, r, _b = self.monitor().work
-        self.floor = b.smap.floor_at(b.x).y
+        self.floor = b.smap.floor_at(b.x, b.y).y
         side = 1 if b.x < (l + r) / 2 else -1
         pw = art.size("pond")[0] * s
         px = min(r - pw / 2 - 10, max(l + pw / 2 + 10, b.x + side * (pw / 2 + 26 * s)))
@@ -66,7 +66,7 @@ class Fishing(MiniGame):
         self.marker: Sprite | None = None
         self.fish: Sprite | None = None
         self.species = SPECIES[0]
-        self.go(b.smap.floor_at(self.stand_x), self.stand_x, "walk")
+        self.go(b.smap.floor_at(self.stand_x, self.floor), self.stand_x, "walk")
 
     def hud_text(self) -> str:
         return f"Cast {min(self.casts, CASTS)}/{CASTS} · Fish {len(self.caught)} · Book {len(self.book)}/{len(SPECIES)}"

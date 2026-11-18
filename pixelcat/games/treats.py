@@ -19,7 +19,7 @@ class TreatGame(MiniGame):
     def setup(self) -> None:
         b, s = self.brain, self.s
         l, t, r, bottom = self.monitor().work
-        self.floor_y = b.smap.floor_at((l + r) / 2).y
+        self.floor_y = b.smap.floor_at((l + r) / 2, bottom).y
         side = 1 if b.x < (l + r) / 2 else -1         # the jar goes to the side with more room
         jx = min(r - 30 * s, max(l + 30 * s, b.x + side * (r - l) * 0.35))
         self.jar = self.host.sprite("jar", jx, self.floor_y - 11 * s, clickable=True, draggable=True)
@@ -127,7 +127,7 @@ class TreatGame(MiniGame):
             self.wind = self.rng.uniform(-1, 1)
             return
         l, t, r, _bt = self.monitor().rect
-        floor = b.smap.floor_at(sp.x).y
+        floor = b.smap.floor_at(sp.x, self.floor_y).y
         if sp.y >= floor - 3 * s or not (l - 50 <= sp.x <= r + 50) or sp.y > floor + 50:
             sp.move(min(r - 5, max(l + 5, sp.x)), min(sp.y, floor - 3 * s))
             self.landed_treats.append((sp, 0.0))
@@ -145,7 +145,7 @@ class TreatGame(MiniGame):
             x = surf.x1 + surf.length * self.rng.uniform(0.3, 0.7)
         else:
             l, _t, r, _b = self.monitor().work
-            surf = b.smap.floor_at(b.x)
+            surf = b.smap.floor_at(b.x, b.y)
             x = l + (r - l) * self.rng.uniform(0.15, 0.85)
             if abs(x - self.jar.x) < 120 * s:
                 x = self.jar.x + math.copysign(200 * s, x - self.jar.x)

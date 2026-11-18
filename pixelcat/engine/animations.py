@@ -97,6 +97,9 @@ def _build() -> dict[str, Anim]:
     loop("climb", _phases(Pose(body="climb", look=(1, -1)), 4, 0.18))
     loop("cling", [(Pose(body="climb", look=(-1, 0)), 0.8), (Pose(body="climb", look=(-1, 0), tail=0.7), 0.4),
                    (Pose(body="climb", look=(-1, 1), ears="twitch"), 0.6), (Pose(body="climb", look=(-1, 0), tail=-0.5), 0.4)])
+    # holding on to a window that is being dragged around: low, ears back, eyes wide, tail out
+    loop("hold_on", [(Pose(body="crouch", eyes="wide", ears="back", mouth="o", phase=i % 4,
+                           tail=(0.0, 0.6, 0.0, -0.6)[i % 4]), 0.09) for i in range(8)])
     loop("hang", _phases(Pose(body="hang", eyes="open", mouth="o", look=(0, -1)), 4, 0.2))
     loop("dangle", _phases(Pose(body="dangle", eyes="open", mouth="o"), 4, 0.17))
     loop("dangle_happy", _phases(Pose(body="dangle", eyes="happy", mouth="smile"), 4, 0.22))

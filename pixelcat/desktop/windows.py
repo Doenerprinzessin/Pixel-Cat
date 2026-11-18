@@ -49,11 +49,12 @@ class WinInfo:
         return self.rect[3]
 
 
-def enumerate_windows(own_pid: int) -> list[WinInfo]:
+def enumerate_windows(own_pid: int, include: set[int] | frozenset[int] = frozenset()) -> list[WinInfo]:
     """Visible, non-minimised, non-cloaked app windows in z-order (top first).
 
-    Windows owned by our own process are skipped so the cat never stands on its
-    own chat window. Errors for individual windows are swallowed.
+    Windows owned by our own process are skipped (the cat itself, its sprites...) - except
+    the ones in ``include`` (the chat, the menu: the cat may sit on those).  Errors for
+    individual windows are swallowed.
     """
     out: list[WinInfo] = []
     z = [0]
@@ -65,6 +66,12 @@ def enumerate_windows(own_pid: int) -> list[WinInfo]:
             if not win32.user32.IsWindowVisible(hwnd) or win32.user32.IsIconic(hwnd):
                 return True
             if win32.window_pid(hwnd) == own_pid:
+                if int(hwnd) in include:
+                    rect = win32.frame_bounds(hwnd)
+                    if rect is not None and rect[2] - rect[0] >= MIN_W and rect[3] - rect[1] >= MIN_H // 2:
+                        out.append(WinInfo(hwnd=int(hwnd), rect=rect, z=z[0], title="Pixel Cat",
+                                           cls="PixelCatOwn", maximized=False, topmost=True))
+                        z[0] += 1
                 return True
             ex = win32.get_exstyle(hwnd)
             if ex & win32.WS_EX_TOOLWINDOW and not ex & win32.WS_EX_APPWINDOW:

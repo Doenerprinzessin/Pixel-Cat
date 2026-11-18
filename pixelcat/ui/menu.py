@@ -2,7 +2,8 @@
 
 It is a Qt popup (closes when clicking elsewhere), placed by the caller in the nearest
 free space next to the cat and always kept inside the monitor work area - when it is
-taller than the screen (all those hats), the rows scroll with the mouse wheel.  Sections
+taller than the screen (all those hats), the rows scroll with the mouse wheel.  Drag it
+by its title to move it; it stays where you put it while it is open.  Sections
 (items with children) fold open in place, also inside other sections.  Settings
 (toggles, radio choices, colour swatches) apply at once and keep the menu open, so a
 new style is visible right away.
@@ -69,6 +70,8 @@ class PixelMenu(QWidget):
         self._pic_w = 0
         self._work: Rect = (0, 0, 1920, 1080)
         self._scroll = 0                 # px the rows are scrolled up (menu taller than the screen)
+        self._user_pos: QPoint | None = None    # dragged somewhere by the user (top-left)
+        self._drag_off: QPoint | None = None
         self._scroll_max = 0
         self._content_h = 0
 
@@ -129,6 +132,8 @@ class PixelMenu(QWidget):
         self._avoid, self._work = avoid, work
         self._hover = -1
         self._scroll = 0
+        self._user_pos = None
+        self._drag_off = None
         self._reposition()
         self.show()
         self.activateWindow()
@@ -141,7 +146,12 @@ class PixelMenu(QWidget):
         self._scroll_max = max(0, h - max_h)       # too tall for the screen: the rows scroll
         self._scroll = max(0, min(self._scroll, self._scroll_max))
         h = min(h, max_h)
-        x, y = place_near(self._avoid, (w, h), self._work, gap=4 * self.u)
+        if self._user_pos is not None:              # dragged: stay there (inside the screen)
+            wl, wt, wr, wb = self._work
+            x = min(max(self._user_pos.x(), wl), wr - w)
+            y = min(max(self._user_pos.y(), wt), wb - h)
+        else:
+            x, y = place_near(self._avoid, (w, h), self._work, gap=4 * self.u)
         q = phys_to_qt(x, y)
         self.setGeometry(q.x(), q.y(), w, h)
         self.update()
@@ -166,6 +176,10 @@ class PixelMenu(QWidget):
         title_h = theme.text_size(self.title, u)[1]
         if self.subtitle:
             p.drawPixmap(pad + u, pad + title_h + u, theme.text_pixmap(self.subtitle, self._small_u(), theme.MUTED))
+        gx, gy = self.width() - pad - 7 * u, pad + max(0, (title_h - 5 * u) // 2)
+        for i in range(3):                           # grip: drag the menu by its title
+            for j in range(2):
+                p.fillRect(gx + j * 3 * u, gy + i * 2 * u, u, u, theme.MUTED)
         line = u if st.pixel else max(1, u // 2)
         p.fillRect(pad, self._sep_y, self.width() - 2 * pad - u, line, theme.INK if st.pixel else theme.PAPER_DARK)
         p.save()
@@ -285,7 +299,27 @@ class PixelMenu(QWidget):
                 return i
         return -1
 
+    def _in_header(self, pos: QPoint) -> bool:
+        return 0 <= pos.y() < self._view_top() and 0 <= pos.x() < self.width()
+
+    def mousePressEvent(self, e: QMouseEvent) -> None:
+        if e.button() == Qt.MouseButton.LeftButton and self._in_header(e.position().toPoint()):
+            self._drag_off = e.globalPosition().toPoint() - self.pos()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
+        super().mousePressEvent(e)
+
     def mouseMoveEvent(self, e: QMouseEvent) -> None:
+        if self._drag_off is not None:              # moving the menu
+            top_left = e.globalPosition().toPoint() - self._drag_off
+            wl, wt, wr, wb = self._work
+            x = min(max(top_left.x(), wl), wr - self.width())
+            y = min(max(top_left.y(), wt), wb - self.height())
+            self._user_pos = QPoint(x, y)
+            self.move(phys_to_qt(x, y))
+            return
+        self.setCursor(Qt.CursorShape.OpenHandCursor if self._in_header(e.position().toPoint())
+                       else Qt.CursorShape.ArrowCursor)
         h = self._row_at(e.position().toPoint())
         if h >= 0 and self._rows[h][0].inert:
             h = -1
@@ -297,6 +331,10 @@ class PixelMenu(QWidget):
         # Only left releases activate items. (The right-button release that opened
         # the menu must not close it; Qt.Popup closes itself on outside clicks.)
         if e.button() != Qt.MouseButton.LeftButton:
+            return
+        if self._drag_off is not None:              # the end of a drag is not a click
+            self._drag_off = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
             return
         i = self._row_at(e.position().toPoint())
         if i >= 0:

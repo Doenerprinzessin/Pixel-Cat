@@ -6,6 +6,11 @@
             by windows higher in the z-order are cut out, so the cat never stands
             on a title bar that is hidden behind another window.
 * walls   - left/right window edges the cat can climb (outside of the window).
+* ledges  - borders *inside* windows (under a toolbar, the top of a status bar or a
+            panel...) found on the screen by ledges.py; like tops they are cut where
+            windows higher in the z-order cover them.  A ledge belongs to its window
+            (``hwnd``) and keeps its distance from the window's top (``key``), so it
+            moves with the window.
 
 All values are physical pixels.  ``scale_at(x, y)`` gives the art->px scale.
 """
@@ -20,14 +25,18 @@ from ..desktop.windows import WinInfo
 FLOOR_Z = 1_000_000
 
 
+WINDOW_KINDS = ("top", "ledge")      # surfaces that belong to a window (they move with it)
+
+
 @dataclass(frozen=True)
 class Surface:
-    kind: str          # "floor" | "top"
+    kind: str          # "floor" | "top" | "ledge"
     x1: int
     x2: int
     y: int
     hwnd: int = 0
     z: int = FLOOR_Z
+    key: int = 0       # ledges: px below the window's top edge (identity while the window moves)
 
     def contains(self, x: float, margin: float = 0.0) -> bool:
         return self.x1 + margin <= x <= self.x2 - margin
@@ -48,6 +57,8 @@ class Surface:
             return False
         if self.kind == "top":
             return self.hwnd == other.hwnd
+        if self.kind == "ledge":
+            return self.hwnd == other.hwnd and abs(self.key - other.key) <= 2
         return abs(self.y - other.y) <= 2 and self.x1 < other.x2 and other.x1 < self.x2
 
 
@@ -78,17 +89,20 @@ class SurfaceMap:
     """Immutable snapshot of everything the cat can stand on or climb."""
 
     def __init__(self, floors: list[Surface], tops: list[Surface], walls: list[Wall],
-                 monitors: list[Monitor]) -> None:
+                 monitors: list[Monitor], ledges: list[Surface] | None = None) -> None:
         self.floors = floors
         self.tops = tops
         self.walls = walls
         self.monitors = monitors
-        self.surfaces: list[Surface] = floors + tops
+        self.ledges = ledges or []
+        self.surfaces: list[Surface] = floors + tops + self.ledges
 
     # ------------------------------------------------------------- build
     @classmethod
     def build(cls, monitors: list[Monitor], windows: Iterable[WinInfo],
-              scale_of: Callable[[Monitor], int], min_len_art: float) -> "SurfaceMap":
+              scale_of: Callable[[Monitor], int], min_len_art: float,
+              ledges: dict[int, list[tuple[int, int, int]]] | None = None) -> "SurfaceMap":
+        """``ledges``: hwnd -> [(x1, x2, y)] borders inside that window (screen px)."""
         wins = sorted(windows, key=lambda w: w.z)
         # floors ---------------------------------------------------------
         raw = sorted((Surface("floor", m.work[0], m.work[2], m.work[3]) for m in monitors),
@@ -142,7 +156,27 @@ class SurfaceMap:
                 walls.append(Wall(w.hwnd, l, t, bottom, "left"))
             if any(abs(sg.x2 - r) <= 2 for sg in segs) and r + 34 * s <= mon.rect[2]:
                 walls.append(Wall(w.hwnd, r, t, bottom, "right"))
-        return cls(floors, tops, walls, monitors)
+        # ledges inside windows ------------------------------------------------
+        inner: list[Surface] = []
+        for w in wins:
+            for x1, x2, y in (ledges or {}).get(w.hwnd, ()):
+                l, t, r, b = w.rect
+                mon = monitor_at(monitors, (x1 + x2) / 2, y)
+                s = scale_of(mon)
+                if not (t + 12 * s <= y <= b - 6 * s) or y - 30 * s < mon.rect[1]:
+                    continue                      # too close to the window's edges / the screen top
+                spans = [(max(x1, l), min(x2, r))]
+                for v in wins:                    # cut where windows above cover it (or the cat's head)
+                    if v.z >= w.z:
+                        break
+                    if v.top - 30 * s <= y < v.bottom:
+                        spans = _subtract(spans, (v.left, v.right))
+                    if not spans:
+                        break
+                for a, bb in spans:
+                    if bb - a >= min_len_art * s:
+                        inner.append(Surface("ledge", a, bb, y, w.hwnd, w.z, y - t))
+        return cls(floors, tops, walls, monitors, inner)
 
     @staticmethod
     def _floor_y(floors: list[Surface], x: float, mon: Monitor) -> int:
@@ -152,16 +186,21 @@ class SurfaceMap:
         return mon.work[3]
 
     # ------------------------------------------------------------- queries
-    def floor_at(self, x: float) -> Surface:
-        """Floor under x, or the nearest floor."""
-        best, best_d = self.floors[0], 1e18
-        for f in self.floors:
-            if f.contains(x):
-                return f
-            d = min(abs(f.x1 - x), abs(f.x2 - x))
-            if d < best_d:
-                best, best_d = f, d
-        return best
+    def floor_at(self, x: float, y: float | None = None) -> Surface:
+        """The floor under (x, y): with monitors stacked on top of each other there are several
+        floors at the same x - the one at or just below y (below every floor there, e.g. on a
+        taskbar: the lowest one).  No floor at x (a gap between monitors): the nearest one."""
+        at = [f for f in self.floors if f.contains(x)]
+        if at:
+            if y is None or len(at) == 1:
+                return at[0] if y is None else at[0]
+            below = [f for f in at if f.y >= y - 2]
+            return min(below, key=lambda f: f.y) if below else max(at, key=lambda f: f.y)
+
+        def dist(f: Surface) -> tuple[float, float]:
+            return min(abs(f.x1 - x), abs(f.x2 - x)), (abs(f.y - y) if y is not None else 0.0)
+
+        return min(self.floors, key=dist)
 
     def landing_between(self, x: float, y0: float, y1: float) -> Surface | None:
         """Highest surface whose line was crossed moving down from y0 to y1 at x."""
@@ -191,13 +230,13 @@ class SurfaceMap:
         return None
 
     def resolve(self, ref: Surface, x: float) -> Surface | None:
-        """Find the current version of ``ref`` (window tops move) near x."""
+        """Find the current version of ``ref`` (window tops and ledges move) near x."""
         if ref.kind == "floor":
             for f in self.floors:
                 if ref.same(f):
                     return f
             return None
-        segs = self.tops_of(ref.hwnd)
+        segs = self.tops_of(ref.hwnd) if ref.kind == "top" else [g for g in self.ledges if ref.same(g)]
         if not segs:
             return None
         return min(segs, key=lambda s: 0 if s.contains(x) else min(abs(s.x1 - x), abs(s.x2 - x)))
