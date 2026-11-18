@@ -125,7 +125,15 @@ def main() -> int:  # noqa: C901 - a linear test script
                              stdout=subprocess.PIPE, text=True)
         HELPERS.append(h)
         line = h.stdout.readline().split()
-        return h, int(line[1])
+        hwnd = int(line[1])
+        last, stable = None, 0.0                   # wait until Windows has finished placing it
+        end = time.time() + 5
+        while time.time() < end and stable < 0.5:
+            r = win32.frame_bounds(hwnd)
+            stable = stable + 0.05 if r == last else 0.0
+            last = r
+            pump(0.05)
+        return h, hwnd
 
     def sit_on(hwnd: int) -> bool:
         pet._refresh_windows()
@@ -136,6 +144,10 @@ def main() -> int:  # noqa: C901 - a linear test script
         b.explore_legs = 0
         b.place((top.x1 + top.x2) / 2, top.y - 40)
         ok = pump(4, lambda: b.mode == "ground" and b.surf is not None and b.surf.hwnd == hwnd)
+        if not ok:
+            print(f"   (not seated: placed above y={top.y} x={(top.x1 + top.x2) / 2:.0f}; now mode={b.mode} "
+                  f"surf={b.surf} y={b.y:.0f} state={b.state} top now={[t for t in b.smap.tops if t.hwnd == hwnd]})",
+                  flush=True)
         b.set_state(S.LOAFING, travel=False)
         b.state_dur = 1e6
         return ok

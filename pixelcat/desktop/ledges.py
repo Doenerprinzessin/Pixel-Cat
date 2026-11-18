@@ -1,18 +1,22 @@
-"""Borders inside windows the cat can stand on: the line under a toolbar or a tab strip,
-the top of a status bar, the edge of a panel...
+"""Surfaces inside windows the cat can stand on: the top of a line of text, a word, a
+heading, a picture, a button, a card, a toolbar, a panel - anything that has empty space
+above it.
 
-Every few seconds the visible part of each window is looked at (a screen snapshot kept in
-memory only - never saved; only line positions are kept): a *ledge* is a long, straight,
-one-coloured horizontal line or colour step that has empty space above it.  Text, icons,
-gradients and shadows don't count (they are not one colour along the line, or there is no
-empty space above).  The heavy lifting is done by Qt in C++ (difference images, averaging),
-so a scan of a whole screen takes a few ms of Python.
+Every few seconds the screen near the cat is looked at (a snapshot kept in memory only -
+never saved; only the positions of the surfaces are kept).  A surface is where empty space
+(no change from row to row, one colour along the row) ends and *something* begins, along a
+stretch at least a paw wide.  Letters of different heights on one line (capitals, x-height)
+and the gaps between words are joined into one surface on top of the line.  Inside
+pictures and videos nothing counts (there is no empty space above).  The heavy lifting is
+done by Qt in C++ (difference images, averaging) and byte tables, so a whole screen takes
+a few dozen ms in a background thread.
 
-A ledge belongs to its window and is kept relative to the window's corner, so it moves with
-the window between scans.  It must be seen in two scans in a row before the cat may use it
-(content that scrolls or animates doesn't count) and is forgotten after two misses - except
+A surface belongs to its window and is kept relative to the window's corner, so it moves
+with the window between searches.  It must be seen in two searches in a row before the cat
+may use it (things that flash by don't count) and is forgotten after two misses - except
 where one of our own windows (the cat itself, the chat...) hid it, because the cat sitting
-on a line covers that line.  A window that changes size starts over.
+on a line covers that line.  The line right under the cat is checked every second, so when
+the page scrolls the cat drops off.  A window that changes size starts over.
 """
 from __future__ import annotations
 
@@ -30,40 +34,68 @@ from PySide6.QtGui import QImage, QPainter
 log = logging.getLogger(__name__)
 
 BIN = 8                 # px per averaging bin along a line
-T_EDGE = 12             # average brightness step across the line (0-255) - Windows 11 borders are subtle
-T_FLAT = 3              # above the line: (almost) no change from row to row
-T_SMOOTH = 5            # along the line and the row above it: one colour
-MAX_PER_WINDOW = 6
+T_START = 6             # something starts: the average change into the next row (or along it) - subtle cards too
+T_FLAT = 3              # empty space above: (almost) no change from row to row...
+T_EMPTY = 4             # ...and (almost) one colour along the row
+ROWS_ABOVE = 3          # empty rows needed above a surface
+TOL = 6                 # px: tops of letters on one line (capitals / x-height) are one surface
+GAP_BINS = 2            # bins: a word gap (or an icon gap) doesn't end a surface
+MAX_PER_WINDOW = 120
 Rect = tuple[int, int, int, int]
-
-
 STRIP = 240             # rows per piece: each Qt step on a piece is short (the GUI thread keeps running)
 
 
-def find_lines(img: QImage, min_len: int) -> list[tuple[int, int, int]]:
-    """Ledge candidates in an RGB32 image: [(x1, x2, y)] in image px, y = the line's first row.
+def find_tops(img: QImage, min_len: int) -> list[tuple[int, int, int]]:
+    """Surfaces in an RGB32 image: [(x1, x2, y)] in image px, y = the first row of the thing.
     Big images are done in horizontal strips (overlapping by the rows the test looks at)."""
     if img.format() != QImage.Format.Format_RGB32:
         img = img.convertToFormat(QImage.Format.Format_RGB32)
+    raw: list[tuple[int, int, int]] = []
     if img.height() <= STRIP + 8:
-        return _find_lines(img, min_len)
-    out: list[tuple[int, int, int]] = []
-    for y0 in range(0, img.height(), STRIP):
-        top = max(0, y0 - 4)
-        piece = img.copy(0, top, img.width(), min(img.height(), y0 + STRIP + 3) - top)
-        for x1, x2, y in _find_lines(piece, min_len):
-            gy = y + top
-            if y0 <= gy - 1 < y0 + STRIP and not (out and out[-1][2] >= gy - 2 and out[-1][0] < x2 and x1 < out[-1][1]):
-                out.append((x1, x2, gy))
-    return out
+        raw = _candidates(img)
+    else:
+        for y0 in range(0, img.height(), STRIP):
+            top = max(0, y0 - ROWS_ABOVE - 2)
+            piece = img.copy(0, top, img.width(), min(img.height(), y0 + STRIP + 3) - top)
+            for x1, x2, y in _candidates(piece):
+                gy = y + top
+                if y0 <= gy - 1 < y0 + STRIP:
+                    raw.append((x1, x2, gy))
+    return _join(raw, min_len)
 
 
-def _find_lines(img: QImage, min_len: int) -> list[tuple[int, int, int]]:
+find_lines = find_tops        # (older name)
+
+
+def _join(raw: list[tuple[int, int, int]], min_len: int) -> list[tuple[int, int, int]]:
+    """Pieces at (almost) the same height that touch or have a small gap -> one surface on top."""
+    raw.sort(key=lambda c: (c[2], c[0]))
+    gap = GAP_BINS * BIN + 2
+    active: list[list[int]] = []          # [x1, x2, ymin, ylast]
+    done: list[list[int]] = []
+    for x1, x2, y in raw:
+        still = []
+        for c in active:
+            (still if y - c[2] <= TOL else done).append(c)
+        active = still
+        hit = [c for c in active if x1 <= c[1] + gap and c[0] - gap <= x2]
+        if not hit:
+            active.append([x1, x2, y, y])
+            continue
+        c = hit[0]
+        c[0], c[1], c[3] = min(c[0], x1), max(c[1], x2), y
+        for o in hit[1:]:                 # this piece joins two surfaces
+            c[0], c[1], c[2] = min(c[0], o[0]), max(c[1], o[1]), min(c[2], o[2])
+            active.remove(o)
+    done += active
+    return sorted(((c[0], c[1], c[2]) for c in done if c[1] - c[0] >= min_len), key=lambda c: (c[2], c[0]))
+
+
+def _candidates(img: QImage) -> list[tuple[int, int, int]]:
+    """Row by row: bins where empty space ends and something begins (pieces of surfaces)."""
     w, h = img.width(), img.height()
-    if w < BIN * 4 or h < 8:
+    if w < BIN * 3 or h < ROWS_ABOVE + 4:
         return []
-    if img.format() != QImage.Format.Format_RGB32:
-        img = img.convertToFormat(QImage.Format.Format_RGB32)
     # |row y - row y+1| and |col x - col x+1| as images (in C++), then averaged over bins of BIN px
     v = img.copy(0, 0, w, h - 1)
     p = QPainter(v)
@@ -76,7 +108,7 @@ def _find_lines(img: QImage, min_len: int) -> list[tuple[int, int, int]]:
     p.drawImage(0, 0, img, 1, 0, w - 1, h)
     p.end()
     nb = (w - 1) // BIN
-    if nb < 4:
+    if nb < 2:
         return []
     step = (w - 1) / nb                       # px per bin (about BIN)
     gray = QImage.Format.Format_Grayscale8
@@ -96,32 +128,33 @@ def _find_lines(img: QImage, min_len: int) -> list[tuple[int, int, int]]:
             got = cache[key] = int.from_bytes(rows[y].translate(table), "big")
         return got
 
-    min_bins = max(4, int(min_len / step))
     out: list[tuple[int, int, int]] = []
-    last_y = -10
-    for y in range(4, h - 2):
-        if max(vrow[y]) < T_EDGE:
+    for y in range(ROWS_ABOVE, h - 2):
+        # something begins in row y+1: it differs from row y, or has structure along it
+        if max(vrow[y]) < T_START and max(hrow[y + 1]) < T_START:
             continue
-        m = (mask(vrow, y, _GE_EDGE, 0) & mask(vrow, y - 1, _LE_FLAT, 1) & mask(vrow, y - 2, _LE_FLAT, 1)
-             & mask(vrow, y - 3, _LE_FLAT, 1) & mask(hrow, y, _LE_SMOOTH, 2) & mask(hrow, y + 1, _LE_SMOOTH, 2))
+        m = (mask(vrow, y, _GE_START, 0) | mask(hrow, y + 1, _GE_START, 3)) & mask(hrow, y, _LE_EMPTY, 2)
+        if not m:
+            continue
+        for k in range(1, ROWS_ABOVE + 1):    # empty space above (no change, one colour)
+            m &= mask(vrow, y - k, _LE_FLAT, 1)
+            if k < ROWS_ABOVE:
+                m &= mask(hrow, y - k, _LE_EMPTY, 2)
+            if not m:
+                break
         if not m:
             continue
         bits = m.to_bytes(nb, "big")
-        runs = [(mt.start(), mt.end() - 1) for mt in _RUN.finditer(bits) if mt.end() - mt.start() >= min_bins]
-        if runs:
-            if y - last_y <= 2:                  # a 2-3 px border: only its top row
-                continue
-            last_y = y
-            for i0, i1 in runs:
-                out.append((int(i0 * step), int((i1 + 1) * step), y + 1))
+        for mt in _RUN.finditer(bits):
+            out.append((int(mt.start() * step), int(mt.end() * step), y + 1))
     return out
 
 
-# per-bin tests as byte tables (0x01 = passes); a run may have single failing bins (an icon on the line)
-_GE_EDGE = bytes(1 if i >= T_EDGE else 0 for i in range(256))
+# per-bin tests as byte tables (0x01 = passes); a run may have short gaps (between words)
+_GE_START = bytes(1 if i >= T_START else 0 for i in range(256))
 _LE_FLAT = bytes(1 if i <= T_FLAT else 0 for i in range(256))
-_LE_SMOOTH = bytes(1 if i <= T_SMOOTH else 0 for i in range(256))
-_RUN = re.compile(rb"\x01(?:\x01|\x00(?=\x01))*")
+_LE_EMPTY = bytes(1 if i <= T_EMPTY else 0 for i in range(256))
+_RUN = re.compile(rb"\x01(?:\x01|\x00(?=\x01)|\x00\x00(?=\x01))*")
 
 
 def _qt_consts() -> tuple[object, object]:
@@ -255,7 +288,7 @@ class LedgeFinder:
             found: list[tuple[int, int, int]] | None = None
             try:
                 img = grab(area)
-                found = find_lines(img, min_len) if img is not None else None
+                found = find_tops(img, min_len) if img is not None else None
             except Exception:  # noqa: BLE001
                 log.debug("ledge search failed", exc_info=True)
             job["ms"] = (time.perf_counter() - t0) * 1000
@@ -283,12 +316,34 @@ class LedgeFinder:
         """The last search found new lines: they want a second look (just one)."""
         return self.fresh > 0
 
+    def check_line(self, x1: int, x2: int, y: int, avoid: Rect) -> bool | None:
+        """Is the surface (x1..x2 at y) still there?  Looks at a thin strip left and right of
+        ``avoid`` (the cat sits on it and covers it).  None: can't tell."""
+        parts = [(x1, min(x2, avoid[0])), (max(x1, avoid[2]), x2)]
+        parts = [(a, b) for a, b in parts if b - a >= 3 * BIN]
+        if not parts:
+            return None
+        top = y - ROWS_ABOVE - 3
+        for a, b in parts:
+            img = grab((a, top, b, y + TOL + 3))
+            if img is None:
+                return None
+            if any(abs(yy + top - y) <= TOL for _a, _b, yy in find_tops(img, 2 * BIN)):
+                return True
+        return False
+
+    def forget(self, hwnd: int, rel_y: int) -> None:
+        """A surface that is gone (scrolled away): forget it now."""
+        st = self.wins.get(hwnd)
+        if st is not None:
+            st.ledges = [lg for lg in st.ledges if abs(lg.y - rel_y) > 2]
+
     def scan(self, windows: Iterable, area: Rect, own: list[Rect], min_len: int, scale: int,
              image: QImage | None = None) -> None:
         """The same, right away (tests).  ``image``: the screen picture to use."""
         img = image if image is not None else grab(area)
         if img is not None:
-            self._apply(find_lines(img, min_len), list(windows), area, list(own), min_len, scale)
+            self._apply(find_tops(img, min_len), list(windows), area, list(own), min_len, scale)
 
     def _apply(self, found: list[tuple[int, int, int]], windows: list, area: Rect, own: list[Rect],
                min_len: int, scale: int) -> None:
@@ -336,7 +391,7 @@ class LedgeFinder:
             for gx1, gx2, gy, clean in seen:
                 rx1, rx2, ry = gx1 - l, gx2 - l, gy - t
                 hit = next((i for i, lg in enumerate(st.ledges)
-                            if abs(lg.y - ry) <= 1 and lg.x1 < rx2 + 4 * BIN and rx1 - 4 * BIN < lg.x2), None)
+                            if abs(lg.y - ry) <= 2 and lg.x1 < rx2 + 2 * BIN and rx1 - 2 * BIN < lg.x2), None)
                 if hit is None:
                     st.ledges.append(_Ledge(rx1, rx2, ry, born=self.searches))
                     matched.add(len(st.ledges) - 1)

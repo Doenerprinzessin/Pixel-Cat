@@ -141,6 +141,7 @@ class Brain:
                     return
                 if o is not None and r != o:
                     if self.window_jumped(o, r):
+                        log.info("window %s jumped %s -> %s (refresh): the cat falls", hwnd, o, r)
                         self._fall_off(startle=True)   # snapped, maximised, closing: fall from here
                         return
                     dx, dy = r[0] - o[0], r[1] - o[1]
@@ -194,8 +195,9 @@ class Brain:
         ow, oh, nw, nh = o[2] - o[0], o[3] - o[1], r[2] - r[0], r[3] - r[1]
         if nw <= 2 or nh <= 2:
             return True
-        if abs(nw - ow) <= 2 and abs(nh - oh) <= 2:
-            return False                                  # moved (dragged, any distance)
+        if abs(nw - ow) <= 24 and abs(nh - oh) <= 24:
+            return False                                  # moved (dragged, any distance; the size read during a
+            #                                               move can be off by the invisible frame border)
         top_stays = abs(r[1] - o[1]) <= 3
         bottom_stays = abs(r[3] - o[3]) <= 3 and abs(r[1] - o[1]) < 120
         sides = abs(r[0] - o[0]) <= 3 or abs(r[2] - o[2]) <= 3
@@ -226,6 +228,7 @@ class Brain:
         if not (on_surf or on_wall):
             return
         if self.window_jumped(old, rect):
+            log.info("window %s jumped %s -> %s: the cat falls", hwnd, old, rect)
             self._fall_off(startle=True)
             return
         s = self.scale
@@ -663,12 +666,13 @@ class Brain:
                 surf, x = self.surf, self.surf.clamp(self.x + d, m)
             else:
                 weights = []
+                share = min(1.0, 8.0 / max(1, len(self.smap.ledges)))   # many text lines: still floors/tops too
                 for sf in self.smap.surfaces:
                     wt = 1.0
                     if sf.kind == "top":
                         wt = 3.0 if self.state in (S.CURIOUS, S.SLEEPY, S.PLAYFUL) else 1.6
                     elif sf.kind == "ledge":             # borders inside windows: a cat loves a shelf
-                        wt = 2.4 if self.state in (S.CURIOUS, S.SLEEPY, S.PLAYFUL, S.BORED) else 1.3
+                        wt = (2.4 if self.state in (S.CURIOUS, S.SLEEPY, S.PLAYFUL, S.BORED) else 1.3) * share
                     if abs((sf.x1 + sf.x2) / 2 - self.x) < 1500 * s / 3:
                         wt *= 2.5
                     weights.append(wt)

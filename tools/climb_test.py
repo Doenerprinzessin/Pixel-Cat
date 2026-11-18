@@ -86,7 +86,9 @@ def main() -> int:
     from pixelcat.persistence import SavedState
     from pixelcat.settings import load_config
 
-    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0)
+    cfg = load_config()
+    cfg.explore_windows = False          # (window tops and edges only - not the surfaces inside windows)
+    pet = PixelCatApp(app, cfg, SavedState(autostart_asked=True), selftest=0)
     pet.save = lambda: None
     pet.start()
     b = pet.brain

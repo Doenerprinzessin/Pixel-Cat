@@ -143,9 +143,11 @@ class PixelCatApp(QObject):
         self.ledges = LedgeFinder()                      # borders inside windows the cat can sit on
         self._ledge_t = -100.0
         self._ledge_sig: tuple = ()
+        self._under_t = 0.0
+        self._ledge_quick = 2
         self._own_hwnds: set[int] = set()
         self._popups: list[PopupWin] = []
-        self.host = QtHost(self.brain, self.sprites, lambda: self._real_wins, self.scale_for,
+        self.host = QtHost(self.brain, self.sprites, self._game_windows, self.scale_for,
                            self.t.min_surface_len, on_world=self._rebuild_world, work_area=self._game_work,
                            ui_unit=self._game_unit, cat_hwnd=self.overlay.hwnd, on_hud_close=self.stop_minigame)
         self.host.ctx = {"fish_book": saved.fish_book}
@@ -411,39 +413,62 @@ class PixelCatApp(QObject):
     def _ledges_on(self) -> bool:
         return self.cfg.explore_windows and not self._mini_active() and not self.game.active
 
+    def _cat_box(self) -> tuple[int, int, int, int]:
+        """The cat's own pixels (a little bigger): it covers the line it sits on."""
+        s = self.scale_for(monitor_at(self.monitors, self.brain.x, self.brain.y - 1))
+        x1, y1, x2, y2 = self.overlay.cat_rect()
+        return x1 - 3 * s, y1 - 6 * s, x2 + 3 * s, y2 + 3 * s
+
     def _look_for_ledges(self) -> None:
-        """Borders inside the windows near the cat, searched in the background: soon after the
-        windows there change (and once more to confirm new lines), otherwise every 20 s."""
+        """Surfaces inside the windows on the cat's screen (text, pictures, buttons...), searched
+        in the background: soon after the windows change (and once more to confirm what is
+        new), otherwise every 30 s.  And every second: is the line under the cat still there?"""
         if not self._ledges_on():
             return
         self.ledges.poll()
         b = self.brain
-        if (self.ledges.busy() or STATES[b.state].asleep or b.mode != "ground" or b.plan or b.ride_t > 0
+        now = time.monotonic()
+        if b.ride_t > 0:
+            self._under_t = now                          # (its window is moving: look once it stands still)
+        if b.mode == "ground" and b.surf is not None and b.surf.kind == "ledge" and now - self._under_t >= 1.0:
+            self._under_t = now
+            sf = b.surf
+            if self.ledges.check_line(sf.x1, sf.x2, sf.y, self._cat_box()) is False:
+                self.ledges.forget(sf.hwnd, sf.key)      # scrolled away: the cat drops off
+                self._rebuild_world()
+        if (self.ledges.busy() or STATES[b.state].asleep or b.mode != "ground" or b.ride_t > 0
                 or b.state == S.HELD):
-            return                                       # (only while the cat stands still)
+            return
         mon = monitor_at(self.monitors, b.x, b.y - 1)
         s = self.scale_for(mon)
-        reach = 1000 * s // 3                            # the part of the screen around the cat
-        area = (max(mon.work[0], int(b.x) - reach), mon.work[1], min(mon.work[2], int(b.x) + reach), mon.work[3])
+        area = mon.work
         others = [w for w in self._real_wins if w.hwnd not in self._own_hwnds]
-        near = tuple(sorted((w.hwnd, w.rect) for w in others if w.left < area[2] and area[0] < w.right))
-        now = time.monotonic()
-        if near != self._ledge_sig:                      # windows opened/moved/resized: look again soon
-            self._ledge_sig = near
-            self._ledge_t = min(self._ledge_t, now - 20.0 + 1.5)
-        wait = 3.0 if self.ledges.unconfirmed() else 20.0
+        sig = tuple(sorted((w.hwnd, w.rect) for w in others if w.left < area[2] and area[0] < w.right))
+        if sig != self._ledge_sig:                       # windows opened/moved/resized: look again soon,
+            self._ledge_sig = sig                        # and once more to confirm what is new
+            self._ledge_t = min(self._ledge_t, now - 30.0 + 1.0)
+            self._ledge_quick = 2
+        wait = 1.5 if self._ledge_quick > 0 else 30.0
         if now - self._ledge_t < wait:
             return
         self._ledge_t = now
+        if system.session_locked():                      # (the lock screen: nothing to see)
+            return
+        self._ledge_quick = max(0, self._ledge_quick - 1)
         own = [w.rect for w in self._real_wins if w.hwnd in self._own_hwnds]
-        g = self.overlay.geometry()
-        own.append((g.x(), g.y(), g.x() + g.width(), g.y() + g.height()))     # the cat itself
-        self.ledges.start(others, area, own, int(self.t.min_surface_len * 1.6 * s), s)
+        own.append(self._cat_box())
+        self.ledges.start(others, area, own, 16 * s, s)
+
+    def _game_windows(self) -> list[Any]:
+        """Other apps' windows only: a game never uses the chat or its own popups (a result
+        window is always on top - hiding behind it, mice running on it...)."""
+        return [w for w in self._real_wins if w.hwnd not in self._own_hwnds]
 
     def _rebuild_world(self) -> None:
         """The cat's surfaces: real windows (and the chat, the menu) with the borders inside
         them, plus the game's furniture (it is always on top)."""
-        wins = list(self._real_wins) + self.host.prop_infos()
+        base = self._game_windows() if self._mini_active() else list(self._real_wins)
+        wins = base + self.host.prop_infos()
         inner = self.ledges.current(self._real_wins) if self._ledges_on() else None
         smap = SurfaceMap.build(self.monitors, wins, self.scale_for, self.t.min_surface_len, inner)
         self.brain.set_world(smap, {w.hwnd: w.rect for w in wins})

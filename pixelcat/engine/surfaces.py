@@ -26,6 +26,7 @@ FLOOR_Z = 1_000_000
 
 
 WINDOW_KINDS = ("top", "ledge")      # surfaces that belong to a window (they move with it)
+LEDGE_MIN_ART = 16                   # art px: the shortest surface inside a window the cat uses
 
 
 @dataclass(frozen=True)
@@ -163,7 +164,7 @@ class SurfaceMap:
                 l, t, r, b = w.rect
                 mon = monitor_at(monitors, (x1 + x2) / 2, y)
                 s = scale_of(mon)
-                if not (t + 12 * s <= y <= b - 6 * s) or y - 30 * s < mon.rect[1]:
+                if not (t + 12 * s <= y <= b - 6 * s) or y - 26 * s < mon.rect[1]:
                     continue                      # too close to the window's edges / the screen top
                 spans = [(max(x1, l), min(x2, r))]
                 for v in wins:                    # cut where windows above cover it (or the cat's head)
@@ -174,7 +175,7 @@ class SurfaceMap:
                     if not spans:
                         break
                 for a, bb in spans:
-                    if bb - a >= min_len_art * s:
+                    if bb - a >= LEDGE_MIN_ART * s:      # (a word is enough for a cat)
                         inner.append(Surface("ledge", a, bb, y, w.hwnd, w.z, y - t))
         return cls(floors, tops, walls, monitors, inner)
 
