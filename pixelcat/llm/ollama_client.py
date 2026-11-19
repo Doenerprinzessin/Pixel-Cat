@@ -60,7 +60,7 @@ class ChatWorker(QThread):
         url = self.cfg.ollama_url.rstrip("/") + "/api/chat"
         payload: dict[str, Any] = {
             "model": self.model,
-            "messages": self.messages,
+            "messages": [_for_ollama(m) for m in self.messages],
             "stream": True,
             "keep_alive": self.cfg.keep_alive,
             "options": {"temperature": self.cfg.temperature, "num_ctx": self.cfg.num_ctx},
@@ -147,6 +147,14 @@ class ChatWorker(QThread):
             return False
         self.done.emit("".join(content), calls)
         return False
+
+
+def _for_ollama(m: dict[str, Any]) -> dict[str, Any]:
+    """A message as Ollama takes it: no external model's own blocks, no tool call ids."""
+    out = {k: v for k, v in m.items() if k != "raw"}
+    if out.get("tool_calls"):
+        out["tool_calls"] = [{"function": tc.get("function") or {}} for tc in out["tool_calls"]]
+    return out
 
 
 def preload_model(cfg: Config) -> None:

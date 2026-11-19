@@ -36,6 +36,7 @@ import winreg  # noqa: E402
 
 from pixelcat import __version__, installer  # noqa: E402
 from pixelcat.desktop import elevation, system  # noqa: E402
+from pixelcat.persistence import load_state  # noqa: E402
 
 TEST_KEY = r"Software\PixelCatInstallTest"
 REAL_KEY = installer.UNINSTALL_KEY
@@ -135,8 +136,9 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("updating asks the running cat to close; it saves and quits by itself",
           rc == 0 and closed and "Setup asked me to close" in logtxt, f"exit {rc}, {time.time() - t0:.1f}s")
     check("...and the program is replaced", lay.exe.stat().st_mtime > before)
-    st = json.loads((lay.data_dir / "state.json").read_text("utf-8"))
-    check("the cat keeps its memory across the update", st.get("best_round") == 4)
+    st = load_state(lay.data_dir)
+    check("the cat keeps its memory across the update (its old state.json converted to the protected save)",
+          st.best_round == 4 and not (lay.data_dir / "state.json").exists())
     # 3) --launch: the cat keeps running after Setup has finished ------------------------
     rc = run(SETUP, "--quiet", "--launch", "--no-desktop-shortcut")
     started = wait(system.is_running, 15)
@@ -154,7 +156,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("...and 'Start with Windows' (it pointed to the installed cat)", reg(lay.run_key, system.RUN_VALUE) is None)
     gone = wait(lambda: not lay.install_dir.exists(), 30)
     check("...and the program folder, a moment after it exits", gone)
-    check("...but keeps the cat's memory unless asked", (lay.data_dir / "state.json").exists())
+    check("...but keeps the cat's memory unless asked", (lay.data_dir / "save.dat").exists())
     # 6) uninstall and forget everything ---------------------------------------------------
     rc = run(SETUP, "--quiet")
     rc2 = run(lay.exe, "--uninstall", "--quiet", "--delete-data")

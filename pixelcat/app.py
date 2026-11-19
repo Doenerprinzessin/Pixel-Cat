@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import threading
 import logging
 import os
 import re
@@ -16,7 +17,7 @@ from PySide6.QtCore import QObject, QPoint, QRect, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
-from . import paths, progress
+from . import paths, persistence, progress
 from .desktop import system, win32
 from .desktop.monitors import Monitor, enumerate_monitors, monitor_at, primary
 from .desktop.windows import enumerate_windows, foreground_window, is_fullscreen_window
@@ -42,7 +43,7 @@ from .sprites.library import SpriteLibrary
 from .ui.ball import BallOverlay
 from .ui.chat import ChatWindow
 from .ui.dialogs import PixelDialog
-from .llm import models
+from .llm import external, models
 from .llm.model_status import model_on_disk
 from .ui import theme
 from .ui.menu import MenuItem, PixelMenu
@@ -99,6 +100,22 @@ def _rect_gap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> flo
     dx = max(a[0] - b[2], 0, b[0] - a[2])
     dy = max(a[1] - b[3], 0, b[1] - a[3])
     return (dx * dx + dy * dy) ** 0.5
+
+
+class _Later(QObject):
+    """Hands what a background thread found to a callback on the GUI thread."""
+
+    ran = Signal(object, object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ran.connect(self._run)
+
+    def _run(self, cb: Any, result: Any) -> None:
+        try:
+            cb(result)
+        except Exception:  # noqa: BLE001
+            log.exception("background result handler failed")
 
 
 class PixelCatApp(QObject):
@@ -159,6 +176,18 @@ class PixelCatApp(QObject):
         self.model_menu.triggered.connect(self._on_model_menu)
         self.chat_model: str | None = None               # this chat only (None: the default)
         self._download_ok: set[str] = set()              # models the user said yes to downloading
+        self.creds = external.Credentials()              # API keys and sign-ins (keys.dat, encrypted)
+        self._later = _Later()
+        self._resume_after_switch = False                # token limit: go on once another model is picked
+        self._ext_notes: set[str] = set()
+        self._signin_poll: QTimer | None = None
+        self._signin_until = 0.0
+        self._signin_checking = False
+        self._signin_cancel: threading.Event | None = None
+        self._key_dialog: Any = None
+        for _p in external.PROVIDERS:                    # the external models' names (for labels)
+            for _m in self._ext_models(_p):
+                external.NAMES[f"{_p}:{_m['id']}"] = _m["name"]
         self.menu.triggered.connect(self._on_menu)
         self.chat: ChatWindow | None = None
         self.tray = Tray(self.sprites)
@@ -268,6 +297,8 @@ class PixelCatApp(QObject):
             QTimer.singleShot(2500, self._ask_autostart)
         if self.saved.watches and not self.selftest:
             self.watches.restore(self.saved.watches)   # long tasks from before a restart keep going
+        if persistence.last_load == "unreadable" and not self.selftest:
+            QTimer.singleShot(3000, self._tell_unreadable_save)
         if self.selftest:
             QTimer.singleShot(int(self.selftest * 1000), self._selftest_finish)
         if warm_model and self.cfg.preload_on_start and not self.selftest:
@@ -330,6 +361,14 @@ class PixelCatApp(QObject):
                      self.brain.state.value, self.brain.mode, self.brain.x, self.brain.y,
                      len(self.brain.smap.surfaces) if self.brain.smap else 0,
                      len(self.brain.smap.walls) if self.brain.smap else 0, out)
+            try:                                     # the external models' parts are in the build
+                import anthropic
+
+                from .llm import anthropic_client, chatgpt_signin, openai_client  # noqa: F401
+                anthropic.Anthropic(api_key="selftest")            # (made, never used)
+                log.info("selftest: external models ok (anthropic %s)", anthropic.__version__)
+            except Exception:  # noqa: BLE001
+                log.exception("selftest: external models broken")
         finally:
             self.quit()
 
@@ -632,7 +671,11 @@ class PixelCatApp(QObject):
             MenuItem("set_font", "Font", "chat", children=[
                 MenuItem(f"font:{k}", {"default": "Style's own", "pixel": "Pixel", "clean": "Clean"}[k], radio=True,
                          checked=theme.choice("font") == k) for k in theme.FONTS]),
-            MenuItem("set_model", "AI model", "bolt_on", children=self._model_items("model:", self.cfg.model)),
+            MenuItem("set_model", "AI model", "bolt_on", children=self._model_items("model:", self.cfg.model)
+                     + [self._external_menu()]),
+            MenuItem("progress", "Your progress", "disk", children=[
+                MenuItem("export", "Export progress...", "export"),
+                MenuItem("import", "Import progress...", "import")]),
             MenuItem("quiet", "Quiet mode", checked=self.quiet, separator_before=True),
             MenuItem("autostart", "Start with Windows", checked=system.autostart_enabled()),
             MenuItem("automode", "Chat auto mode", checked=self.saved.auto_mode),
@@ -775,13 +818,18 @@ class PixelCatApp(QObject):
         if self.chat is None:
             return
         m = models.find(self._effective_model())
-        short = m.short if m else self._effective_model().split(":")[-1][:6].upper()
+        short = m.short if m else external.short_label(self._effective_model())
         tip = (f"This chat uses {models.label(self._effective_model())} - click to change it. "
                f"The default is {models.label(self.cfg.model)} (Settings -> AI model).")
         self.chat.set_model_chip(short, self.chat_model is not None, tip)
 
     def _choose_default_model(self, tag: str) -> None:
         if tag == self.cfg.model:
+            return
+        ext = external.parse(tag)
+        if ext:
+            if self._ext_auth(ext[0]):
+                self._set_default_model(tag)
             return
         if model_on_disk(tag):
             self._set_default_model(tag)
@@ -815,6 +863,7 @@ class PixelCatApp(QObject):
         items = [MenuItem("chatmodel:default", f"Default ({models.label(self.cfg.model)})", radio=True,
                           checked=self.chat_model is None)]
         items += self._model_items("chatmodel:", self.chat_model or "")
+        items += self._ext_chat_items()
         self.model_menu.items = items
         g = self.chat.model_btn.mapToGlobal(self.chat.model_btn.rect().topLeft())
         mon = monitor_at(self.monitors, self.brain.x, self.brain.y - 1)
@@ -830,6 +879,14 @@ class PixelCatApp(QObject):
 
     def _choose_chat_model(self, tag: str | None) -> None:
         assert self.chat is not None
+        ext = external.parse(tag)
+        if ext:
+            if not self._ext_auth(ext[0]):
+                self.chat.add("info", f"{external.PROVIDERS[ext[0]].brand} models aren't connected - Settings > "
+                                      "AI model > External AI models.")
+                return
+            self._set_chat_model(None if tag == self.cfg.model else tag)
+            return
         if tag is not None and models.find(tag) is None:
             self.chat.add("info", "I don't know that model. Models: " +
                           ", ".join(f"{m.name} ({m.short})" for m in models.MODELS) + ".")
@@ -853,10 +910,547 @@ class PixelCatApp(QObject):
             self.chat.add("info", f"This chat now uses {models.label(tag)}. A new chat goes back to the default, "
                                   f"{models.label(self.cfg.model)}." if tag else
                           f"This chat uses the default model again: {models.label(self.cfg.model)}.")
+            self._show_model_banner()
+        if self._resume_after_switch:                    # (the token limit: go on with the new model)
+            self._resume_after_switch = False
+            if self._task_active and self.worker is None and self.chat is not None:
+                QTimer.singleShot(0, self._request)
+
+    # ---------------------------------------------------------------- external AI models
+    def _in_background(self, fn: Any, cb: Any) -> None:
+        """Run ``fn`` in a thread; ``cb(result or exception)`` on the GUI thread."""
+        def work() -> None:
+            try:
+                res = fn()
+            except Exception as exc:  # noqa: BLE001 - handed to cb
+                res = exc
+            self._later.ran.emit(cb, res)
+        threading.Thread(target=work, name="pixelcat-ext", daemon=True).start()
+
+    def _ext_p(self, p: str) -> dict[str, Any]:
+        return self.saved.ext_settings.setdefault(p, {})
+
+    def _budget(self, p: str) -> external.Budget:
+        return external.Budget(self._ext_p(p), self.saved.ext_usage.setdefault(p, {}))
+
+    def _ext_auth(self, p: str) -> str:
+        """How a provider is connected: "key", "signin" (Anthropic), "chatgpt", or "" (not)."""
+        want = self._ext_p(p).get("auth", "")
+        if p == "openai":
+            from .llm import chatgpt_signin
+
+            if want == "chatgpt" and chatgpt_signin.signed_in(self.creds):
+                return "chatgpt"
+            return "key" if self.creds.get("openai_key") else ""
+        if want == "signin":
+            return "signin"
+        return "key" if self.creds.get("anthropic_key") else ""
+
+    def _ext_models(self, p: str) -> list[dict[str, Any]]:
+        ms = self._ext_p(p).get("models")
+        return [m for m in ms if isinstance(m, dict) and m.get("id")] if isinstance(ms, list) else []
+
+    def _ext_info(self, p: str, mid: str) -> dict[str, Any]:
+        return next((m for m in self._ext_models(p) if m["id"] == mid), {})
+
+    def _set_ext_models(self, p: str, ms: list[dict[str, Any]]) -> None:
+        self._ext_p(p)["models"] = ms
+        for m in ms:
+            external.NAMES[f"{p}:{m['id']}"] = m["name"]
+        self.save()
+
+    def _external_menu(self) -> MenuItem:
+        """Settings -> AI model -> External AI models."""
+        st = self.saved.ext_settings
+        kids = [self._provider_menu(p) for p in external.PROVIDERS]
+        kids.append(MenuItem("ext:thinking", "Thinking", checked=bool(st.get("thinking", True)), separator_before=True))
+        kids.append(MenuItem("ext_effort", "Effort", "bolt_on", children=[
+            MenuItem(f"ext:effort:{k}", v, radio=True, checked=st.get("effort", "medium") == k)
+            for k, v in external.EFFORTS.items()]))
+        return MenuItem("ext", "External AI models", "plus", children=kids, separator_before=True)
+
+    def _provider_menu(self, p: str) -> MenuItem:
+        prov = external.PROVIDERS[p]
+        auth = self._ext_auth(p)
+        b = self._budget(p)
+        fmt = external.fmt_tokens
+        if auth == "chatgpt":
+            email = (self.creds.get("chatgpt") or {}).get("email", "")
+            state = "Signed in with ChatGPT" + (f" ({email})" if email else "")
+        else:
+            state = {"key": "Connected with an API key", "signin": "Signed in with Anthropic"}.get(auth, "Not connected")
+        kids = [MenuItem(f"ext:state:{p}", state, info=True)]
+        if auth:
+            ms = self._ext_models(p)
+            kids.append(MenuItem(f"ext_models_{p}", "Model", "bolt_on", children=(
+                [MenuItem(f"model:{p}:{m['id']}", m["name"], radio=True, checked=self.cfg.model == f"{p}:{m['id']}")
+                 for m in ms]
+                + [MenuItem(f"ext:refresh:{p}", "Reload the list" if ms else "Load the model list", "arrow",
+                            separator_before=bool(ms))])))
+        if auth not in ("signin", "chatgpt"):
+            kids.append(MenuItem(f"ext:signin:{p}", prov.signin, "arrow"))
+        kids.append(MenuItem(f"ext:key:{p}", "Change API key..." if auth == "key" else "Use an API key...", "plus"))
+        maximum = float(self._ext_p(p).get("maximum", external.DEFAULTS["maximum"]) or 0)
+        kids.append(MenuItem(f"ext_limit_{p}", "Token limit", "dot", separator_before=True,
+                             note=f"{fmt(b.limit)}/{b.period}" if b.limit else "NONE", children=[
+            MenuItem(f"ext:limit:{p}:{n}", f"{fmt(n)} tokens" if n else "No limit", radio=True, checked=b.limit == n)
+            for n in external.LIMITS]))
+        if b.limit:
+            kids.append(MenuItem(f"ext_period_{p}", "Resets", "dot", children=[
+                MenuItem(f"ext:period:{p}:{k}", v, radio=True, checked=b.period == k)
+                for k, v in external.PERIODS.items()]))
+            kids.append(MenuItem(f"ext_max_{p}", "Raise up to", "dot", children=[
+                MenuItem(f"ext:max:{p}:{x:g}", f"{x:g}x ({fmt(int(b.limit * x))})" if x else "No maximum", radio=True,
+                         checked=abs(maximum - x) < 1e-6) for x in external.MAXIMUMS]))
+            used, allowed = b.used(), b.allowed()
+            kids.append(MenuItem(f"ext:used:{p}", f"Used {fmt(used)} of {fmt(allowed)}", info=True,
+                                 bar=min(1.0, used / max(1, allowed)), note=external.PERIOD_WORD[b.period].upper()))
+        elif b.used():
+            kids.append(MenuItem(f"ext:used:{p}", f"Used {fmt(b.used())} {external.PERIOD_WORD[b.period]}", info=True))
+        if auth:
+            kids.append(MenuItem(f"ext:out:{p}", "Sign out" if auth in ("signin", "chatgpt") else "Remove API key",
+                                 "close", separator_before=True))
+        return MenuItem(f"ext_{p}", f"{prov.brand} ({prov.name})", "chat", children=kids, note="ON" if auth else "")
+
+    def _ext_action(self, act: str) -> None:
+        parts = act.split(":")
+        what, p = parts[0], (parts[1] if len(parts) > 1 else "")
+        st = self.saved.ext_settings
+        if what == "thinking":
+            st["thinking"] = not st.get("thinking", True)
+        elif what == "effort" and p in external.EFFORTS:
+            st["effort"] = p
+        elif what == "limit":
+            n = int(parts[2])
+            self._ext_p(p)["limit"] = n
+            self._budget(p).u["allowed"] = n            # a new limit starts without raises
+        elif what == "period" and parts[2] in external.PERIODS:
+            self._ext_p(p)["period"] = parts[2]
+            self._budget(p).u["start"] = external.period_start(parts[2], datetime.now()).timestamp()
+        elif what == "max":
+            self._ext_p(p)["maximum"] = float(parts[2])
+        elif what == "refresh":
+            self._ext_load_models(p, announce=True)
+        elif what in ("signin", "key", "out"):
+            self.menu.close()
+            if what == "signin":
+                (self._anthropic_signin if p == "anthropic" else self._chatgpt_signin)()
+            elif what == "key":
+                self._ask_key(p)
+            else:
+                self._ext_disconnect(p)
+            return
+        else:
+            return
+        self.save()
+        if self.menu.isVisible():
+            self.menu.refresh(self._menu_items())
+
+    def _ext_load_models(self, p: str, announce: bool = False, after: Any = None) -> None:
+        auth = self._ext_auth(p)
+        if not auth:
+            return
+
+        def work() -> list[dict[str, Any]]:
+            if p == "anthropic":
+                from .llm import anthropic_client
+                return anthropic_client.list_models(self.creds, auth)
+            from .llm import openai_client
+            return openai_client.list_models(self.creds, auth)
+
+        def got(res: Any) -> None:
+            if isinstance(res, Exception):
+                log.warning("couldn't load the %s models: %s", p, res)
+                if announce:
+                    self._popup("Models", self._paras([html.escape(self._key_problem(res))]), "OK")
+                return
+            self._set_ext_models(p, res)
+            log.info("%s: %d models", p, len(res))
+            if self.menu.isVisible():
+                self.menu.refresh(self._menu_items())
+            if after is not None:
+                after()
+        self._in_background(work, got)
+
+    def _ext_connected(self, p: str) -> None:
+        prov = external.PROVIDERS[p]
+        n = len(self._ext_models(p))
+        pop = self._popup(f"{prov.brand} is connected", self._paras([
+            f"{n} {prov.brand} models are ready." if n else f"{prov.brand} is ready.",
+            f"Pick one in Settings &gt; AI model &gt; External AI models &gt; {prov.brand} &gt; Model - or just for "
+            "one chat, with the button next to SEND."]), "PICK A MODEL", "LATER")
+        pop.answered.connect(lambda ok, p=p: self._open_menu_at(["settings", "set_model", "ext", f"ext_{p}",
+                                                                   f"ext_models_{p}"]) if ok else None)
+
+    def _open_menu_at(self, keys: list[str]) -> None:
+        self._open_menu()
+        self.menu.expanded = set(keys)
+        self.menu.refresh(self._menu_items())
+
+    @staticmethod
+    def _key_problem(exc: Exception) -> str:
+        name, kind = type(exc).__name__, getattr(exc, "kind", "")
+        if "Authentication" in name or kind == "auth":
+            return "That key wasn't accepted - check that you copied all of it."
+        if "Connection" in name or "Timeout" in name or kind == "ext_offline":
+            return "I couldn't reach the provider - is the internet on?"
+        if "PermissionDenied" in name:
+            return "That key isn't allowed to use the models."
+        return f"That didn't work: {str(exc)[:160]}"
+
+    def _ask_key(self, p: str) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        from .ui.dialogs import KeyDialog
+
+        prov = external.PROVIDERS[p]
+        host = "api.anthropic.com" if p == "anthropic" else "api.openai.com"
+        dlg = KeyDialog(f"{prov.name} API key",
+                        f"Paste a key from your {prov.name} account. I keep it encrypted for your Windows account and "
+                        f"only ever send it to {host}.<br><br>Chats with {prov.brand} models go to {prov.name}, "
+                        "including what my tools read (screenshots, files, window text).",
+                        f"{prov.key_hint}...", bool(self.creds.get(f"{p}_key")))
+        dlg.link.connect(lambda: QDesktopServices.openUrl(QUrl(prov.key_url)))
+        dlg.submitted.connect(lambda key, d=dlg: self._check_key(p, key, d))
+        dlg.removed.connect(lambda: self._ext_disconnect(p, only_key=True))
+        mon = self._cat_monitor()
+        dlg.show_near(self.overlay.cat_rect(), mon.work, self.ui_unit(mon))
+        self._key_dialog = dlg
+
+    def _check_key(self, p: str, key: str, dlg: Any) -> None:
+        trial = external.MemoryCredentials({f"{p}_key": key})
+
+        def work() -> list[dict[str, Any]]:
+            if p == "anthropic":
+                from .llm import anthropic_client
+                return anthropic_client.list_models(trial, "key")
+            from .llm import openai_client
+            return openai_client.list_models(trial, "key")
+
+        def got(res: Any) -> None:
+            if isinstance(res, Exception):
+                log.info("%s key refused: %s", p, type(res).__name__)
+                try:
+                    dlg.checked(False, self._key_problem(res))
+                except RuntimeError:
+                    pass                                 # (the dialog was closed meanwhile)
+                return
+            self.creds.set(f"{p}_key", key)
+            self._ext_p(p)["auth"] = "key"
+            self._set_ext_models(p, res)
+            log.info("%s connected with an API key (%d models)", p, len(res))
+            try:
+                dlg.checked(True, "")
+            except RuntimeError:
+                pass
+            self._ext_connected(p)
+        self._in_background(work, got)
+
+    def _anthropic_signin(self) -> None:
+        from .llm import anthropic_client
+
+        self._in_background(anthropic_client.find_ant, self._anthropic_signin_found)
+
+    def _anthropic_signin_found(self, exe: Any) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        if not isinstance(exe, str):
+            pop = self._popup("Sign in with Anthropic", self._paras([
+                "Signing in with your Anthropic account goes through Anthropic's own sign-in tool, <b>ant</b>, "
+                "which isn't on this PC yet.",
+                "Get it from Anthropic's download page (the Windows zip - put ant.exe in a folder on your PATH), "
+                "then pick Sign in with Anthropic again.",
+                "Or use an API key instead - that needs nothing else."]), "DOWNLOAD PAGE", "CLOSE")
+            pop.answered.connect(lambda ok: QDesktopServices.openUrl(QUrl(external.ANT_DOWNLOAD)) if ok else None)
+            return
+        pop = self._popup("Sign in with Anthropic", self._paras([
+            "A window opens with Anthropic's sign-in: approve it in your browser (platform.claude.com) and pick "
+            "the organization to use.",
+            "It's the same sign-in as typing <b>ant auth login</b>, so Anthropic's other tools on this PC (like "
+            "Claude Code) can use it too. Usage is billed to that Console organization.",
+            "Chats with Claude go to Anthropic, including what my tools read (screenshots, files, window text)."]),
+            "SIGN IN", "CANCEL")
+        pop.answered.connect(lambda ok, e=exe: self._anthropic_start(e) if ok else None)
+
+    def _anthropic_start(self, exe: str) -> None:
+        from .llm import anthropic_client
+
+        try:
+            anthropic_client.start_signin(exe)
+        except OSError as e:
+            self._popup("Sign in with Anthropic", self._paras([f"The sign-in didn't start ({html.escape(str(e))})."]),
+                        "OK")
+            return
+        if self._signin_poll is not None:
+            self._signin_poll.stop()
+        self._signin_until = time.monotonic() + 300
+        self._signin_checking = False
+        self._signin_poll = self._timer(4000, self._anthropic_poll)
+        self._signin_poll.start()
+
+    def _anthropic_poll(self) -> None:
+        if time.monotonic() > self._signin_until:
+            if self._signin_poll is not None:
+                self._signin_poll.stop()
+            return
+        if self._signin_checking:
+            return
+        from .llm import anthropic_client
+
+        self._signin_checking = True
+        self._in_background(lambda: anthropic_client.signin_status(self.creds), self._anthropic_polled)
+
+    def _anthropic_polled(self, ok: Any) -> None:
+        self._signin_checking = False
+        if ok is not True or self._signin_poll is None or not self._signin_poll.isActive():
+            return
+        self._signin_poll.stop()
+        self._ext_p("anthropic")["auth"] = "signin"
+        self.save()
+        log.info("signed in with Anthropic")
+        self._ext_load_models("anthropic", after=lambda: self._ext_connected("anthropic"))
+
+    def _chatgpt_signin(self) -> None:
+        pop = self._popup("Sign in with ChatGPT", self._paras([
+            "Your browser opens OpenAI's sign-in. Once you allow it there, chats with OpenAI models use your "
+            "ChatGPT plan instead of API credits.",
+            "On Plus, the 5-hour limit is shared with your other apps; Pro has no 5-hour limit.",
+            "Your chats go to OpenAI, including what my tools read (screenshots, files, window text)."]),
+            "SIGN IN", "CANCEL")
+        pop.answered.connect(lambda ok: self._chatgpt_start() if ok else None)
+
+    def _chatgpt_start(self) -> None:
+        from .llm import chatgpt_signin
+
+        if self._signin_cancel is not None:
+            self._signin_cancel.set()
+        ev = threading.Event()
+        self._signin_cancel = ev
+        self._in_background(lambda: chatgpt_signin.sign_in(self.creds, cancel=ev), self._chatgpt_done)
+
+    def _chatgpt_done(self, res: Any) -> None:
+        from .llm import chatgpt_signin
+
+        if isinstance(res, Exception):
+            msg = str(res) if isinstance(res, chatgpt_signin.SignInError) else f"The sign-in didn't work ({res})."
+            if "cancelled" not in msg:
+                self._popup("Sign in with ChatGPT", self._paras([html.escape(msg)]), "OK")
+            return
+        s = self._ext_p("openai")
+        if not res.get("plan"):
+            self._popup("Signed in - but no plan usage", self._paras([
+                "You're signed in, but using your ChatGPT plan wasn't allowed, so OpenAI models can't run on it yet.",
+                "Sign in again and allow it - or use an API key instead."]), "OK")
+            return
+        s["auth"] = "chatgpt"
+        first = not s.get("welcomed")
+        s["welcomed"] = True
+        self.save()
+
+        def ready() -> None:
+            if not first:
+                self._ext_connected("openai")
+                return
+            pop = self._popup("Using your ChatGPT plan", self._paras([
+                "Chats with OpenAI models now use your ChatGPT plan's usage. ChatGPT's settings show how much I "
+                "used and let you cap it - the Manage usage link above the chat's input takes you there.",
+                f"{len(self._ext_models('openai'))} models are ready - pick one in Settings &gt; AI model &gt; "
+                "External AI models &gt; ChatGPT &gt; Model."]), "PICK A MODEL", "LATER")
+            pop.answered.connect(lambda ok: self._open_menu_at(["settings", "set_model", "ext", "ext_openai",
+                                                                  "ext_models_openai"]) if ok else None)
+        self._ext_load_models("openai", after=ready)
+        self._show_model_banner()
+
+    def _ext_disconnect(self, p: str, only_key: bool = False) -> None:
+        prov = external.PROVIDERS[p]
+        auth = self._ext_auth(p)
+        s = self._ext_p(p)
+        if only_key or auth == "key":
+            self.creds.set(f"{p}_key", None)
+            if s.get("auth") == "key":
+                s["auth"] = ""
+            msg = f"The {prov.name} API key is removed."
+        elif auth == "chatgpt":
+            from .llm import chatgpt_signin
+
+            s["auth"] = ""
+            msg = "Signed out of ChatGPT."
+            self._in_background(lambda: chatgpt_signin.sign_out(self.creds), lambda ok: None if ok is True else self._popup(
+                "Signed out", self._paras(["OpenAI couldn't confirm the sign-out. To be sure, disconnect Pixel Cat in "
+                                           "ChatGPT's settings (Connected apps)."]), "OK"))
+        elif auth == "signin":
+            s["auth"] = ""
+            msg = ("I don't use your Anthropic sign-in any more. You're still signed in to Anthropic's tools on this "
+                   "PC - <b>ant auth logout</b> signs you out there too.")
+        else:
+            return
+        self.save()
+        if not self._ext_auth(p):
+            if (external.parse(self.cfg.model) or ("",))[0] == p:
+                self._set_default_model(models.DEFAULT)
+            if (external.parse(self.chat_model) or ("",))[0] == p:
+                self.chat_model = None
+                self.model_status.override = None
+                self._update_model_chip()
+        self._popup(prov.brand, self._paras([msg]), "OK")
+
+    def _ext_chat_items(self) -> list[MenuItem]:
+        """The chat's model menu: the connected providers' models."""
+        out = []
+        for p, prov in external.PROVIDERS.items():
+            ms = self._ext_models(p) if self._ext_auth(p) else []
+            if ms:
+                out.append(MenuItem(f"chatmodels_{p}", f"{prov.brand} models", "chat", separator_before=not out,
+                                    children=[MenuItem(f"chatmodel:{p}:{m['id']}", m["name"], radio=True,
+                                                       checked=self.chat_model == f"{p}:{m['id']}") for m in ms]))
+        return out
+
+    def _ext_worker(self, p: str, mid: str, msgs: list[dict[str, Any]]) -> Any:
+        """The request for an external model - or None (not connected, or the token limit)."""
+        assert self.chat is not None
+        prov = external.PROVIDERS[p]
+        auth = self._ext_auth(p)
+        if not auth:
+            self.chat.add("error", f"{prov.brand} models aren't connected yet. Sign in or add an API key in "
+                                   "Settings > AI model > External AI models.")
+            self._end_task()
+            return None
+        if not self._ext_gate(p):
+            return None
+        st = self.saved.ext_settings
+        think, effort = bool(st.get("thinking", True)), str(st.get("effort", "medium"))
+        tools = self.toolbox.schemas() if self.cfg.enable_tools else None
+        if p == "anthropic":
+            from .llm.anthropic_client import AnthropicWorker
+            w: Any = AnthropicWorker(mid, msgs, tools, think, effort, self.creds, self._ext_info(p, mid), auth)
+        else:
+            from .llm.openai_client import OpenAIWorker
+            w = OpenAIWorker(mid, msgs, tools, think, effort, self.creds, auth)
+        w.used.connect(self._on_ext_used)
+        return w
+
+    def _on_ext_used(self, provider: str, tokens: int) -> None:
+        b = self._budget(provider)
+        b.add(tokens)
+        self.save()
+        log.info("%s: %d tokens (%d %s)", provider, tokens, b.used(), external.PERIOD_WORD[b.period])
+
+    def _ext_gate(self, p: str) -> bool:
+        """The token limit before a request: fine / suggest switching or raising / all used."""
+        st = self._budget(p).status()
+        if st == "ok":
+            return True
+        assert self.chat is not None
+        self.chat.set_busy(False)
+        if st == "hard":
+            self._limit_popup(p, {"why": "own"})
+        else:
+            self._limit_card(p)
+        return False
+
+    def _limit_card(self, p: str) -> None:
+        assert self.chat is not None
+        b = self._budget(p)
+        prov = external.PROVIDERS[p]
+        fmt = external.fmt_tokens
+        used, allowed, nxt = b.used(), b.allowed(), b.next_allowed()
+        text = (f"🐾 <b>Token limit reached.</b> I've used {fmt(used)} of your {fmt(allowed)}-token limit for "
+                f"{prov.brand} models {external.PERIOD_WORD[b.period]}. Switch to another model, or keep going with "
+                f"{html.escape(models.label(self._effective_model()))} and raise the limit to {fmt(nxt)} until it "
+                f"resets {html.escape(external.fmt_reset(b.reset_at()))}.")
+        log.info("%s token limit reached: %d of %d", p, used, allowed)
+        self.chat.ask_choice(text, [("switch", "SWITCH MODEL"), ("raise", f"RAISE TO {fmt(nxt).upper()}"),
+                                    ("stop", "STOP")], lambda k, p=p: self._limit_answer(p, k))
+
+    def _limit_answer(self, p: str, key: str) -> None:
+        if self.chat is None or not self._task_active:
+            return
+        if key == "raise":
+            b = self._budget(p)
+            new = b.raise_limit()
+            self.save()
+            self.chat.add("info", f"Okay - the {external.PROVIDERS[p].brand} limit is {external.fmt_tokens(new)} until "
+                                  f"it resets {external.fmt_reset(b.reset_at())}.")
+            self._request()
+        elif key == "switch":
+            self._resume_after_switch = True
+            self.chat.add("info", "Pick the model to go on with (the button next to SEND).")
+            self._open_model_menu()
+        else:
+            self.chat.add("info", "Okay, I stopped here. Say 'continue' when you want me to go on.")
+            self._end_task()
+
+    def _limit_popup(self, p: str, info: dict[str, Any]) -> None:
+        """All tokens are used (our limit), or the provider's own limit: a popup that says when it resets."""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        prov = external.PROVIDERS.get(p, external.ANTHROPIC)
+        why = info.get("why", "")
+        ok, url = "SWITCH MODEL", None
+        if why == "own":
+            b = self._budget(p)
+            title = "All tokens used"
+            lines = [f"All {external.fmt_tokens(b.maximum or b.allowed())} tokens for {prov.brand} models "
+                     f"{external.PERIOD_WORD[b.period]} are used up.",
+                     f"The limit resets <b>{html.escape(external.fmt_reset(b.reset_at()))}</b>.",
+                     "Until then I can go on with a local model or the other provider."]
+        elif why == "rate":
+            title = "Rate limit reached"
+            reset = info.get("reset")
+            lines = [f"{prov.name}'s rate limit for your account is reached.",
+                     f"It lifts <b>{html.escape(external.fmt_reset(datetime.fromtimestamp(reset)))}</b>." if reset
+                     else "It usually lifts within a minute or so."]
+        elif why == "plan":
+            title = "ChatGPT plan limit reached"
+            lines = ["You've reached your ChatGPT plan's usage limit for Pixel Cat.",
+                     "ChatGPT's usage page shows when it resets (OpenAI doesn't tell apps that)."]
+            ok, url = "MANAGE USAGE", prov.usage_url
+        elif why == "credits":
+            title = "Credits used up"
+            lines = (["Your Anthropic credit balance is used up. Add credits in the Claude Console (Billing) - or "
+                      "claim the API credits your Claude plan may include."] if p == "anthropic" else
+                     ["Your OpenAI API credits are used up. Add credits on platform.openai.com (Billing)."])
+            ok, url = "OPEN BILLING", external.BILLING.get(p)
+        else:
+            title = "Spend limit reached"
+            lines = [f"Your {prov.name} organization's spend limit is reached - it's set in your {prov.name} "
+                     "account's billing settings."]
+            ok, url = "OPEN BILLING", external.BILLING.get(p)
+        log.info("%s limit (%s) - task paused", p, why)
+        if self.chat is not None:
+            self.chat.add("error", re.sub(r"<[^>]+>", "", " ".join(lines)))
+        pop = self._popup(title, self._paras(lines), ok, "OK")
+
+        def answer(yes: bool) -> None:
+            if yes and url:
+                QDesktopServices.openUrl(QUrl(url))
+            if yes and not url and self._task_active:
+                self._resume_after_switch = True
+                self.open_chat()
+                self._open_model_menu()
+            elif self._task_active and not self._resume_after_switch:
+                self._end_task()
+        pop.answered.connect(answer)
+
+    def _show_model_banner(self) -> None:
+        if self.chat is None:
+            return
+        text = self.model_status.banner()
+        ext = external.parse(self._effective_model())
+        if text is None and ext and ext[0] == "openai" and self._ext_auth("openai") == "chatgpt":
+            self.chat.set_model_banner("Using ChatGPT plan", ("Manage usage", external.OPENAI.usage_url))
+        else:
+            self.chat.set_model_banner(text)
 
     def _on_menu(self, key: str) -> None:
         try:
             b = self.brain
+            if key.startswith("ext:"):
+                self._ext_action(key[4:])
+                return
             for kind in ("style", "accent", "size", "font"):
                 if key.startswith(kind + ":"):
                     self._set_look(kind, key.split(":", 1)[1])
@@ -925,6 +1519,10 @@ class PixelCatApp(QObject):
                 b.plan.clear()
                 b.place((p.work[0] + p.work[2]) / 2, p.work[3] - 200)
                 b.show_bubble("bubble_exclaim", 2.0)
+            elif key == "export":
+                self.export_progress()
+            elif key == "import":
+                self.import_progress()
             elif key == "quit":
                 self.quit()
             self._sync_tray()
@@ -936,6 +1534,7 @@ class PixelCatApp(QObject):
     def _game_ended(self, rounds: int) -> None:
         """A ball game is over: remember the best one, XP for the Cat Pass."""
         log.info("ball game over after %d round(s) (best so far %d)", rounds, self.saved.best_round)
+        self.saved.plays += 1
         best = ""
         if rounds > self.saved.best_round:
             if self.saved.best_round:
@@ -1030,7 +1629,6 @@ class PixelCatApp(QObject):
             self.overlay.cancel_press()
             b.drop(0.0, 0.0)
         if key == "ball":
-            self.saved.plays += 1
             b.game = self.game
             b.play()
             return
@@ -1090,7 +1688,8 @@ class PixelCatApp(QObject):
         """Cat Pass XP; a little window shows the result and anything newly unlocked."""
         st = self.saved
         old = st.xp
-        st.xp = old + max(0, int(xp))
+        xp = min(persistence.MAX_XP_PER_PLAY, max(0, int(xp)))   # (the save's XP check relies on it)
+        st.xp = old + xp
         unlocks = progress.new_unlocks(old, st.xp)
         self.save()
         log.info("%s: +%d XP (total %d), unlocked %s", key, xp, st.xp, unlocks)
@@ -1158,6 +1757,117 @@ class PixelCatApp(QObject):
         self.save()
         log.info("hat: %s", key or "none")
 
+    # ================================================================ your progress (export / import)
+    @staticmethod
+    def _paras(lines: list[str]) -> str:
+        """Popup text: one paragraph per line (already escaped)."""
+        return "".join(f"<p style='margin:0 0 6px 0'>{t}</p>" for t in lines)
+
+    def _ask_file(self, save: bool, title: str, start: str) -> str:
+        """A Windows file dialog ("" = cancelled).  The tests replace this."""
+        from PySide6.QtWidgets import QFileDialog
+
+        filt = f"Pixel Cat progress (*{persistence.EXPORT_EXT});;All files (*)"
+        if save:
+            return QFileDialog.getSaveFileName(None, title, start, filt)[0]
+        return QFileDialog.getOpenFileName(None, title, start, filt)[0]
+
+    @staticmethod
+    def _documents() -> Path:
+        return paths.shell_folder("documents") or Path.home() / "Documents"
+
+    def export_progress(self) -> None:
+        """Menu -> Settings -> Your progress -> Export: a signed file that loads on any PC."""
+        self.menu.close()
+        self.save()
+        start = self._documents() / f"PixelCat-progress-{datetime.now():%Y-%m-%d}{persistence.EXPORT_EXT}"
+        name = self._ask_file(True, "Export Pixel Cat progress", str(start))
+        if not name:
+            return
+        path = Path(name)
+        if path.suffix.lower() != persistence.EXPORT_EXT:
+            path = path.with_name(path.name + persistence.EXPORT_EXT)
+        try:
+            persistence.export_progress(self.saved, path)
+        except OSError as e:
+            log.exception("export failed")
+            self._popup("Export", self._paras([f"Couldn't save it there ({html.escape(e.strerror or str(e))})."]),
+                        "OK")
+            return
+        log.info("progress exported to %s", path)
+        stage = progress.state(self.saved.xp).stage
+        self._popup("Progress exported", self._paras([
+            f"Cat Pass stage {stage}, your skins, hats and records are saved in",
+            f"<b>{html.escape(str(path))}</b>",
+            "Load it on any PC with Import progress. Editing the file makes it unreadable."]), "NICE!")
+
+    def import_progress(self) -> None:
+        """Menu -> Settings -> Your progress -> Import: load an exported file (asks first)."""
+        self.menu.close()
+        name = self._ask_file(False, "Import Pixel Cat progress", str(self._documents()))
+        if not name:
+            return
+        try:
+            data = persistence.read_export(Path(name))
+        except persistence.SaveError as e:
+            self._popup("Import", self._paras([html.escape(str(e))]), "OK")
+            return
+        st = self.saved
+        now, new = progress.state(st.xp).stage, progress.state(data["xp"]).stage
+        pop = self._popup("Import progress?", self._paras([
+            f"Now: Cat Pass stage {now} ({st.xp} XP).",
+            f"In the file: stage {new} ({data['xp']} XP).",
+            "Loading it replaces your Cat Pass, skins, hats, records and look. Chat settings and auto mode "
+            "stay as they are. Your current progress is backed up first."]), "LOAD IT", "CANCEL")
+        pop.answered.connect(lambda ok, d=data: self._do_import(d) if ok else None)
+
+    def _do_import(self, data: dict[str, Any]) -> None:
+        self.stop_minigame()
+        if self.game.active:
+            self.game.stop()
+        folder = paths.data_dir() / "progress-backups"
+        backup = folder / f"before-import-{datetime.now():%Y%m%d-%H%M%S}{persistence.EXPORT_EXT}"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            persistence.export_progress(self.saved, backup)
+        except OSError as e:
+            log.exception("couldn't back up the progress before importing")
+            self._popup("Import", self._paras([
+                f"Nothing changed: the current progress couldn't be backed up first "
+                f"({html.escape(e.strerror or str(e))})."]), "OK")
+            return
+        persistence.apply_progress(self.saved, data)
+        self._show_progress()
+        self.save()
+        log.info("progress imported: %d XP (the old one is in %s)", self.saved.xp, backup)
+        self._popup("Progress loaded", self._paras([
+            f"Cat Pass stage {progress.state(self.saved.xp).stage}. Welcome back!",
+            f"The progress you had before is in <b>{html.escape(str(backup))}</b>."]), "NICE!")
+        if self.menu.isVisible():
+            self.menu.refresh(self._menu_items())
+
+    def _show_progress(self) -> None:
+        """The progress changed under the app (import): skin, hat, records and look follow."""
+        st = self.saved
+        if not progress.is_unlocked(st.xp, "skin", st.skin):
+            st.skin = "charcoal"
+        if st.hat and not progress.is_unlocked(st.xp, "hat", st.hat):
+            st.hat = ""
+        self.sprites.set_skin(st.skin)
+        self.tray.refresh_icon()
+        self.overlay.hat = st.hat
+        self.overlay.update()
+        self.game.best = st.best_round
+        self.host.ctx["fish_book"] = st.fish_book
+        theme.configure(st.ui_style, st.ui_accent, st.ui_size, st.ui_font)
+        self.brain.show_bubble("bubble_heart", 1.5)
+
+    def _tell_unreadable_save(self) -> None:
+        self._popup("A fresh start", self._paras([
+            "The cat couldn't read its save: it was changed by hand, or it's from another Windows account or PC.",
+            "If you exported your progress, load it with Menu &gt; Settings &gt; Your progress &gt; Import progress.",
+            "The old file is kept in the PixelCat folder, just in case."]), "OK")
+
     # ================================================================ chat
     def _ensure_chat(self) -> ChatWindow:
         if self.chat is None:
@@ -1170,7 +1880,7 @@ class PixelCatApp(QObject):
             self.chat.model_menu_requested.connect(self._open_model_menu)
             self.chat.set_auto_mode(self.saved.auto_mode)
             self.chat.set_watches([(w.id, w.short()) for w in self.watches.active()])
-            self.chat.set_model_banner(self.model_status.banner())
+            self._show_model_banner()
             self._update_model_chip()
         return self.chat
 
@@ -1322,6 +2032,10 @@ class PixelCatApp(QObject):
             return True
         if cmd in ("/getmodel", "/get model", "/downloadmodel", "/download-model"):
             assert self.chat is not None
+            if external.parse(self.cfg.model):
+                self.chat.add("info", f"The default model is {models.label(self.cfg.model)} - an online one, so "
+                                      "there's nothing to download.")
+                return True
             self.saved.model_download_ok = True
             self.save()
             self.chat.add("info", f"Okay! I'll download the AI model {self.cfg.model} now - the bar above shows "
@@ -1365,6 +2079,9 @@ class PixelCatApp(QObject):
     def _on_user_message(self, text: str) -> None:
         if self._local_command(text):
             return
+        self._resume_after_switch = False
+        if self.chat is not None:
+            self.chat.drop_choice()                      # (a token-limit question nobody answered)
         msg: dict[str, Any] = {"role": "user", "content": text}
         if self._CONTINUE_RE.match(text) and self.history:
             msg["_continue"] = True   # same task: its original request stays at the start of the context
@@ -1491,6 +2208,7 @@ class PixelCatApp(QObject):
         out = []
         for m in rnd:
             c = self._clean(m, None, False)
+            c.pop("raw", None)                           # (shortened: not the model's own blocks any more)
             if m["role"] == "tool" or m.get("_tool"):
                 first = str(c.get("content", "")).split("\n")[0]
                 c["content"] = first[:160] + (" ..." if len(first) > 160 else "")
@@ -1588,8 +2306,14 @@ class PixelCatApp(QObject):
         assert self.chat is not None
         sys_msg = {"role": "system", "content": build_system_prompt(self.toolbox.names() if self.cfg.enable_tools else [])}
         msgs = [sys_msg] + self._context()
-        tools = self.toolbox.schemas() if (self.cfg.enable_tools and self.native_tools) else None
-        worker = ChatWorker(self.cfg, msgs, tools, self._think_now(), model=self._effective_model())
+        ext = external.parse(self._effective_model())
+        if ext:
+            worker = self._ext_worker(ext[0], ext[1], msgs)
+            if worker is None:
+                return
+        else:
+            tools = self.toolbox.schemas() if (self.cfg.enable_tools and self.native_tools) else None
+            worker = ChatWorker(self.cfg, msgs, tools, self._think_now(), model=self._effective_model())
         worker.token.connect(self._on_token)
         worker.thinking.connect(self._on_thinking)
         worker.done.connect(self._on_done)
@@ -1645,6 +2369,7 @@ class PixelCatApp(QObject):
     def _on_done(self, content: str, calls: list) -> None:
         if not self._current() or self.chat is None:
             return
+        sender = self.sender()
         self.worker = None
         native = bool(calls)
         if not calls and self.cfg.enable_tools:
@@ -1654,7 +2379,15 @@ class PixelCatApp(QObject):
         self.chat.end_cat()
         msg: dict[str, Any] = {"role": "assistant", "content": content}
         if native:
-            msg["tool_calls"] = [{"function": {"name": c["name"], "arguments": c["arguments"]}} for c in calls]
+            msg["tool_calls"] = [{"function": {"name": c["name"], "arguments": c["arguments"]},
+                                  **({"id": c["id"]} if c.get("id") else {})} for c in calls]
+        raw = getattr(sender, "raw", None)
+        if raw:
+            msg["raw"] = raw                             # (an external model's own blocks, replayed next time)
+        note = getattr(sender, "note", "")
+        if note and note not in self._ext_notes:
+            self._ext_notes.add(note)
+            self.chat.add("info", note)
         self.history.append(msg)
         if not self._task_active:
             return
@@ -1717,8 +2450,21 @@ class PixelCatApp(QObject):
     def _on_failed(self, kind: str, detail: str) -> None:
         if not self._current() or self.chat is None:
             return
+        sender = self.sender()
         self.worker = None
         log.warning("chat failed: %s %s", kind, detail[:200])
+        if isinstance(sender, external.ExternalWorker):
+            self.chat.end_cat()
+            if kind == "limit":
+                try:
+                    info = json.loads(detail)
+                except ValueError:
+                    info = {"why": "rate"}
+                self._limit_popup(str(info.get("provider") or sender.provider), info)
+                return                                   # (the task waits: switch model, or OK ends it)
+            self.chat.add("error", external.friendly(kind, detail, sender.provider, sender.model))
+            self._end_task()
+            return
         if kind == "no_tools" and self.native_tools:
             self.native_tools = False
             self.chat.end_cat()
@@ -1864,7 +2610,7 @@ class PixelCatApp(QObject):
 
     def _on_model_status(self) -> None:
         if self.chat is not None:
-            self.chat.set_model_banner(self.model_status.banner())
+            self._show_model_banner()
         self._sync_tray()
 
     def _cancel_watch(self, wid: int) -> None:

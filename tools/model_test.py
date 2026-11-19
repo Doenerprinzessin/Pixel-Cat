@@ -270,8 +270,11 @@ def part_installer() -> None:
     check("...the progress is shown, and the download is deleted afterwards",
           any("Downloading Ollama… 100%" in p for p in prog) and "Checking that it really comes from Ollama…" in prog
           and not tmp.exists(), prog[-1] if prog else "")
-    st = json.loads((lay.data_dir / "state.json").read_text("utf-8"))
-    check("the user's OK to download the model is saved for the cat", st.get("model_download_ok") is True)
+    from pixelcat.persistence import load_state
+
+    st = load_state(lay.data_dir)
+    check("the user's OK to download the model is saved for the cat (in its protected save)",
+          st.model_download_ok is True and (lay.data_dir / "save.dat").exists())
     check("no model setting is written: it is always qwen3.5:35b-a3b from the built-in config",
           not (lay.data_dir / "config.json").exists() and Config().model == "qwen3.5:35b-a3b"
           and "qwen3.5:35b-a3b" in note, note)

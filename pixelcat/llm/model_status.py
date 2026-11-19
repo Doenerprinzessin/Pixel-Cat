@@ -181,6 +181,11 @@ class ModelStatus(QObject):
 
     def _work(self) -> None:
         cfg = self.cfg
+        from .external import parse
+
+        if parse(self.model):                # an external model: nothing to start or download here
+            self._set("ready")
+            return
         if self.state not in ("ready",):
             self._set("checking")
         if self._get("/api/version") is None:

@@ -33,10 +33,6 @@ def data_dir() -> Path:
     return path
 
 
-def state_file() -> Path:
-    return data_dir() / "state.json"
-
-
 def log_file() -> Path:
     return data_dir() / "log.txt"
 
