@@ -6,7 +6,7 @@ wait_for tool; the watch is checked here on a background thread - cheaply and wi
 model (Ollama may even unload it meanwhile) - and when it fires, the app wakes the model
 with what happened plus the model's own note of what to do next.  The user can keep
 chatting meanwhile.  Watches are read-only (they never click or type) and survive a
-restart of the cat (they are saved in state.json).
+restart of the cat (they are part of the cat's save).
 
 Kinds:
 * notification   - a new Windows notification (Teams/Outlook/WhatsApp... message, email),

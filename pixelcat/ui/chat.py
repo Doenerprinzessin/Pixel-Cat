@@ -127,6 +127,19 @@ class ChatWindow(QWidget):
         bl.addWidget(self.no_btn)
         cl.addLayout(bl)
         self.confirm.hide()
+        # a question with its own answers (the token limit: switch model / raise it / stop)
+        self.choice = QFrame()
+        self.choice_label = QLabel()
+        self.choice_label.setWordWrap(True)
+        self.choice_label.setTextFormat(Qt.TextFormat.RichText)
+        self._choice_row = QHBoxLayout()
+        chl = QVBoxLayout(self.choice)
+        chl.setContentsMargins(0, 0, 0, 0)
+        chl.addWidget(self.choice_label)
+        chl.addLayout(self._choice_row)
+        self.choice.hide()
+        self._choice_cb: Callable[[str], None] | None = None
+        self._choice_btns: list[QPushButton] = []
         # what the cat is waiting for in the background (wait_for), each with a stop link
         self.watch_bar = QLabel()
         self.watch_bar.setWordWrap(True)
@@ -138,6 +151,8 @@ class ChatWindow(QWidget):
         # the AI's state while it isn't ready ("Model is starting up, please wait…", downloads)
         self.model_bar = QLabel()
         self.model_bar.setWordWrap(True)
+        self.model_bar.setTextFormat(Qt.TextFormat.RichText)
+        self.model_bar.setOpenExternalLinks(True)
         self.model_bar.hide()
         self.input = QLineEdit()
         self.input.setPlaceholderText("Talk to the cat… (Ctrl+N: new chat)")
@@ -158,6 +173,7 @@ class ChatWindow(QWidget):
         self.lay.addWidget(self.model_bar)
         self.lay.addWidget(self.watch_bar)
         self.lay.addWidget(self.confirm)
+        self.lay.addWidget(self.choice)
         self.lay.addLayout(row)
         self.apply_scale(2)
         QShortcut(QKeySequence("Ctrl+N"), self, activated=self.new_chat_requested.emit)
@@ -175,6 +191,7 @@ class ChatWindow(QWidget):
         self.setStyleSheet(theme.chat_stylesheet(max(1, u // 2 + (u % 2)), self.font_px))
         st = theme.current()
         self.confirm_label.setStyleSheet(f"color:{st.text}; font-family:'Segoe UI'; font-size:{self.font_px}px;")
+        self.choice_label.setStyleSheet(f"color:{st.text}; font-family:'Segoe UI'; font-size:{self.font_px}px;")
         self.watch_bar.setStyleSheet(f"color:{st.text}; background:{st.event_bubble}; font-family:'Segoe UI'; "
                                      f"font-size:{self.small_px}px; padding:{2 * u}px;")
         self.model_bar.setStyleSheet(f"color:{st.text}; background:{st.note_bubble}; font-family:'Segoe UI'; "
@@ -278,10 +295,14 @@ class ChatWindow(QWidget):
         else:
             self.model_btn.setStyleSheet("")
 
-    def set_model_banner(self, text: str | None) -> None:
-        """Show what the AI is doing while it isn't ready; None hides the bar."""
+    def set_model_banner(self, text: str | None, link: tuple[str, str] | None = None) -> None:
+        """Show what the AI is doing while it isn't ready (or which plan pays for it, with a
+        link: (label, url)); None hides the bar."""
         if text:
-            self.model_bar.setText(text)
+            body = html.escape(text)
+            if link:
+                body += f' · <a href="{html.escape(link[1])}">{html.escape(link[0])}</a>'
+            self.model_bar.setText(body)
             self.model_bar.show()
         else:
             self.model_bar.hide()
@@ -417,6 +438,36 @@ class ChatWindow(QWidget):
         self.always_btn.setVisible(allow_always)
         self.confirm.show()
         self.yes_btn.setFocus()
+
+    def ask_choice(self, text: str, options: list[tuple[str, str]], cb: Callable[[str], None]) -> None:
+        """A card with its own answers: ``options`` are (key, BUTTON TEXT); ``cb`` gets the key.
+        ``text`` is already HTML."""
+        self._choice_cb = cb
+        self.choice_label.setText(text)
+        for b in self._choice_btns:
+            self._choice_row.removeWidget(b)
+            b.deleteLater()
+        self._choice_btns = []
+        for i, (key, label) in enumerate(options):
+            b = QPushButton(label)
+            if i == len(options) - 1 and len(options) > 1:
+                b.setObjectName("noBtn")
+            b.clicked.connect(lambda _c=False, k=key: self._chose(k))
+            self._choice_row.addWidget(b)
+            self._choice_btns.append(b)
+        self.choice.show()
+        if self._choice_btns:
+            self._choice_btns[0].setFocus()
+
+    def _chose(self, key: str) -> None:
+        cb, self._choice_cb = self._choice_cb, None
+        self.choice.hide()
+        if cb is not None:
+            cb(key)
+
+    def drop_choice(self) -> None:
+        self._choice_cb = None
+        self.choice.hide()
 
     def _answer(self, answer: str) -> None:
         cb, self._confirm_cb = self._confirm_cb, None

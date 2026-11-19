@@ -83,15 +83,18 @@ def main() -> int:
           and cos[2].children[0].key == "hat:" and len(cos[2].children) == 11 and len(hat_rows) == 115
           and not any(not h.locked for h in hat_rows) and cos[2].children[1].note == "0/10",
           f"{len(cos[2].children) - 1} groups, {len(hat_rows)} hats, {cos[2].children[1].note}")
-    check("Settings: Style, Accent color, Size, Font, AI model, then the on/off settings",
-          [c.key for c in sets] == ["set_style", "set_accent", "set_size", "set_font", "set_model", "quiet",
-                                    "autostart", "automode", "preload_ai", "explore"], str([c.label for c in sets]))
+    check("Settings: Style, Accent color, Size, Font, AI model, Your progress, then the on/off settings",
+          [c.key for c in sets] == ["set_style", "set_accent", "set_size", "set_font", "set_model", "progress",
+                                    "quiet", "autostart", "automode", "preload_ai", "explore"],
+          str([c.label for c in sets]))
     styles = sets[0].children
     check("10 styles to choose from, the current one marked", len(styles) == 10
           and sum(1 for c in styles if c.checked) == 1 and styles[0].label == "Cat Chat", str([c.label for c in styles]))
-    check("AI models from tiny to huge, with sizes and which are downloaded",
-          [c.label for c in sets[4].children][0] == "Tiny 0.8B" and [c.label for c in sets[4].children][-1]
-          == "Huge 122B" and any("READY" in c.note for c in sets[4].children), str([c.note for c in sets[4].children]))
+    local = [c for c in sets[4].children if c.key != "ext"]
+    check("AI models from tiny to huge, with sizes and which are downloaded - then External AI models",
+          [c.label for c in local][0] == "Tiny 0.8B" and [c.label for c in local][-1] == "Huge 122B"
+          and any("READY" in c.note for c in local) and sets[4].children[-1].label == "External AI models",
+          str([c.note for c in local]))
     render("menu_closed.png")
     check("the sections start folded: 6 rows", len(m._rows) == 6)
     m._activate(row("games"))

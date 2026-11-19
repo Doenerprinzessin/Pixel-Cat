@@ -246,6 +246,10 @@ def uninstall(lay: Layout, delete_data: bool) -> list[str]:
         shutil.rmtree(lay.data_dir, ignore_errors=True)
         if lay.data_dir.exists():
             left.append(str(lay.data_dir))
+        else:
+            from .persistence import forget_folder
+
+            forget_folder(lay.data_dir)
     return left
 
 
@@ -382,19 +386,12 @@ def run_ollama_setup(path: Path) -> None:
 
 
 def _save_ai_choice(lay: Layout, plan: AiPlan) -> None:
-    """The user agreed: the cat may download the model."""
-    import json
+    """The user agreed: the cat may download the model (written into the cat's protected save)."""
+    from .persistence import load_state, save_state
 
-    lay.data_dir.mkdir(parents=True, exist_ok=True)
-    state_path = lay.data_dir / "state.json"
-    try:
-        state = json.loads(state_path.read_text("utf-8")) if state_path.is_file() else {}
-    except (OSError, ValueError):
-        state = {}
-    state["model_download_ok"] = True
-    tmp = state_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, indent=2), "utf-8")
-    os.replace(tmp, state_path)
+    st = load_state(lay.data_dir)
+    st.model_download_ok = True
+    save_state(st, lay.data_dir, touch=False)
 
 
 def setup_ai(lay: Layout, plan: AiPlan, progress: Callable[[str], None], cancel: threading.Event,
@@ -610,7 +607,7 @@ def _make_window_class():  # type: ignore[no-untyped-def]
                              "<b>Uninstall Pixel Cat?</b><br>The cat leaves your desktop, the Start menu and "
                              "Settings → Apps.", "UNINSTALL", "CANCEL",
                              "Also delete its memory and settings", False,
-                             f"That is {self.lay.data_dir}: settings, chat permissions, your best ball game, "
+                             f"That is {self.lay.data_dir}: settings, chat permissions, your Cat Pass progress, "
                              "logs and the backups of files it edited. Otherwise it remembers you next time. "
                              "Ollama and its models stay - they have their own entry in Settings → Apps.")
                 return

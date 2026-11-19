@@ -50,4 +50,8 @@ def recommended(ram_gb: float) -> ModelChoice:
 
 def label(tag: str) -> str:
     m = find(tag)
-    return f"{m.name} ({m.short})" if m else tag
+    if m:
+        return f"{m.name} ({m.short})"
+    from .external import label as ext_label   # anthropic:... / openai:...
+
+    return ext_label(tag)
