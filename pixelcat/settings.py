@@ -112,6 +112,7 @@ class Config:
     num_ctx: int = 65536               # model context: 64k tokens (qwen3.5 allows 262k; 64k costs ~1 GB extra)
     keep_alive: str = "10m"            # Ollama frees the GPU after this much idle time
     preload_on_start: bool = True      # start Ollama and load the model when the cat starts
+    ai_mode: str = "local"             # "online": this PC is better off without a local AI (Setup decides)
     explore_windows: bool = True       # the cat also sits on borders inside windows (looks at the screen)
     think: bool | str | None = "auto"  # "auto": think when planning a request and after a failed step;
     #                                    true/false: always/never; null: model default
@@ -181,12 +182,24 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 def save_user_setting(key: str, value: Any) -> None:
     """Remember one setting in %APPDATA%/PixelCat/config.json (the user's own overrides,
     which win over the bundled config.json)."""
-    path = paths.data_dir() / "config.json"
+    save_user_settings({key: value})
+
+
+def save_user_settings(values: dict[str, Any], folder: Path | None = None) -> None:
+    """Several settings at once (Setup writes the AI choice this way, into ``folder``)."""
+    folder = folder or paths.data_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "config.json"
     data = _read_json(path) or {}
-    data[key] = value
+    data.update(values)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def user_settings(folder: Path | None = None) -> dict[str, Any]:
+    """Only the user's own overrides (%APPDATA%/PixelCat/config.json)."""
+    return _read_json((folder or paths.data_dir()) / "config.json") or {}
 
 
 def load_config() -> Config:

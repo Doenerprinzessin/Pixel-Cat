@@ -15,12 +15,29 @@ def setup_logging(debug: bool = False) -> None:
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     root = logging.getLogger()
     root.setLevel(level)
-    try:
-        fh = RotatingFileHandler(paths.log_file(), maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+    import os
+    import time
+
+    fh = None
+    problem = None
+    for attempt in range(4):                     # (the file can be busy for a moment: a cat quitting, a scanner)
+        try:
+            fh = RotatingFileHandler(paths.log_file(), maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+            break
+        except OSError as e:
+            problem = e
+            time.sleep(0.25 * (attempt + 1))
+    if fh is None:
+        try:                                     # still not: a log of this run's own, next to it
+            fh = RotatingFileHandler(paths.log_file().with_name(f"log-{os.getpid()}.txt"), maxBytes=1_000_000,
+                                     backupCount=0, encoding="utf-8")
+        except OSError:
+            fh = None
+    if fh is not None:
         fh.setFormatter(fmt)
         root.addHandler(fh)
-    except OSError:
-        pass
+        if problem is not None:
+            root.warning("log.txt couldn't be opened (%s) - logging to %s", problem, fh.baseFilename)
     if sys.stderr is not None:  # pythonw / windowed exe has no stderr
         try:
             sys.stderr.reconfigure(errors="backslashreplace")  # emoji on cp1252 consoles

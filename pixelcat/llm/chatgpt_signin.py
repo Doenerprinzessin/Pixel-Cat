@@ -142,13 +142,57 @@ def _listen() -> HTTPServer:
     raise SignInError("Couldn't start the sign-in (no free port on this PC).")
 
 
-def sign_in(creds: Credentials, open_url: Callable[[str], Any] = webbrowser.open,
-            cancel: threading.Event | None = None, timeout: float = 300.0) -> dict[str, Any]:
-    """The whole sign-in (blocking - run it in a thread).  Returns what was stored."""
+class _AskAgain(Exception):
+    """OpenAI didn't take the code: authorize once more, with the client id it issued."""
+
+    def __init__(self, issued: str) -> None:
+        super().__init__(issued)
+        self.issued = issued
+
+
+def registered(saved: dict[str, Any]) -> str | None:
+    """The client id of a registration that has worked (a sign-in with it finished).  A
+    registration that never got that far is bound to whatever workspace was picked then and
+    may never work - the next sign-in registers anew (with OpenAI's account/workspace picker)."""
+    cid = saved.get("client_id")
+    if cid and (saved.get("validated") or saved.get("refresh_token") or saved.get("access_token")):
+        return str(cid)
+    return None
+
+
+def forget_unconfirmed(creds: Credentials) -> None:
+    saved = creds.get("chatgpt") or {}
+    if saved and registered(saved) is None:
+        creds.set("chatgpt", None)
+
+
+def sign_in(creds: Credentials, open_url: Callable[[str], Any] | None = None,
+            cancel: threading.Event | None = None, timeout: float = 300.0,
+            again: Callable[[], Any] | None = None) -> dict[str, Any]:
+    """The whole sign-in (blocking - run it in a thread).  Returns what was stored.
+    If OpenAI refuses the code (invalid_grant), the docs say: discard it and authorize once
+    more with the client id issued in this attempt - done here once, by itself (``again`` is
+    told, so the app can say why the browser asks a second time)."""
     cancel = cancel or threading.Event()
+    open_url = open_url or (lambda url: webbrowser.open(url))
+    forget_unconfirmed(creds)
+    pending: str | None = None                       # the client id issued in this sign-in (kept in memory)
+    for attempt in range(2):
+        try:
+            return _sign_in_once(creds, open_url, cancel, timeout, last=attempt == 1, pending=pending)
+        except _AskAgain as e:
+            pending = e.issued
+            log.info("OpenAI didn't take the sign-in code - asking once more with the issued client id")
+            if again is not None:
+                again()
+    raise SignInError("OpenAI didn't accept the sign-in - try again in a minute.")
+
+
+def _sign_in_once(creds: Credentials, open_url: Callable[[str], Any], cancel: threading.Event, timeout: float,
+                  last: bool, pending: str | None = None) -> dict[str, Any]:
     hid = host_id(creds)
     saved = creds.get("chatgpt") or {}
-    client_id = saved.get("client_id") or "dynamic_agent_client"
+    client_id = pending or registered(saved) or "dynamic_agent_client"
     verifier = _b64(os.urandom(48))
     state, nonce = _b64(os.urandom(18)), _b64(os.urandom(18))
     srv = _listen()
@@ -160,7 +204,7 @@ def sign_in(creds: Credentials, open_url: Callable[[str], Any] = webbrowser.open
              "code_challenge_method": "S256"}
         if client_id == "dynamic_agent_client":
             q["agent_name_hint"] = APP_NAME
-        if saved.get("id_token"):
+        if saved.get("id_token") and client_id == registered(saved):
             q["id_token_hint"] = saved["id_token"]
         open_url(URLS["authorize"] + "?" + urlencode(q))
         end = time.monotonic() + timeout
@@ -176,24 +220,32 @@ def sign_in(creds: Credentials, open_url: Callable[[str], Any] = webbrowser.open
     if res.get("state") != state:
         raise SignInError("The sign-in answer didn't match - try again.")
     if res.get("error"):
+        log.warning("ChatGPT sign-in refused at the authorize step: %s %s", res.get("error"),
+                    str(res.get("error_description", ""))[:200])
         raise SignInError("You said no to the sign-in." if res["error"] == "access_denied"
                           else f"The sign-in didn't work ({res['error']}).")
     issued = res.get("client_id") or (client_id if client_id != "dynamic_agent_client" else "")
     if not issued or (client_id != "dynamic_agent_client" and issued != client_id):
         raise SignInError("The sign-in answer didn't match - try again.")
+    if client_id == "dynamic_agent_client":           # (kept once a sign-in with it has worked)
+        log.info("ChatGPT: Pixel Cat registered for the account/workspace picked")
     r = requests.post(URLS["token"], data={"grant_type": "authorization_code", "client_id": issued,
                                            "code": res.get("code", ""), "code_verifier": verifier,
                                            "redirect_uri": redirect, "resource": RESOURCE}, timeout=30)
     tok = _json(r)
     if r.status_code >= 400 or "access_token" not in tok:
-        raise SignInError("The sign-in expired before it finished - try again." if _err(tok) == "invalid_grant"
-                          else f"OpenAI didn't finish the sign-in ({_err(tok) or r.status_code}).")
+        code, why = _err(tok), _err_text(tok)
+        log.warning("ChatGPT code exchange refused: HTTP %s %s %s", r.status_code, code or "-", why[:300])
+        if code == "invalid_grant" and not last:
+            raise _AskAgain(issued)
+        detail = f" ({why[:160]})" if why else f" ({code or r.status_code})"
+        raise SignInError(f"OpenAI didn't accept the sign-in{detail}. Try again in a minute.")
     claims = check_id_token(tok.get("id_token", ""), issued, nonce)
     scopes = set(str(tok.get("scope") or res.get("scope") or "").split())
     info = {"client_id": issued, "access_token": tok["access_token"], "refresh_token": tok.get("refresh_token", ""),
             "id_token": tok.get("id_token", ""), "expires_at": time.time() + float(tok.get("expires_in") or 3600),
             "earliest_refresh_at": float(tok.get("earliest_refresh_at") or 0),
-            "email": str(claims.get("email") or ""), "plan": PLAN_SCOPE in scopes}
+            "email": str(claims.get("email") or ""), "plan": PLAN_SCOPE in scopes, "validated": True}
     creds.set("chatgpt", info)
     log.info("signed in with ChatGPT (plan usage %s)", "on" if info["plan"] else "not granted")
     return info
@@ -205,6 +257,14 @@ def _json(r: requests.Response) -> dict[str, Any]:
         return data if isinstance(data, dict) else {}
     except ValueError:
         return {}
+
+
+def _err_text(data: dict[str, Any]) -> str:
+    """OpenAI's own words about an error (never contains tokens)."""
+    e = data.get("error")
+    if isinstance(e, dict):
+        return str(e.get("message") or e.get("description") or "")
+    return str(data.get("error_description") or data.get("detail") or "")
 
 
 def _err(data: dict[str, Any]) -> str:
@@ -276,5 +336,5 @@ def sign_out(creds: Credentials) -> bool:
                     break
             except (requests.RequestException, ValueError, KeyError):
                 continue
-    creds.set("chatgpt", {"client_id": c["client_id"]} if c.get("client_id") else None)
+    creds.set("chatgpt", {"client_id": c["client_id"], "validated": True} if registered(c) else None)
     return ok

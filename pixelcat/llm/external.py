@@ -54,7 +54,6 @@ PROVIDERS: dict[str, Provider] = {p.key: p for p in (ANTHROPIC, OPENAI)}
 LIMITS = [0, 50_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000]
 PERIODS = {"day": "Every day", "week": "Every week", "month": "Every month"}
 PERIOD_WORD = {"day": "today", "week": "this week", "month": "this month"}
-ANT_DOWNLOAD = "https://github.com/anthropics/anthropic-cli/releases"
 BILLING = {"anthropic": "https://platform.claude.com/settings/billing",
            "openai": "https://platform.openai.com/settings/organization/billing/overview"}
 MAXIMUMS = [1.5, 2.0, 3.0, 5.0, 0.0]      # how far "raise for now" may go (x the limit; 0: no maximum)

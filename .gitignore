@@ -5,3 +5,7 @@ __pycache__/
 *.pyc
 PixelCat.spec
 .claude/
+
+# release downloads - attach them to a GitHub Release instead of committing them
+setup v*/
+setup v*.zip

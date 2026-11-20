@@ -241,6 +241,8 @@ class H(BaseHTTPRequestHandler):
         if url.path == "/auth/authorize":
             q = {k: v[0] for k, v in parse_qs(url.query).items()}
             S["authorize"].append(q)
+            if S.get("error_page"):                    # (an error page that never comes back to the app)
+                return jsend(self, 200, {"error_code": "3p_login_workspace_scope_denied"})
             back = {"code": "CODE1", "state": q["state"], "scope": q["scope"]}
             if q["client_id"] == "dynamic_agent_client":
                 back["client_id"] = "oaiapp_123"
@@ -295,6 +297,9 @@ class H(BaseHTTPRequestHandler):
                 if not S["refresh_ok"]:
                     return jsend(self, 400, {"error": "invalid_grant"})
                 return jsend(self, 200, {"access_token": "chatgpt-new", "refresh_token": "R2", "expires_in": 3600})
+            if S.get("refuse_codes", 0) > 0:          # (OpenAI not taking a fresh registration's first code)
+                S["refuse_codes"] -= 1
+                return jsend(self, 400, {"error": "invalid_grant", "error_description": "Invalid authorization code"})
             nonce = S["authorize"][-1]["nonce"]
             idt = jwt({"iss": base, "aud": form["client_id"], "exp": time.time() + 3600, "nonce": nonce,
                        "email": "cat@example.com", "sub": "u1"}, bad=S["bad_sig"])
@@ -481,11 +486,19 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("a refusal is reported (not shown as an empty answer)", out["failed"] and out["failed"][0] == "refused",
           str(out["failed"]))
     S["mode"] = "text"
-    os.environ["ANTHROPIC_API_KEY"] = "sk-ant-from-signin"
+    from pixelcat.llm import ant_tool
+    d = ant_tool.signin_dir()                         # (what ant writes when signing in)
+    (d / "configs").mkdir(parents=True, exist_ok=True)
+    (d / "credentials").mkdir(parents=True, exist_ok=True)
+    (d / "configs" / "default.json").write_text(json.dumps({"authentication": {"type": "user_oauth"}}))
+    (d / "credentials" / "default.json").write_text(json.dumps({"access_token": "tok-signin",
+                                                                "expires_at": int(time.time()) + 3600}))
+    os.environ["ANTHROPIC_API_KEY"] = "sk-ant-env"     # (must not be used for the sign-in)
     run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info, auth="signin"))
     os.environ.pop("ANTHROPIC_API_KEY")
-    check("signed in (no key): the SDK finds the credentials itself - the saved key isn't used",
-          key_of(S["headers"][-1]) == "sk-ant-from-signin", key_of(S["headers"][-1])[:12])
+    shutil.rmtree(d)
+    check("signed in with Anthropic: Pixel Cat's own sign-in is used - not the saved key, not the environment",
+          key_of(S["headers"][-1]) == "tok-signin", key_of(S["headers"][-1])[:12])
     ms = AC.list_models(creds)
     check("model list with capabilities", [m["id"] for m in ms] == ["claude-opus-5-5", "claude-haiku-5-5"]
           and ms[0]["adaptive"] and ms[0]["effort"][-1] == "max" and ms[1]["effort"] == [])
@@ -557,7 +570,32 @@ def main() -> int:  # noqa: C901 - a linear test script
     ok_out = CS.sign_out(creds)
     check("sign out: revoked at OpenAI, tokens gone, the issued client id kept",
           ok_out and S["revoked"][-1]["token"] == "R2" and not CS.signed_in(creds)
-          and creds.get("chatgpt") == {"client_id": "oaiapp_123"})
+          and creds.get("chatgpt") == {"client_id": "oaiapp_123", "validated": True})
+    creds.set("chatgpt", None)                          # a first sign-in again...
+    S["refuse_codes"] = 1                               # ...where OpenAI doesn't take the first code
+    n0, asked = len(S["authorize"]), []
+    got = CS.sign_in(creds, open_url=browser, timeout=20, again=lambda: asked.append(1))
+    qs = S["authorize"][n0:]
+    check("a code OpenAI refuses (invalid_grant): asked once more, with the issued client id - then signed in",
+          [q["client_id"] for q in qs] == ["dynamic_agent_client", "oaiapp_123"] and "agent_name_hint" not in qs[1]
+          and asked == [1] and got["plan"] and CS.signed_in(creds)
+          and [t["client_id"] for t in S["token"][-2:]] == ["oaiapp_123", "oaiapp_123"], str([q["client_id"] for q in qs]))
+    creds.set("chatgpt", None)
+    S["refuse_codes"] = 2
+    try:
+        CS.sign_in(creds, open_url=browser, timeout=20)
+        msg = "signed in!"
+    except CS.SignInError as e:
+        msg = str(e)
+    S["refuse_codes"] = 0
+    check("...refused twice: OpenAI's own reason is shown; that registration isn't kept (it never worked)",
+          "Invalid authorization code" in msg and not creds.get("chatgpt"), msg)
+    creds.set("chatgpt", {"client_id": "oaiapp_stale"})   # a registration that never finished (wrong workspace)
+    n0 = len(S["authorize"])
+    CS.sign_in(creds, open_url=browser, timeout=20)
+    check("a registration that never worked is ignored: a fresh one, with OpenAI's account/workspace picker",
+          S["authorize"][n0]["client_id"] == "dynamic_agent_client" and creds.get("chatgpt")["validated"]
+          and creds.get("chatgpt")["client_id"] == "oaiapp_123", S["authorize"][n0]["client_id"])
 
     # in the app ------------------------------------------------------------------------------------
     app_checks(creds)
@@ -711,6 +749,57 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
           and "lifts" in text and "today at" in text, text[:160])
     if pop is not None:
         pop._finish(False)
+    # Sign in with ChatGPT from the menu (the browser is faked) ------------------------------------------------
+    import webbrowser
+    webbrowser.open = lambda url, *a, **k: threading.Thread(target=lambda: requests.get(url, timeout=10),
+                                                            daemon=True).start()
+    pet.creds.set("chatgpt", None)
+    pet._ext_p("openai").pop("auth", None)
+    S["refuse_codes"] = 1
+    n_pop = len(pet._popups)
+    pet._chatgpt_start()
+    wait_pop = pet._popups[-1] if len(pet._popups) > n_pop else None
+    seen: set[str] = set()
+
+    def signed() -> bool:
+        try:
+            seen.add(wait_pop.text.text())
+        except (RuntimeError, AttributeError):
+            pass
+        return pet._ext_auth("openai") == "chatgpt" and bool(pet._ext_models("openai"))
+    wait(signed, 30)
+    check("menu sign-in with ChatGPT: 'Finish in your browser' while it runs (and why it asks twice), then signed in",
+          wait_pop is not None and wait_pop.title == "Finish in your browser" and any("One more step" in t for t in seen)
+          and pet._ext_auth("openai") == "chatgpt" and wait_pop not in pet._popups, f"{len(seen)} texts")
+    S["refuse_codes"] = 0
+    for p in list(pet._popups):
+        try:
+            p._finish(False)
+        except RuntimeError:
+            pass
+    # START OVER while OpenAI shows an error page (which never comes back to the cat)
+    pet.creds.set("chatgpt", None)
+    pet._ext_p("openai").pop("auth", None)
+    S["error_page"] = True
+    n_auth, n_pop = len(S["authorize"]), len(pet._popups)
+    pet._chatgpt_start()
+    wait(lambda: len(S["authorize"]) > n_auth, 10)
+    first = pet._popups[-1] if len(pet._popups) > n_pop else None
+    S["error_page"] = False
+    if first is not None:
+        first._finish(True)                             # START OVER
+    wait(lambda: pet._ext_auth("openai") == "chatgpt", 30)
+    qs = S["authorize"][n_auth:]
+    left = [p.title for p in pet._popups if p.title in ("Finish in your browser", "Sign in with ChatGPT")]
+    check("START OVER (OpenAI showed an error page): a fresh sign-in starts and finishes; no stray popups",
+          first is not None and first.title == "Finish in your browser" and len(qs) == 2
+          and all(q["client_id"] == "dynamic_agent_client" for q in qs) and pet._ext_auth("openai") == "chatgpt"
+          and not left, f"{len(qs)} authorizations, left {left}")
+    for p in list(pet._popups):
+        try:
+            p._finish(False)
+        except RuntimeError:
+            pass
     # ChatGPT plan indicator --------------------------------------------------------------------------------
     pet.creds.set("chatgpt", {"client_id": "oaiapp_123", "access_token": "chatgpt-AT", "refresh_token": "R1",
                               "expires_at": time.time() + 3000})

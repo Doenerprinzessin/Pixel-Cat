@@ -180,10 +180,10 @@ class PixelCatApp(QObject):
         self._later = _Later()
         self._resume_after_switch = False                # token limit: go on once another model is picked
         self._ext_notes: set[str] = set()
-        self._signin_poll: QTimer | None = None
-        self._signin_until = 0.0
-        self._signin_checking = False
         self._signin_cancel: threading.Event | None = None
+        self._ant_pop: Any = None
+        self._ant_wait_pop: Any = None
+        self._gpt_wait_pop: Any = None
         self._key_dialog: Any = None
         for _p in external.PROVIDERS:                    # the external models' names (for labels)
             for _m in self._ext_models(_p):
@@ -302,7 +302,10 @@ class PixelCatApp(QObject):
         if self.selftest:
             QTimer.singleShot(int(self.selftest * 1000), self._selftest_finish)
         if warm_model and self.cfg.preload_on_start and not self.selftest:
-            QTimer.singleShot(3000, self.model_status.ensure)   # after the cat is on screen
+            if self._model_fit(self.cfg.model) == "too_big":
+                log.info("not loading %s at start: it's too big for this PC (it would make it lag)", self.cfg.model)
+            else:
+                QTimer.singleShot(3000, self.model_status.ensure)   # after the cat is on screen
         log.info("Pixel Cat started (pid %s)", self.own_pid)
 
     def _place_initial(self) -> None:
@@ -364,7 +367,7 @@ class PixelCatApp(QObject):
             try:                                     # the external models' parts are in the build
                 import anthropic
 
-                from .llm import anthropic_client, chatgpt_signin, openai_client  # noqa: F401
+                from .llm import ant_tool, anthropic_client, chatgpt_signin, openai_client  # noqa: F401
                 anthropic.Anthropic(api_key="selftest")            # (made, never used)
                 log.info("selftest: external models ok (anthropic %s)", anthropic.__version__)
             except Exception:  # noqa: BLE001
@@ -487,7 +490,8 @@ class PixelCatApp(QObject):
             self._ledge_sig = sig                        # and once more to confirm what is new
             self._ledge_t = min(self._ledge_t, now - 30.0 + 1.0)
             self._ledge_quick = 2
-        wait = 1.5 if self._ledge_quick > 0 else 30.0
+        took = max(0.0, float(getattr(self.ledges, "last_ms", 0.0) or 0.0)) / 1000.0
+        wait = max(1.5, took * 20) if self._ledge_quick > 0 else max(30.0, took * 100)   # (slow PCs: less often)
         if now - self._ledge_t < wait:
             return
         self._ledge_t = now
@@ -770,20 +774,36 @@ class PixelCatApp(QObject):
         except Exception:  # noqa: BLE001
             return None
 
-    def _model_items(self, prefix: str, current: str) -> list[MenuItem]:
-        """One radio item per model: name, download size, and whether it is here / fits this PC."""
-        from .installer import total_ram_gb
+    def _advice(self) -> Any:
+        """What suits this PC (looked at once)."""
+        if getattr(self, "_pc_advice", None) is None:
+            from .desktop.hardware import detect
 
-        ram = getattr(self, "_ram_gb", None) or total_ram_gb()
-        self._ram_gb = ram
-        best = models.recommended(ram).tag
+            self._hw = detect()
+            self._pc_advice = models.advise(self._hw)
+        return self._pc_advice
+
+    def _model_fit(self, tag: str) -> str:
+        m = models.find(tag)
+        if m is None:
+            return "ok"
+        self._advice()
+        return models.fit(m, self._hw)
+
+    def _model_items(self, prefix: str, current: str) -> list[MenuItem]:
+        """One radio item per model: name, download size, whether it is here and how it suits this PC."""
+        adv = self._advice()
+        best = adv.model.tag if adv.model is not None and not adv.online else ""
         out = []
         for m in models.MODELS:
             note = f"{m.download_gb:g} GB"
             if model_on_disk(m.tag):
                 note += " READY"
-            elif m.ram_gb > ram:
+            fit = models.fit(m, self._hw)
+            if fit == "too_big":
                 note += " TOO BIG"
+            elif fit == "slow":
+                note += " SLOW"
             if m.tag == best:
                 note += " BEST"
             out.append(MenuItem(prefix + m.tag, f"{m.name} {m.short}", radio=True,
@@ -847,6 +867,9 @@ class PixelCatApp(QObject):
 
         self.cfg.model = tag
         save_user_setting("model", tag)
+        if models.find(tag) is not None and self.cfg.ai_mode != "local":
+            self.cfg.ai_mode = "local"
+            save_user_setting("ai_mode", "local")
         if download:
             self._download_ok.add(tag)
         log.info("default model: %s", tag)
@@ -967,7 +990,8 @@ class PixelCatApp(QObject):
         kids.append(MenuItem("ext_effort", "Effort", "bolt_on", children=[
             MenuItem(f"ext:effort:{k}", v, radio=True, checked=st.get("effort", "medium") == k)
             for k, v in external.EFFORTS.items()]))
-        return MenuItem("ext", "External AI models", "plus", children=kids, separator_before=True)
+        return MenuItem("ext", "External AI models", "plus", children=kids, separator_before=True,
+                        note="BEST" if self._advice().online else "")
 
     def _provider_menu(self, p: str) -> MenuItem:
         prov = external.PROVIDERS[p]
@@ -1148,74 +1172,122 @@ class PixelCatApp(QObject):
         self._in_background(work, got)
 
     def _anthropic_signin(self) -> None:
-        from .llm import anthropic_client
+        """Sign in with Anthropic: one click - Pixel Cat gets Anthropic's sign-in helper if it
+        isn't here yet, then the browser opens and the user only signs in there."""
+        from .llm import ant_tool
 
-        self._in_background(anthropic_client.find_ant, self._anthropic_signin_found)
+        self._in_background(ant_tool.find, self._anthropic_signin_ask)
 
-    def _anthropic_signin_found(self, exe: Any) -> None:
-        from PySide6.QtCore import QUrl
-        from PySide6.QtGui import QDesktopServices
+    def _anthropic_signin_ask(self, exe: Any) -> None:
+        have = isinstance(exe, str)
+        lines = ["Your browser opens Anthropic's page: sign in, pick your organization and click "
+                 "<b>Allow</b>. That's all - I notice it by myself."]
+        if not have:
+            lines.insert(0, "First I get Anthropic's small sign-in helper (about 15 MB) from Anthropic's official "
+                            "download page and check that it's the real one. No admin rights, nothing else changes "
+                            "on your PC.")
+        lines += ["This uses your Claude Console account (platform.claude.com) - the API is paid there, separately "
+                  "from a claude.ai subscription.",
+                  "Chats with Claude go to Anthropic, including what my tools read (screenshots, files, window text)."]
+        pop = self._popup("Sign in with Anthropic", self._paras(lines), "SIGN IN", "CANCEL")
+        pop.answered.connect(lambda ok, e=exe: self._anthropic_go(e if isinstance(e, str) else None) if ok else None)
 
-        if not isinstance(exe, str):
-            pop = self._popup("Sign in with Anthropic", self._paras([
-                "Signing in with your Anthropic account goes through Anthropic's own sign-in tool, <b>ant</b>, "
-                "which isn't on this PC yet.",
-                "Get it from Anthropic's download page (the Windows zip - put ant.exe in a folder on your PATH), "
-                "then pick Sign in with Anthropic again.",
-                "Or use an API key instead - that needs nothing else."]), "DOWNLOAD PAGE", "CLOSE")
-            pop.answered.connect(lambda ok: QDesktopServices.openUrl(QUrl(external.ANT_DOWNLOAD)) if ok else None)
+    def _anthropic_go(self, exe: str | None) -> None:
+        from .llm import ant_tool
+
+        if self._signin_cancel is not None:
+            self._signin_cancel.set()
+        cancel = threading.Event()
+        self._signin_cancel = cancel
+        if exe is not None:
+            self._anthropic_login(exe, cancel)
             return
-        pop = self._popup("Sign in with Anthropic", self._paras([
-            "A window opens with Anthropic's sign-in: approve it in your browser (platform.claude.com) and pick "
-            "the organization to use.",
-            "It's the same sign-in as typing <b>ant auth login</b>, so Anthropic's other tools on this PC (like "
-            "Claude Code) can use it too. Usage is billed to that Console organization.",
-            "Chats with Claude go to Anthropic, including what my tools read (screenshots, files, window text)."]),
-            "SIGN IN", "CANCEL")
-        pop.answered.connect(lambda ok, e=exe: self._anthropic_start(e) if ok else None)
+        pop = self._popup("Sign in with Anthropic", self._paras(["Getting Anthropic's sign-in helper…"]), "CANCEL")
+        pop.answered.connect(lambda _ok: cancel.set())
+        self._ant_pop = pop
 
-    def _anthropic_start(self, exe: str) -> None:
-        from .llm import anthropic_client
+        def progress(done: int, total: int) -> None:
+            self._later.ran.emit(self._ant_progress, (done, total))
+        self._in_background(lambda: ant_tool.install(progress, cancel),
+                            lambda res, c=cancel: self._ant_installed(res, c))
 
+    def _ant_progress(self, value: Any) -> None:
+        pop = getattr(self, "_ant_pop", None)
+        done, total = value
+        if pop is None:
+            return
         try:
-            anthropic_client.start_signin(exe)
-        except OSError as e:
-            self._popup("Sign in with Anthropic", self._paras([f"The sign-in didn't start ({html.escape(str(e))})."]),
-                        "OK")
-            return
-        if self._signin_poll is not None:
-            self._signin_poll.stop()
-        self._signin_until = time.monotonic() + 300
-        self._signin_checking = False
-        self._signin_poll = self._timer(4000, self._anthropic_poll)
-        self._signin_poll.start()
+            pct = f" {int(100 * done / total)}%" if total else ""
+            pop.text.setText(self._paras([f"Getting Anthropic's sign-in helper…{pct}"]))
+        except RuntimeError:
+            self._ant_pop = None
 
-    def _anthropic_poll(self) -> None:
-        if time.monotonic() > self._signin_until:
-            if self._signin_poll is not None:
-                self._signin_poll.stop()
+    def _dismiss(self, pop: Any) -> None:
+        """Close a popup nobody answered (it was only showing progress)."""
+        if pop is None:
             return
-        if self._signin_checking:
-            return
-        from .llm import anthropic_client
+        try:
+            pop._done = True
+            pop.close()
+        except RuntimeError:
+            pass
+        if pop in self._popups:
+            self._popups.remove(pop)
 
-        self._signin_checking = True
-        self._in_background(lambda: anthropic_client.signin_status(self.creds), self._anthropic_polled)
+    def _ant_installed(self, res: Any, cancel: threading.Event) -> None:
+        from .llm import ant_tool
 
-    def _anthropic_polled(self, ok: Any) -> None:
-        self._signin_checking = False
-        if ok is not True or self._signin_poll is None or not self._signin_poll.isActive():
+        self._dismiss(getattr(self, "_ant_pop", None))
+        self._ant_pop = None
+        if cancel.is_set():
             return
-        self._signin_poll.stop()
+        if isinstance(res, Exception):
+            msg = str(res) if isinstance(res, ant_tool.AntError) else f"That didn't work ({res})."
+            pop = self._popup("Sign in with Anthropic", self._paras([html.escape(msg),
+                              "You can also use an API key instead - that needs nothing else."]), "API KEY", "CLOSE")
+            pop.answered.connect(lambda ok: self._ask_key("anthropic") if ok else None)
+            return
+        self._anthropic_login(res, cancel)
+
+    def _anthropic_login(self, exe: str, cancel: threading.Event) -> None:
+        import webbrowser
+
+        from .llm import ant_tool
+
+        opened: list[str] = []
+
+        def open_url(url: str) -> None:
+            opened.append(url)
+            webbrowser.open(url)
+        pop = self._popup("Finish in your browser", self._paras([
+            "Anthropic's sign-in page is open in your browser. Sign in, pick your organization and click "
+            "<b>Allow</b> - I notice it by myself.",
+            "No page? Click OPEN AGAIN."]), "OPEN AGAIN", "CANCEL")
+        pop.answered.connect(lambda ok: (webbrowser.open(opened[-1]) if opened else None) if ok else cancel.set())
+        self._ant_wait_pop = pop
+        self._in_background(lambda: ant_tool.login(exe, open_url, cancel),
+                            lambda res, c=cancel: self._anthropic_signed_in(res, c))
+
+    def _anthropic_signed_in(self, res: Any, cancel: threading.Event) -> None:
+        from .llm import ant_tool
+
+        self._dismiss(getattr(self, "_ant_wait_pop", None))
+        self._ant_wait_pop = None
+        if isinstance(res, Exception):
+            if not cancel.is_set():
+                msg = str(res) if isinstance(res, ant_tool.AntError) else f"The sign-in didn't work ({res})."
+                self._popup("Sign in with Anthropic", self._paras([html.escape(msg)]), "OK")
+            return
         self._ext_p("anthropic")["auth"] = "signin"
         self.save()
-        log.info("signed in with Anthropic")
-        self._ext_load_models("anthropic", after=lambda: self._ext_connected("anthropic"))
+        self._ext_load_models("anthropic", announce=True, after=lambda: self._ext_connected("anthropic"))
 
     def _chatgpt_signin(self) -> None:
         pop = self._popup("Sign in with ChatGPT", self._paras([
             "Your browser opens OpenAI's sign-in. Once you allow it there, chats with OpenAI models use your "
             "ChatGPT plan instead of API credits.",
+            "When OpenAI asks for an account or workspace, pick your <b>personal</b> one with ChatGPT Plus or Pro - "
+            "work and school workspaces usually can't be used by apps like this.",
             "On Plus, the 5-hour limit is shared with your other apps; Pro has no 5-hour limit.",
             "Your chats go to OpenAI, including what my tools read (screenshots, files, window text)."]),
             "SIGN IN", "CANCEL")
@@ -1228,11 +1300,45 @@ class PixelCatApp(QObject):
             self._signin_cancel.set()
         ev = threading.Event()
         self._signin_cancel = ev
-        self._in_background(lambda: chatgpt_signin.sign_in(self.creds, cancel=ev), self._chatgpt_done)
+        pop = self._popup("Finish in your browser", self._paras([
+            "OpenAI's sign-in is open in your browser. Pick your personal ChatGPT account and allow Pixel Cat - "
+            "I notice it by myself.",
+            "OpenAI shows an error instead (for example about a workspace)? Close that page and click START OVER."]),
+            "START OVER", "CANCEL")
+        pop.answered.connect(lambda ok, e=ev: (e.set(), self._chatgpt_restart() if ok else None))
+        self._gpt_wait_pop = pop
 
-    def _chatgpt_done(self, res: Any) -> None:
+        def again() -> None:                         # (from the sign-in thread)
+            self._later.ran.emit(self._chatgpt_again, None)
+        self._in_background(lambda: chatgpt_signin.sign_in(self.creds, cancel=ev, again=again),
+                            lambda res, p=pop, e=ev: self._chatgpt_done(res, p, e))
+
+    def _chatgpt_restart(self) -> None:
+        """START OVER: a fresh registration, with OpenAI's account/workspace picker."""
         from .llm import chatgpt_signin
 
+        chatgpt_signin.forget_unconfirmed(self.creds)
+        log.info("ChatGPT sign-in: starting over")
+        QTimer.singleShot(700, self._chatgpt_start)   # (the old attempt lets go of its port first)
+
+    def _chatgpt_again(self, _r: Any) -> None:
+        pop = getattr(self, "_gpt_wait_pop", None)
+        try:
+            if pop is not None:
+                pop.text.setText(self._paras([
+                    "One more step: your browser asks once more - that's normal the first time. Allow Pixel Cat "
+                    "there again."]))
+        except RuntimeError:
+            pass
+
+    def _chatgpt_done(self, res: Any, pop: Any = None, ev: threading.Event | None = None) -> None:
+        from .llm import chatgpt_signin
+
+        self._dismiss(pop)
+        if self._gpt_wait_pop is pop:
+            self._gpt_wait_pop = None
+        if ev is not None and ev is not self._signin_cancel:
+            return                                   # (an attempt that was started over)
         if isinstance(res, Exception):
             msg = str(res) if isinstance(res, chatgpt_signin.SignInError) else f"The sign-in didn't work ({res})."
             if "cancelled" not in msg:
@@ -1281,9 +1387,11 @@ class PixelCatApp(QObject):
                 "Signed out", self._paras(["OpenAI couldn't confirm the sign-out. To be sure, disconnect Pixel Cat in "
                                            "ChatGPT's settings (Connected apps)."]), "OK"))
         elif auth == "signin":
+            from .llm import ant_tool
+
             s["auth"] = ""
-            msg = ("I don't use your Anthropic sign-in any more. You're still signed in to Anthropic's tools on this "
-                   "PC - <b>ant auth logout</b> signs you out there too.")
+            msg = "Signed out of Anthropic."
+            self._in_background(lambda: ant_tool.logout(ant_tool.find()), lambda _r: None)
         else:
             return
         self.save()
@@ -1897,6 +2005,14 @@ class PixelCatApp(QObject):
     def open_chat(self) -> None:
         self._ensure_chat()
         assert self.chat is not None
+        if not getattr(self, "_too_big_said", False) and self._model_fit(self._effective_model()) == "too_big":
+            self._too_big_said = True
+            m = models.find(self._effective_model())
+            adv = self._advice()
+            better = ("an online AI (Settings → AI model → External AI models)" if adv.online or adv.model is None
+                      else f"{adv.model.name} {adv.model.short} (marked BEST in Settings → AI model)")
+            self.chat.add("info", f"Heads up: {m.name} {m.short} is too big for this PC - while it runs, the PC gets "
+                                  f"very slow. {better[0].upper() + better[1:]} suits it better.")
         mon = monitor_at(self.monitors, self.brain.x, self.brain.y - 1)
         self.chat.show_near(self.overlay.cat_rect(), mon.work, self.ui_unit(mon))
         QTimer.singleShot(60, self._refresh_windows)
@@ -2312,6 +2428,12 @@ class PixelCatApp(QObject):
             if worker is None:
                 return
         else:
+            if self.cfg.ai_mode == "online" and self.chat_model is None:
+                from .llm.model_status import ONLINE_ONLY
+
+                self.chat.add("info", ONLINE_ONLY)
+                self._end_task()
+                return
             tools = self.toolbox.schemas() if (self.cfg.enable_tools and self.native_tools) else None
             worker = ChatWorker(self.cfg, msgs, tools, self._think_now(), model=self._effective_model())
         worker.token.connect(self._on_token)

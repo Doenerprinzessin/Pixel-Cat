@@ -287,8 +287,9 @@ def part_installer() -> None:
         msg = str(exc)
     check("SKIP stops the Ollama download; nothing is run", msg == "cancelled" and len(ran) == 1)
     real = installer.ai_plan(lay)
-    check("on this PC there is nothing to do (Ollama and the model are here)",
-          real.ollama is not None and real.model_ready and not real.needed, f"{real.model}, {real.ram_gb:.0f} GB")
+    check("on this PC: Smart 35B is recommended, and Ollama and the model are already here (nothing to download)",
+          real.ollama is not None and real.model_ready and real.choice == "qwen3.5:35b-a3b"
+          and "download" not in real.describe(), f"{real.model}, {real.ram_gb:.0f} GB")
     srv.shutdown()
     # the screens, and the window's own buttons (setup_ai replaced by a fake)
     from pixelcat.sprites.library import SpriteLibrary
@@ -299,8 +300,8 @@ def part_installer() -> None:
     w.plan = installer.AiPlan(None, "qwen3.5:35b-a3b", False, 63)
     w._welcome()
     w.grab().save(str(out / "installer_ai.png"))
-    check("the install screen offers 'Set up the AI chat too' (ticked) and says what it does",
-          not w.ai_box.isHidden() and w.ai_box.isChecked() and "1.9 GB" in w.ai_note.text()
+    check("the install screen offers the AI chat (the model preselected) and says what it does",
+          not w.ai_combo.isHidden() and w.ai_combo.currentData() == "qwen3.5:35b-a3b" and "1.9 GB" in w.ai_note.text()
           and "22 GB" in w.ai_note.text(), w.ai_note.text()[:80])
     real_setup = installer.setup_ai
 
