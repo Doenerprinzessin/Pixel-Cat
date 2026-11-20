@@ -1,25 +1,30 @@
-"""External AI models: Anthropic (Claude) and OpenAI (ChatGPT).
+"""External AI models: Anthropic (Claude), OpenAI (ChatGPT) and GitHub Copilot.
 
-* Model tags: ``anthropic:<model id>`` and ``openai:<model id>`` - used like the local
-  ``qwen3.5:9b`` tags (the default model, or one chat's model).
-* Sign-in or API key per provider.  Keys and sign-in tokens live in ``keys.dat``, encrypted
-  by Windows for this account (like the save) - never in config.json, never in the log, and
-  only ever sent to the provider itself.
+* Model tags: ``anthropic:<model id>``, ``openai:<model id>`` and ``copilot:<model id>`` -
+  used like the local ``qwen3.5:9b`` tags (the default model, or one chat's model).
+* Sign-in or API key (GitHub: a token) per provider.  Keys and sign-in tokens live in
+  ``keys.dat``, encrypted by Windows for this account (like the save) - never in config.json,
+  never in the log, and only ever sent to the provider itself.
 * Token limits (external models only - local ones have none): a limit per provider that
   resets every day / week / month.  When it is reached the chat suggests switching model or
   raising it for now (until the reset); raises go up to a maximum - "all tokens" - and then
   a popup says when it resets.  The provider's own limits (rate limits, credits, the ChatGPT
-  plan) end up in the same popup.
+  plan, the Copilot allowance) end up in the same popup.
+* Copilot also has a credit limit: how many of the Copilot plan's AI credits the cat may use
+  in a month (``CreditBudget``).  When it is reached the chat offers to raise it for now.
 * Thinking on/off and effort, for external models.
 
-The requests themselves: anthropic_client.py (the official SDK) and openai_client.py
-(the Responses API, with an API key or "Sign in with ChatGPT").
+The requests themselves: anthropic_client.py (the official SDK), openai_client.py (the
+Responses API, with an API key or "Sign in with ChatGPT") and copilot_client.py (GitHub's
+official Copilot SDK).
 """
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -49,17 +54,24 @@ ANTHROPIC = Provider("anthropic", "Anthropic", "Claude", "Sign in with Anthropic
                      "https://platform.claude.com/settings/keys", "sk-ant-", "https://platform.claude.com/")
 OPENAI = Provider("openai", "OpenAI", "ChatGPT", "Sign in with ChatGPT",
                   "https://platform.openai.com/api-keys", "sk-", "https://chatgpt.com/settings/usage")
-PROVIDERS: dict[str, Provider] = {p.key: p for p in (ANTHROPIC, OPENAI)}
+COPILOT = Provider("copilot", "GitHub", "Copilot", "Sign in with GitHub",
+                   "https://github.com/settings/personal-access-tokens/new", "github_pat_",
+                   "https://github.com/settings/copilot")
+PROVIDERS: dict[str, Provider] = {p.key: p for p in (ANTHROPIC, OPENAI, COPILOT)}
 
-LIMITS = [0, 50_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000]
+LIMITS = [0, 50_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000, 25_000_000,
+          50_000_000, 100_000_000]
+MIN_LIMIT, MAX_LIMIT = 1_000, 100_000_000          # a token limit typed in (Custom...)
 PERIODS = {"day": "Every day", "week": "Every week", "month": "Every month"}
 PERIOD_WORD = {"day": "today", "week": "this week", "month": "this month"}
-ANT_DOWNLOAD = "https://github.com/anthropics/anthropic-cli/releases"
 BILLING = {"anthropic": "https://platform.claude.com/settings/billing",
-           "openai": "https://platform.openai.com/settings/organization/billing/overview"}
+           "openai": "https://platform.openai.com/settings/organization/billing/overview",
+           "copilot": "https://github.com/settings/billing"}
 MAXIMUMS = [1.5, 2.0, 3.0, 5.0, 0.0]      # how far "raise for now" may go (x the limit; 0: no maximum)
 EFFORTS = {"low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra high", "max": "Max"}
 DEFAULTS = {"limit": 1_000_000, "period": "day", "maximum": 2.0}
+CREDIT_LIMITS = [0, 500, 1000, 2000, 5000, 10_000, 20_000]
+CREDIT_DEFAULT = 5000
 BASE_URLS: dict[str, str | None] = {"anthropic": None, "openai": "https://api.openai.com/v1"}   # (tests)
 
 
@@ -72,11 +84,47 @@ def parse(tag: str | None) -> tuple[str, str] | None:
 
 
 def fmt_tokens(n: int) -> str:
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:g}M"
+    """'750', '1.5k', '12k', '3.5M', '1.23M', '100M'."""
+    if n >= 999_500:
+        return f"{n / 1_000_000:.2f}".rstrip("0").rstrip(".") + "M"
     if n >= 1000:
         return f"{n / 1000:.0f}k" if n >= 10_000 else f"{n / 1000:.1f}k".replace(".0k", "k")
     return str(n)
+
+
+def parse_amount(text: str) -> float | None:
+    """A typed amount: '3.5M', '750k', '2 000 000', "2'000'000", '2,000,000', '3,5M', '100 million'
+    (None: not a positive number)."""
+    s = text.strip().lower()
+    for ch in (" ", "\u00a0", "\u202f", "'", "\u2019", "_"):
+        s = s.replace(ch, "")
+    for word in ("tokens", "token", "credits", "credit"):
+        s = s.removesuffix(word)
+    mult = 1.0
+    for suffix, m in (("million", 1e6), ("mio", 1e6), ("m", 1e6), ("thousand", 1e3), ("k", 1e3)):
+        if s.endswith(suffix):
+            s, mult = s[: -len(suffix)], m
+            break
+    if "," in s and "." in s:                     # the last one is the decimal point
+        s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")
+    elif "," in s:                                # 2,000,000 (thousands) or 3,5 (decimal)
+        s = s.replace(",", "") if re.fullmatch(r"\d{1,3}(,\d{3})+", s) else s.replace(",", ".")
+    elif s.count(".") > 1:                        # 2.000.000
+        s = s.replace(".", "")
+    try:
+        v = float(s) * mult
+    except ValueError:
+        return None
+    return v if math.isfinite(v) and v > 0 else None
+
+
+def fmt_credits(x: float) -> str:
+    """AI credits like GitHub shows them: '0.04', '28.1', '5,000'."""
+    x = max(0.0, float(x))
+    if x >= 100:
+        return f"{round(x):,}"
+    s = f"{x:.2f}" if x < 1 else f"{x:.1f}"
+    return s.rstrip("0").rstrip(".")
 
 
 def fmt_reset(at: datetime, now: datetime | None = None) -> str:
@@ -200,6 +248,8 @@ def friendly(kind: str, detail: str, provider: str, model: str) -> str:
         return f"{prov.name} says I'm not allowed to do that: {detail[:200]}"
     if kind == "busy":
         return f"{prov.name} is very busy right now. Try again in a moment."
+    if kind == "install":
+        return f"Mew... {detail[:200]} Connect {prov.brand} again in {where}."
     return f"Hiss... {prov.name} said:\n```text\n{detail[:300]}\n```"
 
 
@@ -281,6 +331,57 @@ class Budget:
     def add(self, tokens: int, now: datetime | None = None) -> None:
         self._roll(now or datetime.now())
         self.u["used"] = int(self.u.get("used", 0)) + max(0, int(tokens))
+
+    def reset_at(self, now: datetime | None = None) -> datetime:
+        return next_reset(self.period, now or datetime.now())
+
+
+class CreditBudget:
+    """How many of the Copilot plan's AI credits the cat may use in a month: ``settings``
+    (``credit_limit``) and ``usage`` (start of the month, credits used, the limit with this
+    month's raises).  Reaching it only asks - raising lasts until the month ends, like
+    GitHub's own allowance (which resets on the 1st)."""
+
+    period = "month"
+
+    def __init__(self, settings: dict[str, Any], usage: dict[str, Any]) -> None:
+        self.s, self.u = settings, usage
+
+    @property
+    def limit(self) -> float:
+        return float(self.s.get("credit_limit", CREDIT_DEFAULT) or 0)
+
+    def _roll(self, now: datetime) -> None:
+        start = period_start(self.period, now).timestamp()
+        if self.u.get("start") != start:
+            self.u.update(start=start, used=0.0, allowed=self.limit)
+
+    def used(self, now: datetime | None = None) -> float:
+        self._roll(now or datetime.now())
+        return float(self.u.get("used", 0.0))
+
+    def allowed(self, now: datetime | None = None) -> float:
+        self._roll(now or datetime.now())
+        return max(self.limit, float(self.u.get("allowed") or 0)) if self.limit else 0.0
+
+    def status(self, now: datetime | None = None) -> str:
+        """ok, or soft (the limit is reached: switch or raise for now)."""
+        now = now or datetime.now()
+        if not self.limit:
+            return "ok"
+        return "soft" if self.used(now) >= self.allowed(now) else "ok"
+
+    def next_allowed(self, now: datetime | None = None) -> float:
+        """'Raise for now': half a limit more than what is used (or allowed) already."""
+        return max(self.allowed(now), self.used(now)) + max(1.0, self.limit / 2)
+
+    def raise_limit(self, now: datetime | None = None) -> float:
+        self.u["allowed"] = self.next_allowed(now)
+        return float(self.u["allowed"])
+
+    def add(self, credits: float, now: datetime | None = None) -> None:
+        self._roll(now or datetime.now())
+        self.u["used"] = float(self.u.get("used", 0.0)) + max(0.0, float(credits))
 
     def reset_at(self, now: datetime | None = None) -> datetime:
         return next_reset(self.period, now or datetime.now())

@@ -76,6 +76,7 @@ class Layout:
     uninstall_key: str          # under HKCU
     run_key: str                # under HKCU ("Start with Windows")
     data_dir: Path              # the cat's memory and settings
+    tools_dir: Path | None = None   # helpers the cat fetched (Anthropic's sign-in helper)
 
     @property
     def exe(self) -> Path:
@@ -96,12 +97,13 @@ def layout() -> Layout:
         r = Path(root)
         return Layout(r / "Programs" / "PixelCat", r / "StartMenu", r / "Desktop",
                       r"Software\PixelCatInstallTest\Uninstall\PixelCat", r"Software\PixelCatInstallTest\Run",
-                      r / "AppData" / "PixelCat")
+                      r / "AppData" / "PixelCat", r / "Local" / "PixelCat")
     local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
     roaming = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
     return Layout((_known(_USER_PROGRAMS) or local / "Programs") / "PixelCat",
                   _known(_START_MENU) or roaming / "Microsoft" / "Windows" / "Start Menu" / "Programs",
-                  paths.shell_folder("desktop"), UNINSTALL_KEY, system.RUN_KEY, roaming / "PixelCat")
+                  paths.shell_folder("desktop"), UNINSTALL_KEY, system.RUN_KEY, roaming / "PixelCat",
+                  local / "PixelCat")
 
 
 def is_setup_name(path: str | Path) -> bool:
@@ -250,6 +252,8 @@ def uninstall(lay: Layout, delete_data: bool) -> list[str]:
             from .persistence import forget_folder
 
             forget_folder(lay.data_dir)
+        if lay.tools_dir is not None:
+            shutil.rmtree(lay.tools_dir, ignore_errors=True)
     return left
 
 
@@ -309,34 +313,149 @@ def total_ram_gb() -> float:
 
 @dataclass
 class AiPlan:
+    """The AI part of Setup.  It looks at the PC first (memory, graphics card, CPU, disk) and
+    recommends what suits it: the best local model that fits with room to spare - or an
+    online AI when only the tiniest ones would, so a weak PC doesn't lag."""
     ollama: Path | None        # Ollama on this PC
-    model: str                 # always the bundled one: qwen3.5:35b-a3b
+    model: str                 # the local model to set up (the recommended one, or what the user picked)
     model_ready: bool          # already downloaded
     ram_gb: float
+    choice: str = ""           # a model tag, "online", "keep" (what's set up now) or "none"
+    hw: Any = None             # this PC (desktop.hardware.Hardware)
+    advice: Any = None         # what suits it (llm.models.Advice)
+    current: str = ""          # what the cat uses now ("" on a new install)
+    current_ok: bool = False   # ...and it suits this PC: "keep" is offered
+
+    @property
+    def local(self) -> bool:
+        return self.choice in ("", self.model)
 
     @property
     def needed(self) -> bool:
-        return self.ollama is None or not self.model_ready
+        """Is there anything to do (download, or a setting to write)?"""
+        if self.choice in ("keep", "none"):
+            return False
+        if self.choice == "online":
+            return True
+        return self.ollama is None or not self.model_ready or self.advice is not None
 
-    def describe(self) -> str:
-        low = (f" This PC has {self.ram_gb:.0f} GB of RAM, so the AI will be very slow or may not start."
-               if self.ram_gb < MODEL_RAM_GB + 4 else "")
-        model = (f"The model {self.model} ({MODEL_GB:g} GB; it needs about {MODEL_RAM_GB:g} GB of free RAM while "
-                 f"it runs) then downloads in the background while the cat runs.{low}")
+    @property
+    def recommended(self) -> str:
+        if self.advice is None:
+            return self.model
+        return "online" if self.advice.online else self.advice.model.tag
+
+    def choose(self, key: str) -> None:
+        from .llm import models
+        from .llm.model_status import model_on_disk
+
+        self.choice = key
+        if models.find(key) is not None:
+            self.model = key
+            self.model_ready = model_on_disk(key)
+
+    def options(self) -> list[tuple[str, str]]:
+        """(key, label) for the drop-down, the recommendation first."""
+        from .llm import models
+        from .llm.external import label as ext_label
+
+        out: list[tuple[str, str]] = []
+        rec = self.recommended
+        if self.current_ok:
+            cur = models.label(self.current) if models.find(self.current) else ext_label(self.current) \
+                if ":" in self.current and not models.find(self.current) else "an online AI"
+            out.append(("keep", f"Keep what I use now: {cur}"))
+        keys = [rec] + [m.tag for m in models.MODELS if m.tag != rec] + (["online"] if rec != "online" else [])
+        for key in keys:
+            out.append((key, self._label(key, key == rec)))
+        out.append(("none", "No AI chat for now"))
+        return out
+
+    def _label(self, key: str, rec: bool) -> str:
+        from .llm import models
+        from .llm.model_status import model_on_disk
+
+        tag = " (recommended)" if rec else ""
+        if key == "online":
+            return "Online AI: ChatGPT or Claude" + tag
+        m = models.find(key)
+        assert m is not None
+        if not rec and self.hw is not None:
+            tag = {"too_big": " (too big for this PC)", "slow": " (slow on this PC)"}.get(models.fit(m, self.hw), "")
+        if model_on_disk(m.tag):
+            tag += " ✓"
+        return f"{m.name} {m.short} · {m.download_gb:g} GB{tag}"
+
+    def describe(self, key: str | None = None) -> str:
+        """The note under the drop-down for one option."""
+        from .llm import models
+
+        key = key or self.choice or self.model
+        adv = self.advice
+        if key == "keep":
+            return "Nothing changes."
+        if key == "none":
+            return "No AI for now - run Setup again whenever you want it."
+        if key == "online":
+            why = adv.why if adv is not None and adv.online else "ChatGPT or Claude answer from their servers."
+            return (f"{why} Nothing to download now. After installing: right-click the cat → Settings → AI model → "
+                    "External AI models, and sign in with ChatGPT (uses your ChatGPT plan) or Claude.")
+        m = models.find(key)
+        if m is None:
+            return ""
+        if adv is not None and key == self.recommended:
+            head = adv.why
+        elif self.hw is not None:
+            head = {"too_big": "Too big for this PC: it would fill the memory and make everything slow.",
+                    "slow": "Fits, but answers slowly on this CPU."}.get(models.fit(m, self.hw),
+                                                                       f"{m.name} {m.short} fits this PC.")
+        else:
+            head = f"{m.name} {m.short}."
+        from .llm.model_status import model_on_disk
+
+        ready = self.model_ready if m.tag == self.model else model_on_disk(m.tag)
+        parts = [head]
         if self.ollama is None:
-            head = f"Gets Ollama, the free AI engine ({OLLAMA_SETUP_GB:g} GB from ollama.com, no admin rights)."
-            return head if self.model_ready else f"{head} {model}"
-        return f"Ollama is already here. {model}"
+            parts.append(f"Gets Ollama, the free AI engine ({OLLAMA_SETUP_GB:g} GB from ollama.com, no admin rights).")
+        if not ready:
+            parts.append(f"The model ({m.download_gb:g} GB) then downloads in the background while the cat runs.")
+        return " ".join(parts)
 
 
-def ai_plan(lay: Layout) -> AiPlan:
-    """What the AI part has to do on this PC.  The model is always the one in the bundled
-    config.json (qwen3.5:35b-a3b), with the same settings everywhere."""
+def _user_config(lay: Layout) -> dict[str, Any]:
+    from .settings import user_settings
+
+    try:
+        return user_settings(lay.data_dir)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def ai_plan(lay: Layout, updating: bool | None = None) -> AiPlan:
+    """What the AI part should do on this PC: looks at the hardware and recommends."""
+    from .desktop.hardware import detect
+    from .llm import models
+    from .llm.external import parse
     from .llm.model_status import find_ollama_app, model_on_disk
     from .settings import Config
 
-    model = Config().model
-    return AiPlan(find_ollama_app(), model, model_on_disk(model), total_ram_gb())
+    hw = detect()
+    adv = models.advise(hw)
+    user = _user_config(lay)
+    updating = installed_version(lay) is not None if updating is None else updating
+    current = str(user.get("model") or Config().model) if updating else ""
+    ollama = find_ollama_app()
+    cur_m = models.find(current) if current else None
+    current_ok = bool(updating and (
+        parse(current) is not None or user.get("ai_mode") == "online"
+        or (cur_m is not None and ollama is not None and model_on_disk(cur_m.tag)
+            and models.fit(cur_m, hw) != "too_big")))
+    if updating and user.get("ai_mode") == "online" and parse(current) is None:
+        current = "online"
+    local = adv.model.tag if adv.model is not None else models.DEFAULT
+    plan = AiPlan(ollama, local, model_on_disk(local), hw.ram_gb, "", hw, adv, current, current_ok)
+    plan.choose("keep" if current_ok else plan.recommended)
+    return plan
 
 
 def download(url: str, dest: Path, progress: Callable[[int, int], None], cancel: threading.Event) -> None:
@@ -385,6 +504,31 @@ def run_ollama_setup(path: Path) -> None:
         raise InstallError(f"Ollama's installer stopped (code {r.returncode})")
 
 
+def _write_ai_settings(lay: Layout, plan: AiPlan) -> None:
+    """What the cat should use: the chosen model, and on PCs where memory is tight the AI only
+    loads when the chat needs it (and leaves again soon) - so the PC doesn't lag."""
+    from .llm import models
+    from .settings import Config, save_user_settings
+
+    user = _user_config(lay)
+    values: dict[str, Any] = {}
+    if plan.choice == "online":
+        values = {"ai_mode": "online", "preload_on_start": False}
+    else:
+        if plan.model != Config().model or "model" in user:
+            values["model"] = plan.model
+        if user.get("ai_mode", "local") != "local":
+            values["ai_mode"] = "local"
+        if plan.advice is not None and plan.advice.light:
+            values.update(preload_on_start=False, keep_alive="3m")
+        m = models.find(plan.model)
+        if m is not None and plan.hw is not None and models.fit(m, plan.hw) == "too_big":
+            values.update(preload_on_start=False, keep_alive="1m")   # (the user's own choice: at least not at start)
+    if values:
+        save_user_settings(values, lay.data_dir)
+        log.info("AI settings for this PC: %s", values)
+
+
 def _save_ai_choice(lay: Layout, plan: AiPlan) -> None:
     """The user agreed: the cat may download the model (written into the cat's protected save)."""
     from .persistence import load_state, save_state
@@ -400,9 +544,16 @@ def setup_ai(lay: Layout, plan: AiPlan, progress: Callable[[str], None], cancel:
     """Install Ollama if needed and let the cat download the model.  Returns a note for the user."""
     import tempfile
 
+    from .llm import models
     from .llm.model_status import find_ollama_app
 
     finder = finder or find_ollama_app
+    if plan.choice in ("keep", "none"):
+        return ""
+    if plan.choice == "online":
+        _write_ai_settings(lay, plan)
+        return ("Pixel Cat uses an online AI on this PC. To start: right-click the cat → Settings → AI model → "
+                "External AI models, and sign in with ChatGPT or Claude.")
     if plan.ollama is None:
         dest = Path(tempfile.gettempdir()) / "PixelCat-OllamaSetup.exe"
         try:
@@ -424,10 +575,13 @@ def setup_ai(lay: Layout, plan: AiPlan, progress: Callable[[str], None], cancel:
         if finder() is None:
             raise InstallError("Ollama's installer finished, but I can't find Ollama")
         log.info("Ollama installed")
+    _write_ai_settings(lay, plan)
     _save_ai_choice(lay, plan)
     if plan.model_ready:
         return "The AI chat is ready."
-    return (f"The AI model {plan.model} ({MODEL_GB:g} GB) downloads in the background while the cat runs - "
+    m = models.find(plan.model)
+    gb = f" ({m.download_gb:g} GB)" if m else ""
+    return (f"The AI model {plan.model}{gb} downloads in the background while the cat runs - "
             "the chat shows how far it is.")
 
 
@@ -450,6 +604,8 @@ def run_quiet(args: Any) -> int:
     rc = 0
     if getattr(args, "with_ai", False):
         plan = ai_plan(lay)
+        if plan.choice == "keep":
+            plan.choose(plan.recommended) if not plan.current_ok else None
         if plan.needed:
             try:
                 log.info(setup_ai(lay, plan, log.info, threading.Event()))
@@ -484,7 +640,10 @@ def run_window(mode: str) -> int:
 def _make_window_class():  # type: ignore[no-untyped-def]
     from PySide6.QtCore import QPoint, QRect, Qt, QTimer
     from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent
-    from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+    import html
+
+    from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+                                   QWidget)
 
     from .desktop.monitors import enumerate_monitors, primary
     from .sprites.cat_art import Pose
@@ -517,7 +676,12 @@ def _make_window_class():  # type: ignore[no-untyped-def]
             self.text.setWordWrap(True)
             self.text.setTextFormat(Qt.TextFormat.RichText)
             self.box = QCheckBox()
-            self.ai_box = QCheckBox()           # set up Ollama + the model too
+            self.ai_box = QCheckBox()           # (unused: the drop-down below says what to set up)
+            self.ai_title = QLabel()            # "AI chat - your PC: 16 GB memory · ... "
+            self.ai_title.setWordWrap(True)
+            self.ai_title.setTextFormat(Qt.TextFormat.RichText)
+            self.ai_combo = QComboBox()         # what to use: the recommendation first
+            self.ai_combo.currentIndexChanged.connect(self._ai_changed)
             self.ai_note = QLabel()
             self.ai_note.setWordWrap(True)
             self.ai_note.setObjectName("status")
@@ -548,6 +712,8 @@ def _make_window_class():  # type: ignore[no-untyped-def]
             lay_v.addLayout(top)
             lay_v.addWidget(self.box)
             lay_v.addWidget(self.ai_box)
+            lay_v.addWidget(self.ai_title)
+            lay_v.addWidget(self.ai_combo)
             lay_v.addWidget(self.ai_note)
             lay_v.addWidget(self.status)
             lay_v.addLayout(buttons)
@@ -556,7 +722,13 @@ def _make_window_class():  # type: ignore[no-untyped-def]
                 + f"QLabel {{ color:{theme.current().text}; font-family:'Segoe UI'; font-size:{font_px}px; }}"
                 + f"QLabel#status {{ color:{theme.current().muted}; font-size:{small_px}px; }}"
                 + f"QCheckBox {{ color:{theme.current().text}; font-family:'Segoe UI'; font-size:{font_px}px; "
-                  f"spacing:{2 * u}px; }}")
+                  f"spacing:{2 * u}px; }}"
+                + f"QComboBox {{ background:{theme.current().field}; color:{theme.current().text}; "
+                  f"border:{u}px solid {theme.current().ink}; font-family:'Segoe UI'; font-size:{small_px}px; "
+                  f"padding:{u}px {2 * u}px; }}"
+                + f"QComboBox QAbstractItemView {{ background:{theme.current().field}; color:{theme.current().text};"
+                  f" selection-background-color:{theme.current().accent}; font-family:'Segoe UI'; "
+                  f"font-size:{small_px}px; }}")
             self.setFixedWidth(205 * u)
             self.old = installed_version(lay)
             self._welcome()
@@ -574,11 +746,11 @@ def _make_window_class():  # type: ignore[no-untyped-def]
             if box is not None:
                 self.box.setText(box)
                 self.box.setChecked(checked)
-            ai_text, ai_checked, ai_note = ai if ai is not None else (None, False, "")
-            self.ai_box.setVisible(ai_text is not None)
-            if ai_text is not None:
-                self.ai_box.setText(ai_text)
-                self.ai_box.setChecked(ai_checked)
+            ai_title, ai_choose, ai_note = ai if ai is not None else (None, False, "")
+            self.ai_box.setVisible(False)
+            self.ai_title.setVisible(ai_title is not None)
+            self.ai_title.setText(ai_title or "")
+            self.ai_combo.setVisible(bool(ai_choose))
             self.ai_note.setText(ai_note)
             self.ai_note.setVisible(bool(ai_note))
             self.status.setText(status)
@@ -621,17 +793,38 @@ def _make_window_class():  # type: ignore[no-untyped-def]
                 dl = self.lay.desktop_link
                 desktop = bool(dl and dl.exists())
             plan = self.plan
-            if plan is not None and plan.needed:
-                ai = ("Set up the AI chat too", True, plan.describe())
-            elif plan is not None:
-                ai = (None, False, f"AI chat: Ollama and {plan.model} are already here ✓")
-            else:
-                ai = None
+            ai = None
+            if plan is not None:
+                self.ai_combo.blockSignals(True)
+                self.ai_combo.clear()
+                for key, label in plan.options():
+                    self.ai_combo.addItem(label, key)
+                self.ai_combo.setCurrentIndex(max(0, self.ai_combo.findData(plan.choice)))
+                self.ai_combo.blockSignals(False)
+                muted = theme.current().muted
+                pc = (f"<br><span style='color:{muted}'>Your PC: {html.escape(plan.hw.summary())}</span>"
+                      if plan.hw is not None else "")
+                warn = ""
+                if plan.current and not plan.current_ok and plan.current != "online":
+                    from .llm import models as _m
+                    cm = _m.find(plan.current)
+                    if cm is not None and plan.hw is not None and _m.fit(cm, plan.hw) == "too_big":
+                        warn = (f"<br><span style='color:{muted}'>{cm.name} {cm.short}, which the cat uses now, is "
+                                "too big for this PC - that's what makes it lag.</span>")
+                ai = (f"<b>AI chat</b>{pc}{warn}", True, plan.describe(plan.choice))
             self._screen(Pose(body="sit", eyes="sparkle", mouth="smile"),
                          f"{head}<br>Just for you - no admin rights needed. You'll find it in the Start menu."
                          f"{where}", "INSTALL" if self.old is None else "UPDATE", "CANCEL",
                          "Put a shortcut on my desktop", desktop,
                          "Your cat keeps its memory and settings." if self.old else "", ai)
+
+        def _ai_changed(self, _i: int) -> None:
+            if self.plan is None:
+                return
+            key = self.ai_combo.currentData() or "none"
+            self.ai_note.setText(self.plan.describe(key))
+            self.ai_note.setVisible(True)
+            self._fit()
 
         def _working(self, text: str) -> None:
             self._screen(Pose(body="walk", eyes="open"), f"<b>{text}</b>", None, None)
@@ -701,7 +894,10 @@ def _make_window_class():  # type: ignore[no-untyped-def]
                 return
             self._busy = True
             want_box = self.box.isChecked()
-            self._want_ai = (not self.ai_box.isHidden()) and self.ai_box.isChecked()
+            self._ai_choice = (self.ai_combo.currentData() or "none") if not self.ai_combo.isHidden() else "keep"
+            if self.plan is not None:
+                self.plan.choose(self._ai_choice)
+            self._want_ai = self._ai_choice not in ("keep", "none")
             self._working("Asking a running Pixel Cat to close…")
             self._in_background(lambda: system.close_running(10.0), lambda r: self._after_close(r, want_box))
 

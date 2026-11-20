@@ -69,10 +69,12 @@ class KeyDialog(QWidget):
     removed = Signal()
     link = Signal()                      # "GET A KEY": open the provider's key page
 
-    def __init__(self, title: str, text: str, placeholder: str, has_key: bool) -> None:
+    def __init__(self, title: str, text: str, placeholder: str, has_key: bool, noun: str = "key") -> None:
         from PySide6.QtWidgets import QLineEdit
 
         super().__init__(None)
+        self.noun = noun
+        self.empty_msg, self.busy_msg = f"Paste the {noun} first.", f"Checking the {noun}…"
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
                             | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -87,11 +89,11 @@ class KeyDialog(QWidget):
         self.field.returnPressed.connect(self._save)
         self.status = QLabel("")
         self.status.setWordWrap(True)
-        self.get = QPushButton("GET A KEY")
+        self.get = QPushButton(f"GET A {noun.upper()}")
         self.save = QPushButton("SAVE")
         self.cancel = QPushButton("CANCEL")
         self.cancel.setObjectName("noBtn")
-        self.remove = QPushButton("REMOVE KEY")
+        self.remove = QPushButton(f"REMOVE {noun.upper()}")
         self.remove.setObjectName("noBtn")
         self.remove.setVisible(has_key)
         self.get.clicked.connect(self.link.emit)
@@ -114,11 +116,11 @@ class KeyDialog(QWidget):
     def _save(self) -> None:
         key = self.field.text().strip()
         if not key:
-            self.set_status("Paste the key first.", True)
+            self.set_status(self.empty_msg, True)
             return
         self.field.setEnabled(False)
         self.save.setEnabled(False)
-        self.set_status("Checking the key…")
+        self.set_status(self.busy_msg)
         self.submitted.emit(key)
 
     def checked(self, ok: bool, message: str) -> None:
@@ -156,3 +158,18 @@ class KeyDialog(QWidget):
         p = QPainter(self)
         theme.draw_pixel_panel(p, self.rect(), self.u)
         p.end()
+
+
+class AmountDialog(KeyDialog):
+    """Type an amount (a custom limit), shown as typed; the owner checks it like a key."""
+
+    def __init__(self, title: str, text: str, placeholder: str, current: str = "") -> None:
+        from PySide6.QtWidgets import QLineEdit
+
+        super().__init__(title, text, placeholder, False, noun="amount")
+        self.empty_msg, self.busy_msg = "Type an amount first.", "Checking…"
+        self.field.setEchoMode(QLineEdit.EchoMode.Normal)
+        self.field.setText(current)
+        self.field.selectAll()
+        self.get.hide()
+        self.save.setText("SET")

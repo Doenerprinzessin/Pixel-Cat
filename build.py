@@ -71,6 +71,7 @@ def main() -> int:
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--windowed",
         "--name", "PixelCat", "--add-data", f"{ROOT / 'config.json'}{os.pathsep}.",
         "--exclude-module", "tkinter", "--exclude-module", "numpy", "--distpath", str(staging),
+        "--collect-submodules", "copilot",          # GitHub's Copilot SDK (imported lazily, on first use)
     ]
     if icon is not None:
         cmd += ["--icon", str(icon)]

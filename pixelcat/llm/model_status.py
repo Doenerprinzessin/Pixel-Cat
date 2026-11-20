@@ -81,6 +81,10 @@ def start_ollama(exe: Path) -> None:
             continue
 
 
+ONLINE_ONLY = ("This PC uses an online AI (a local one would slow it down). Connect ChatGPT or Claude: "
+               "right-click me → Settings → AI model → External AI models.")
+
+
 class ModelStatus(QObject):
     changed = Signal()
 
@@ -145,6 +149,8 @@ class ModelStatus(QObject):
             return f"I can't reach Ollama at {self.cfg.ollama_url} - is it running?"
         if st == "error":
             return f"The model couldn't start: {self.error[:160]}"
+        if st == "online_only":
+            return ONLINE_ONLY
         return None
 
     def short(self) -> str:
@@ -152,7 +158,7 @@ class ModelStatus(QObject):
         if self.state == "downloading" and self.total_bytes:
             return f"downloading the AI model {int(100 * self.done_bytes / self.total_bytes)}%"
         return {"checking": "AI starting", "starting_ollama": "AI starting", "loading": "AI starting",
-                "ready": "", "unknown": ""}.get(self.state, "AI not ready")
+                "ready": "", "unknown": "", "online_only": ""}.get(self.state, "AI not ready")
 
     # ------------------------------------------------------------ the work
     def _set(self, state: str, error: str = "") -> None:
@@ -185,6 +191,9 @@ class ModelStatus(QObject):
 
         if parse(self.model):                # an external model: nothing to start or download here
             self._set("ready")
+            return
+        if getattr(cfg, "ai_mode", "local") == "online" and self.override is None:
+            self._set("online_only")         # Setup found this PC is better off without a local AI
             return
         if self.state not in ("ready",):
             self._set("checking")

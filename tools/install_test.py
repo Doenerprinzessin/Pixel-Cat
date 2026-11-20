@@ -159,9 +159,12 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("...but keeps the cat's memory unless asked", (lay.data_dir / "save.dat").exists())
     # 6) uninstall and forget everything ---------------------------------------------------
     rc = run(SETUP, "--quiet")
+    helper = lay.tools_dir / "tools" / "ant" / "ant.exe"            # (a helper the cat fetched)
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    helper.write_bytes(b"MZ")
     rc2 = run(lay.exe, "--uninstall", "--quiet", "--delete-data")
-    check("uninstalling with 'forget everything' deletes the memory and settings too",
-          rc == 0 and rc2 == 0 and not lay.data_dir.exists(), f"exits {rc}, {rc2}")
+    check("uninstalling with 'forget everything' deletes the memory and settings too (and fetched helpers)",
+          rc == 0 and rc2 == 0 and not lay.data_dir.exists() and not lay.tools_dir.exists(), f"exits {rc}, {rc2}")
     check("...and the program folder", wait(lambda: not lay.install_dir.exists(), 30))
     # 7) the same through the window's buttons (not shown on screen) ----------------------
     check("clicking INSTALL in the window installs; UNINSTALL removes it again", window_flow(lay))

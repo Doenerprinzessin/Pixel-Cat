@@ -1,7 +1,8 @@
 """Claude through Anthropic's official SDK (``anthropic``): models, sign-in, chat requests.
 
-* Credentials: the API key from keys.dat, or - no key - the sign-in of Anthropic's own
-  ``ant auth login`` (the SDK reads it by itself; Pixel Cat never touches that file).
+* Credentials: the API key from keys.dat, or Pixel Cat's own sign-in made with Anthropic's
+  ``ant`` helper (ant_tool.py) - given to the SDK as its in-memory profile config; the SDK
+  reads and renews the tokens itself.
 * Requests stream (``messages.stream``) with the cat's tools, screenshots as images, adaptive
   thinking (summaries shown as "thinking...") and ``output_config.effort``.  Each model
   accepts a different thinking setting, so a refused one steps down (and is remembered):
@@ -34,12 +35,21 @@ _learned: dict[str, dict[str, Any]] = {}      # model -> what it refused (per ru
 
 
 def client(creds: Credentials, auth: str = "key", timeout: float = 600.0) -> anthropic.Anthropic:
-    """With the saved API key (auth "key"), or the sign-in the SDK finds by itself ("signin")."""
+    """With the saved API key (auth "key"), or Pixel Cat's own Anthropic sign-in ("signin")."""
+    from . import ant_tool
+
     kw: dict[str, Any] = {"max_retries": 2, "timeout": timeout}
     if BASE_URLS.get("anthropic"):
         kw["base_url"] = BASE_URLS["anthropic"]
-    key = creds.get("anthropic_key") if auth == "key" else None
-    return anthropic.Anthropic(api_key=key, **kw) if key else anthropic.Anthropic(**kw)
+    if auth == "signin":
+        cfg = ant_tool.client_config()
+        if cfg is None:
+            raise anthropic.CredentialsError("Not signed in with Anthropic any more - sign in again.")
+        return anthropic.Anthropic(config=cfg, **kw)
+    key = creds.get("anthropic_key")
+    if not key:
+        raise anthropic.CredentialsError("No Anthropic API key saved.")
+    return anthropic.Anthropic(api_key=key, **kw)
 
 
 def _cap(caps: Any, *path: str) -> bool:
@@ -428,45 +438,12 @@ def _reset_from(exc: Exception) -> datetime | None:
 
 
 def signin_status(creds: Credentials) -> bool:
-    """Does a key-less client find a sign-in (``ant auth login``) that the API accepts?"""
+    """Is Pixel Cat's own Anthropic sign-in there, and does the API accept it?"""
     try:
-        kw: dict[str, Any] = {"max_retries": 0, "timeout": 15.0}
-        if BASE_URLS.get("anthropic"):
-            kw["base_url"] = BASE_URLS["anthropic"]
-        anthropic.Anthropic(**kw).models.list(limit=1)
+        client(creds, "signin", 15.0).with_options(max_retries=0).models.list(limit=1)
         return True
     except Exception:  # noqa: BLE001 - not signed in (or offline)
         return False
 
 
-
-def find_ant() -> str | None:
-    """Anthropic's command-line tool (``ant``) - not Apache Ant, which has the same name."""
-    import os
-    import shutil
-    import subprocess
-    from pathlib import Path
-
-    spots = [shutil.which("ant"), str(Path.home() / "go" / "bin" / "ant.exe"),
-             str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "ant" / "ant.exe")]
-    for exe in dict.fromkeys(s for s in spots if s and Path(s).is_file()):
-        try:
-            out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10,
-                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if "apache" not in (out.stdout + out.stderr).lower():
-            return exe
-    return None
-
-
-def start_signin(exe: str) -> None:
-    """``ant auth login`` in a console window of its own: the browser opens, the user signs
-    in at platform.claude.com, and the SDK finds the sign-in from then on."""
-    import subprocess
-
-    subprocess.Popen([exe, "auth", "login"], creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
-
-
-__all__ = ["AnthropicWorker", "list_models", "signin_status", "to_claude", "client", "find_ant", "start_signin",
-           "ANTHROPIC", "json"]
+__all__ = ["AnthropicWorker", "list_models", "signin_status", "to_claude", "client", "ANTHROPIC", "json"]
