@@ -12,3 +12,10 @@ setup v*.zip
 
 # local agent notes - not published
 AGENTS.md
+
+# test runs
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+test-results.xml
