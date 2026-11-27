@@ -1132,6 +1132,7 @@ class DesktopAgent:
 
 
 def control_monitor(x: int, y: int) -> tuple[int, int, int, int]:
-    from ..desktop.monitors import enumerate_monitors, monitor_at
+    from ..desktop.monitors import enumerate_monitors
+    from ..domain import monitor_at
 
     return tuple(monitor_at(enumerate_monitors(), x, y).rect)  # type: ignore[return-value]

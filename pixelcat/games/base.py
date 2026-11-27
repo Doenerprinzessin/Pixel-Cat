@@ -18,7 +18,7 @@ import math
 import random
 from typing import Any, Callable
 
-from ..desktop.windows import WinInfo
+from ..domain import WinInfo
 from ..engine.states import S
 from ..engine.surfaces import Surface, SurfaceMap
 from . import art

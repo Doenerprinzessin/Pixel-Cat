@@ -645,7 +645,8 @@ def _make_window_class():  # type: ignore[no-untyped-def]
     from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
                                    QWidget)
 
-    from .desktop.monitors import enumerate_monitors, primary
+    from .desktop.monitors import enumerate_monitors
+    from .domain import primary
     from .sprites.cat_art import Pose
     from .sprites.library import render_text
     from .ui import theme

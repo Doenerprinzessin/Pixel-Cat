@@ -22,8 +22,9 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 from . import naming, paths, persistence, progress
 from .chats import ChatStore, new_id
 from .desktop import system, win32
-from .desktop.monitors import Monitor, enumerate_monitors, monitor_at, primary
+from .desktop.monitors import enumerate_monitors
 from .desktop.windows import enumerate_windows, foreground_window, is_fullscreen_window
+from .domain import Monitor, monitor_at, primary
 from .engine.animations import all_poses
 from .engine.ballgame import BallGame
 from .engine.brain import Brain, Ctx

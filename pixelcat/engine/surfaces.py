@@ -19,8 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from ..desktop.monitors import Monitor, monitor_at
-from ..desktop.windows import WinInfo
+from ..domain import Monitor, WinInfo, monitor_at
 
 FLOOR_Z = 1_000_000
 

@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import ctypes
 import logging
-from dataclasses import dataclass
 
 from . import win32
+from ..domain.windows import WinInfo  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 
@@ -20,33 +20,6 @@ _IGNORED_CLASSES = {
     "SysShadow", "tooltips_class32", "#32768", "Shell_InputSwitchTopLevelWindow", "IME", "MSCTFIME UI",
 }
 MIN_W, MIN_H = 140, 70
-
-
-@dataclass(frozen=True)
-class WinInfo:
-    hwnd: int
-    rect: tuple[int, int, int, int]   # exact visible frame (DWM extended frame bounds)
-    z: int                             # 0 = top of the z-order
-    title: str
-    cls: str
-    maximized: bool
-    topmost: bool
-
-    @property
-    def left(self) -> int:
-        return self.rect[0]
-
-    @property
-    def top(self) -> int:
-        return self.rect[1]
-
-    @property
-    def right(self) -> int:
-        return self.rect[2]
-
-    @property
-    def bottom(self) -> int:
-        return self.rect[3]
 
 
 def enumerate_windows(own_pid: int, include: set[int] | frozenset[int] = frozenset()) -> list[WinInfo]:
