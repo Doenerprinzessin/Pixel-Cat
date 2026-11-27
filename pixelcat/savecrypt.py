@@ -19,15 +19,13 @@ import os
 import sys
 import zlib
 
+from .domain.secrets import Unreadable  # noqa: F401 - re-exported
+
 _APP_KEY = hashlib.sha256(b"Pixel Cat :3 - the Cat Pass is earned by playing, not by editing").digest()
 _ENC_KEY = hmac.new(_APP_KEY, b"encrypt", hashlib.sha256).digest()
 _MAC_KEY = hmac.new(_APP_KEY, b"sign", hashlib.sha256).digest()
 _ENTROPY = hmac.new(_APP_KEY, b"windows data protection", hashlib.sha256).digest()
 MAX_PLAIN = 8_000_000                     # bytes: no save is anywhere near this
-
-
-class Unreadable(Exception):
-    """Changed, damaged, or made for another Windows account."""
 
 
 # ------------------------------------------------------------------ Windows data protection

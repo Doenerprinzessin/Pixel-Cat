@@ -19,6 +19,7 @@ from ctypes import wintypes
 from typing import Callable, Iterator
 
 from . import win32
+from ..domain.input import MOUSE_BUTTONS
 
 u32 = win32.user32
 k32 = win32.kernel32
@@ -263,7 +264,7 @@ def _mouse_at(x: int, y: int, flag: int, data: int = 0) -> INPUT:
 MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP = 0x80, 0x100
 XBUTTON1, XBUTTON2 = 1, 2
 SM_SWAPBUTTON = 23
-BUTTONS = ("left", "right", "middle", "back", "forward")
+BUTTONS = MOUSE_BUTTONS
 
 
 def _button_flags(button: str) -> tuple[int, int, int]:

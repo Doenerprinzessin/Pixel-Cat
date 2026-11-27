@@ -4,7 +4,9 @@ from __future__ import annotations
 import pytest
 
 from llm_agent.agent_fakes import OWN_PID, el
+from pixelcat import domain
 from pixelcat.desktop import uia
+from pixelcat.llm import tools
 from pixelcat.llm.agent import Shot
 from pixelcat.llm.tools import ToolBox, ToolError
 
@@ -136,6 +138,12 @@ def test_click_element_of_a_closed_window(tb: ToolBox, desk) -> None:  # type: i
 def test_click_verbs(tb: ToolBox, args: dict, verb: str) -> None:
     a, d = prep(tb, "click", x=10, y=10, **args)
     assert a["_verb"] == verb and d == f"{verb} at 10,10 in {NP_LABEL}"
+
+
+def test_held_keys_are_the_domain_modifiers() -> None:
+    vk = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "win": 0x5B}
+    assert set(domain.MODIFIERS) == set(tools.HELD_KEYS)
+    assert {alias: vk[name] for alias, name in domain.MODIFIERS.items()} == tools.HELD_KEYS
 
 
 def test_click_held_keys_and_counts(tb: ToolBox) -> None:

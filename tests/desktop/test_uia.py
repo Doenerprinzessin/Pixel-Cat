@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from desktop.fakes import FakeCom, FakeDLL, raising, write_ptr
+from pixelcat import domain
 from pixelcat.desktop import uia
 from pixelcat.desktop.uia import Element, Snapshot
 
@@ -331,28 +332,10 @@ def test_bstrs_are_freed(com):
     assert len(com.oleaut32.VariantClear.calls) == 1
 
 
-# ---------------------------------------------------------------- Element / GUID
-@pytest.mark.parametrize("el, origin, scale, text", [
-    (Element(1, "button", "OK", (100, 100, 140, 120)), (0, 0), 1.0, "[1] button 'OK' at 120,110"),
-    (Element(2, "edit", "Name", (100, 100, 200, 120), value="Felix", focused=True), (100, 100), 0.5,
-     "[2] edit 'Name' value='Felix' (focused) at 25,5"),
-    (Element(3, "edit", "PIN", (0, 0, 10, 10), value="1234", password=True), (0, 0), 1.0,
-     "[3] edit 'PIN' (password field) at 5,5"),
-    (Element(4, "checkbox", "Agree", (0, 0, 10, 10), checked=False, enabled=False), (0, 0), 1.0,
-     "[4] checkbox 'Agree' (unchecked) (disabled) at 5,5"),
-    (Element(5, "checkbox", "", (0, 0, 10, 10), checked=True), (0, 0), 1.0, "[5] checkbox (checked) at 5,5"),
-    (Element(6, "document", "Doc", (0, 0, 10, 10), value="long text"), (0, 0), 1.0, "[6] document 'Doc' at 5,5"),
-    (Element(7, "text", "a\nb  ", (0, 0, 10, 10)), (0, 0), 1.0, "[7] text 'a b' at 5,5"),
-    (Element(8, "link", "x" * 61, (0, 0, 10, 10)), (0, 0), 1.0, "[8] link '" + "x" * 57 + "...' at 5,5"),
-    (Element(9, "edit", "", (0, 0, 10, 10), value="v" * 51 + "\n"), (0, 0), 1.0,
-     "[9] edit value='" + "v" * 50 + "...' at 5,5"),
-])
-def test_element_describe(el, origin, scale, text):
-    assert el.describe(origin, scale) == text
-
-
-def test_element_center():
-    assert Element(0, "x", "", (-10, 0, 11, 5)).center == (0, 2)
+# ---------------------------------------------------------------- Element (describe: tests/domain) / GUID
+def test_reexports_the_domain_types():
+    assert uia.Element is domain.Element
+    assert uia.Snapshot is domain.Snapshot
 
 
 def test_guid_of():

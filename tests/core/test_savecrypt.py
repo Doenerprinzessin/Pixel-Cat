@@ -7,13 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from pixelcat import savecrypt
+from pixelcat import domain, savecrypt
 
 DATA = Path(__file__).parent / "data"
 
 
 def _rand(n: int, seed: int = 7) -> bytes:
     return random.Random(seed).randbytes(n)
+
+
+def test_unreadable_is_the_domain_error() -> None:
+    assert savecrypt.Unreadable is domain.Unreadable
 
 
 # ---------------------------------------------------------------- seal / unseal

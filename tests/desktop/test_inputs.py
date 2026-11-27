@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from desktop.fakes import FakeDLL, out, raising
+from pixelcat import domain
 from pixelcat.desktop import inputs
 
 VK_CTRL, VK_SHIFT, VK_ALT, VK_WIN, VK_RETURN, VK_TAB = 0x11, 0x10, 0x12, 0x5B, 0x0D, 0x09
@@ -222,6 +223,10 @@ def test_click_moves_first_then_presses_and_releases_at_the_spot(mouse):
 def test_click_count(mouse, kwargs, clicks):
     inputs.click(5, 5, **kwargs)
     assert len(mouse_events(mouse.sent)) == 2 * clicks
+
+
+def test_buttons_are_the_domain_mouse_buttons():
+    assert inputs.BUTTONS is domain.MOUSE_BUTTONS
 
 
 @pytest.mark.parametrize("button, swapped, down, data", [

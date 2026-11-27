@@ -19,10 +19,11 @@ import re
 import shutil
 import time
 from ctypes import wintypes
-from dataclasses import dataclass
 from pathlib import Path
 
 from . import win32
+from ..domain.processes import KillPlan, Proc  # noqa: F401 - re-exported
+from ..domain.windows import _ALIASES, AppWindow, find_windows  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 
@@ -82,26 +83,6 @@ if win32.IS_WINDOWS:
 
 
 # ------------------------------------------------------------------ windows
-@dataclass(frozen=True)
-class AppWindow:
-    hwnd: int
-    title: str
-    exe: str          # e.g. "chrome.exe"
-    minimized: bool
-    maximized: bool
-    cls: str = ""
-    pid: int = 0
-
-    @property
-    def app(self) -> str:
-        return self.exe[:-4] if self.exe.lower().endswith(".exe") else self.exe
-
-    def label(self) -> str:
-        state = " (minimized)" if self.minimized else (" (maximized)" if self.maximized else "")
-        title = self.title if len(self.title) <= 60 else self.title[:57] + "..."
-        return f"{self.app}: {title}{state}"
-
-
 def process_exe(pid: int) -> str:
     h = win32.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not h:
@@ -150,36 +131,6 @@ def list_app_windows(own_pid: int) -> list[AppWindow]:
 
     win32.user32.EnumWindows(win32.WNDENUMPROC(_cb), 0)
     return out
-
-
-_ALIASES = {
-    "word": "winword", "excel": "excel", "powerpoint": "powerpnt", "outlook": "outlook", "teams": "ms-teams",
-    "edge": "msedge", "microsoft edge": "msedge", "chrome": "chrome", "google chrome": "chrome", "firefox": "firefox",
-    "vs code": "code", "vscode": "code", "visual studio code": "code", "file explorer": "explorer",
-    "explorer": "explorer", "notepad": "notepad", "spotify": "spotify", "discord": "discord", "slack": "slack",
-    "terminal": "windowsterminal", "task manager": "taskmgr", "paint": "mspaint",
-}
-
-
-def find_windows(query: str, windows: list[AppWindow]) -> list[AppWindow]:
-    """Match by app name (exe), alias, or window title - best match group first."""
-    q = query.strip().lower()
-    q = q[:-4] if q.endswith(".exe") else q
-    if not q:
-        return []
-    target = _ALIASES.get(q, q)
-    by_exe = [w for w in windows if w.app.lower() == target or (target == "ms-teams" and w.app.lower() in ("teams", "ms-teams"))]
-    if by_exe:
-        return by_exe
-    by_exe_part = [w for w in windows if target in w.app.lower()]
-    if by_exe_part:
-        return by_exe_part
-    by_title = [w for w in windows if q in w.title.lower()]
-    if by_title:
-        return by_title
-    names = {w.title.lower(): w for w in windows}
-    close = difflib.get_close_matches(q, list(names), n=3, cutoff=0.75)
-    return [names[c] for c in close]
 
 
 def close_windows(windows: list[AppWindow]) -> int:
@@ -446,13 +397,6 @@ if win32.IS_WINDOWS:
     _shell32.ShellExecuteExW.restype = wintypes.BOOL
 
 
-@dataclass(frozen=True)
-class Proc:
-    pid: int
-    ppid: int
-    exe: str
-
-
 def list_processes() -> list[Proc]:
     snap = win32.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     if not snap or snap == wintypes.HANDLE(-1).value:
@@ -479,13 +423,6 @@ def _is_critical(pid: int) -> bool:
         return bool(win32.kernel32.IsProcessCritical(h, ctypes.byref(crit)) and crit.value)
     finally:
         win32.kernel32.CloseHandle(h)
-
-
-@dataclass
-class KillPlan:
-    label: str               # what the user will see, e.g. "chrome.exe (14 processes)"
-    pids: list[int]
-    exes: list[str]
 
 
 def plan_force_end(target: str, own_pid: int) -> KillPlan:

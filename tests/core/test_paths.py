@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pixelcat import paths
+from pixelcat import domain, paths
 DOCUMENTS = "FDD39AD0-238F-46AF-ADB4-6C85480369C7"
 DESKTOP = "B4BFCC3A-DB2C-424C-B029-7FE99A87C641"
 KNOWN = {
@@ -69,6 +69,10 @@ def test_shell_folder_asks_windows_for_the_known_folder(known_folders, tmp_path:
     assert paths.shell_folder("documents") == tmp_path / "OneDrive" / "Dokumente"
     assert known_folders.asked == [DOCUMENTS]
     assert known_folders.freed == 1
+
+
+def test_known_folder_ids_cover_exactly_the_domain_folders() -> None:
+    assert tuple(paths._KNOWN_FOLDER_IDS) == domain.KNOWN_FOLDERS
 
 
 @pytest.mark.parametrize("name", sorted(KNOWN))

@@ -13,8 +13,9 @@ import ctypes
 import logging
 import os
 import shutil
-from dataclasses import dataclass, field
 from pathlib import Path
+
+from ..domain.hardware import Gpu, Hardware  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 
@@ -24,42 +25,6 @@ _NOT_A_GPU = ("basic display", "basic render", "remote display", "virtual", "hyp
 _INTEGRATED = ("intel(r) uhd", "intel(r) hd", "intel(r) iris", "intel uhd", "intel hd", "intel iris",
                "amd radeon(tm) graphics", "radeon(tm) graphics", "radeon graphics", "adreno", "qualcomm",
                "intel(r) arc(tm) graphics", "intel(r) graphics")
-
-
-@dataclass
-class Gpu:
-    name: str
-    vram_gb: float
-    integrated: bool
-
-
-@dataclass
-class Hardware:
-    ram_gb: float = 16.0
-    cores: int = 4
-    cpu: str = ""
-    avx2: bool = True
-    gpus: list[Gpu] = field(default_factory=list)
-    disk_free_gb: float = 100.0
-
-    @property
-    def gpu(self) -> Gpu | None:
-        """The graphics card that helps the AI: a dedicated one with its own memory."""
-        own = [g for g in self.gpus if not g.integrated and g.vram_gb >= 2]
-        return max(own, key=lambda g: g.vram_gb) if own else None
-
-    @property
-    def vram_gb(self) -> float:
-        g = self.gpu
-        return g.vram_gb if g else 0.0
-
-    def summary(self) -> str:
-        """'16 GB memory · NVIDIA GeForce RTX 3060 (12 GB) · 8 cores'"""
-        parts = [f"{self.ram_gb:.0f} GB memory"]
-        g = self.gpu
-        parts.append(f"{g.name} ({g.vram_gb:.0f} GB)" if g else "no graphics card for AI")
-        parts.append(f"{self.cores} cores")
-        return " · ".join(parts)
 
 
 def ram_gb() -> float:
