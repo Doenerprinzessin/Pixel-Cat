@@ -29,7 +29,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 app = QApplication(sys.argv[:1])
 from pixelcat.desktop import ledges as L  # noqa: E402
 from pixelcat.desktop.ledges import LedgeFinder, find_tops  # noqa: E402
-from pixelcat.desktop.windows import WinInfo  # noqa: E402
+from pixelcat.domain import WinInfo  # noqa: E402
 
 results: list[tuple[str, bool, str]] = []
 TEXT_Y = [190 + i * 30 for i in range(10)]     # (window-relative baselines of the paragraph)

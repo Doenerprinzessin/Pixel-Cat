@@ -18,8 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from pixelcat.desktop.monitors import Monitor  # noqa: E402
-from pixelcat.desktop.windows import WinInfo  # noqa: E402
+from pixelcat.domain import Monitor, WinInfo  # noqa: E402
 from pixelcat.engine import ballgame  # noqa: E402
 from pixelcat.engine.ballgame import BallGame  # noqa: E402
 from pixelcat.engine.brain import Brain, Ctx  # noqa: E402

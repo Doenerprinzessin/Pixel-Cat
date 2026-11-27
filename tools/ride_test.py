@@ -86,7 +86,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     from pixelcat.app import PixelCatApp
-    from pixelcat.desktop.monitors import primary
+    from pixelcat.domain import primary
     from pixelcat.engine.states import S
     from pixelcat.persistence import SavedState
     from pixelcat.settings import load_config
