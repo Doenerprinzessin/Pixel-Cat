@@ -1,0 +1,341 @@
+"""PixelCatApp: construction, start, the loops (tick, windows, monitors, fullscreen, z-order),
+saving and quitting - all with the desktop stubbed (see conftest.py)."""
+from __future__ import annotations
+
+import pytest
+
+from pixelcat import naming, progress
+from pixelcat.desktop import win32
+from pixelcat.desktop.monitors import Monitor
+from pixelcat.desktop.windows import WinInfo
+from pixelcat.engine.states import S
+from pixelcat.persistence import SavedState
+from pixelcat.ui import theme
+
+pytestmark = pytest.mark.qt
+
+
+class FakeQApp:
+    def __init__(self) -> None:
+        self.quits = 0
+
+    def quit(self) -> None:
+        self.quits += 1
+
+
+def _win(hwnd: int, rect: tuple[int, int, int, int], z: int = 0) -> WinInfo:
+    return WinInfo(hwnd, rect, z, f"Window {hwnd}", "TestClass", False, False)
+
+
+# ---------------------------------------------------------------- construction
+def test_construction_wires_the_parts_without_starting_anything(pet, app_env) -> None:  # type: ignore[no-untyped-def]
+    assert [m.device for m in pet.monitors] == ["TEST1"]
+    assert pet.menu.title == "PIXEL CAT" and pet.model_menu.title == "MODEL FOR THIS CHAT"
+    assert pet.chat is None and pet.mini is None and pet.worker is None and pet.history == []
+    assert pet.brain.game is pet.game and pet.game.on_end == pet._game_ended
+    assert not any(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer,
+                                          pet.save_timer, pet.top_timer, pet.tray_timer, pet.quit_timer))
+    assert pet.tick_timer.interval() == 1000 // pet.t.fps_active
+    assert app_env.desktop.calls == [] and app_env.ensures == []
+    assert not pet.overlay.isVisible()
+
+
+def test_locked_cosmetics_in_the_save_fall_back(make_app) -> None:  # type: ignore[no-untyped-def]
+    locked_skin = next(k for k in progress.SKINS if not progress.is_unlocked(0, "skin", k))
+    locked_hat = next(k for k in progress.HATS if not progress.is_unlocked(0, "hat", k))
+    pet = make_app(SavedState(autostart_asked=True, skin=locked_skin, hat=locked_hat))
+    assert (pet.saved.skin, pet.saved.hat) == ("charcoal", "")
+    assert pet.sprites.skin.key == "charcoal" and pet.overlay.hat == ""
+
+
+def test_the_saved_look_and_name_are_applied(make_app) -> None:  # type: ignore[no-untyped-def]
+    pet = make_app(SavedState(autostart_asked=True, ui_style="midnight", ui_accent="teal", cat_name="Mochi"))
+    assert theme.current().key == "midnight" and theme.choice("accent") == "teal"
+    assert naming.custom() == "Mochi" and pet.menu.title == "MOCHI"
+    assert "Find Mochi" in [a.text() for a in pet.tray.menu.actions()]
+
+
+def test_offline_time_changes_the_needs(make_app) -> None:  # type: ignore[no-untyped-def]
+    import time
+
+    pet = make_app(SavedState(autostart_asked=True, hunger=0.1, last_seen=time.time() - 6 * 3600))
+    assert pet.needs.hunger > 0.1
+
+
+@pytest.mark.parametrize(("dpi", "override", "scale"), [(96, 0, 3), (120, 0, 4), (144, 0, 4), (192, 0, 6),
+                                                       (96, 2.4, 2), (192, 5, 5)])
+def test_scale_for(pet, dpi: int, override: float, scale: int) -> None:  # type: ignore[no-untyped-def]
+    pet.cfg.pixel_scale_override = override
+    assert pet.scale_for(Monitor(1, (0, 0, 10, 10), (0, 0, 10, 10), dpi, True, "x")) == scale
+
+
+def test_ui_unit_follows_the_size_setting(pet) -> None:  # type: ignore[no-untyped-def]
+    mon = pet.monitors[0]
+    assert pet.ui_unit(mon) == 2
+    theme.configure(size="huge")
+    assert pet.ui_unit(mon) == 3
+
+
+# ---------------------------------------------------------------- start
+def test_start_shows_the_cat_and_starts_the_timers(pet, app_env) -> None:  # type: ignore[no-untyped-def]
+    pet.start()
+    hwnd = pet.overlay.hwnd()
+    assert pet.overlay.isVisible() and hwnd and pet.agent.overlay_hwnd == hwnd
+    assert ("make_tool_noactivate", hwnd) in app_env.desktop.calls
+    assert all(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer, pet.save_timer,
+                                       pet.top_timer, pet.tray_timer, pet.quit_timer))
+    assert pet.brain.state == S.SITTING
+    assert pet.brain.x == 1920 - 160 and pet.brain.smap is not None
+    assert app_env.ensures == []                            # (warm_model=False: the AI isn't loaded)
+
+
+def test_start_quiet_and_at_the_saved_place(make_app) -> None:  # type: ignore[no-untyped-def]
+    pet = make_app(SavedState(autostart_asked=True, quiet=True, pos_x=500, pos_y=1039))
+    pet.start()
+    assert pet.brain.state == S.LOAFING and pet.brain.x == 500
+
+
+def test_a_saved_place_off_every_screen_is_ignored(make_app) -> None:  # type: ignore[no-untyped-def]
+    pet = make_app(SavedState(autostart_asked=True, pos_x=-9000, pos_y=200))
+    pet.start()
+    assert pet.brain.x == 1920 - 160
+
+
+def test_selftest_finishes_by_itself_without_asking(make_app, qtbot, app_env) -> None:  # type: ignore[no-untyped-def]
+    pet = make_app(SavedState(autostart_asked=False), selftest=0.01)
+    finished: list[bool] = []
+    pet._selftest_finish = lambda: finished.append(True)
+    pet.start(warm_model=True)
+    assert not pet.quit_timer.isActive()                    # (a selftest is not the installed instance)
+    qtbot.waitUntil(lambda: finished == [True], timeout=2000)
+    assert app_env.ensures == [] and not hasattr(pet, "_dialog")
+
+
+# ---------------------------------------------------------------- the loops
+@pytest.fixture
+def started(pet):  # type: ignore[no-untyped-def]
+    pet.start()
+    for tm in pet.findChildren(type(pet.tick_timer)):
+        tm.stop()
+    errors: list[str] = []
+    pet.rl.exception = lambda key, msg, *a: errors.append(f"{key}: {msg}")
+    pet.errors = errors
+    return pet
+
+
+def test_ticks_run_the_cat(started, app_env) -> None:  # type: ignore[no-untyped-def]
+    pet = started
+    clock = pet.brain.clock
+    for _ in range(40):
+        pet._last_tick -= 0.05
+        pet._tick()
+    assert pet.errors == []
+    assert pet.brain.clock > clock
+    assert pet.tick_timer.interval() == 1000 // pet.brain.fps_hint()
+
+
+def test_ticks_with_the_ball_game(started) -> None:  # type: ignore[no-untyped-def]
+    pet = started
+    pet.saved.tutorials_seen.append("ball")
+    pet.start_minigame("ball")
+    assert pet.game.active and pet._running_game() == "ball"
+    for _ in range(30):
+        pet._last_tick -= 1 / 60
+        pet._tick()
+    assert pet.errors == [] and pet.ball_win.isVisible()
+    assert pet.tick_timer.interval() == 1000 // pet.t.fps_game
+    pet._on_menu("stopgame")
+    assert not pet.game.active and pet.saved.plays == 1
+
+
+def test_a_tick_while_hidden_only_slows_down(started) -> None:  # type: ignore[no-untyped-def]
+    pet = started
+    pet.hidden_fullscreen = True
+    clock = pet.brain.clock
+    pet._tick()
+    assert pet.brain.clock == clock and pet.tick_timer.interval() == 1000 // pet.t.fps_hidden
+
+
+def test_window_refresh_builds_the_world_from_the_windows(started, app_env) -> None:  # type: ignore[no-untyped-def]
+    pet = started
+    app_env.desktop.windows = [_win(101, (100, 300, 900, 800))]
+    pet._refresh_windows()
+    assert pet.errors == []
+    assert [w.hwnd for w in pet._real_wins] == [101] and 101 in pet.brain.win_rects
+    assert any(s.hwnd == 101 for s in pet.brain.smap.surfaces)
+
+
+def test_a_new_window_next_to_the_cat_startles_it(started, app_env) -> None:  # type: ignore[no-untyped-def]
+    pet = started
+    pet._refresh_windows()
+    b = pet.brain
+    startled: list[bool] = []
+    b.startle = lambda: startled.append(True)
+    x, y = int(b.x), int(b.y)
+    app_env.desktop.windows = [_win(202, (x + 20, y - 400, x + 500, y - 120))]
+    pet._refresh_windows()
+    app_env.desktop.windows.append(_win(303, (0, 0, 50, 50), 1))
+    pet._refresh_windows()
+    assert startled == [True]
+
+
+def test_hidden_during_fullscreen_apps_and_back(started, app_env) -> None:  # type: ignore[no-untyped-def]
+    pet = started
+    pet._ensure_chat().show_near(pet.overlay.cat_rect(), pet.monitors[0].work, 2, activate=False)
+    app_env.desktop.notification_state = win32.QUNS_RUNNING_D3D_FULL_SCREEN
+    pet._check_fullscreen()
+    assert pet.hidden_fullscreen and not pet.overlay.isVisible() and not pet.chat.isVisible()
+    app_env.desktop.notification_state = 5
+    pet._check_fullscreen()
+    assert not pet.hidden_fullscreen and pet.overlay.isVisible() and pet.chat.isVisible()
+    assert pet.errors == []
+
+
+@pytest.mark.parametrize(("presentations", "hides"), [(True, True), (False, False)])
+def test_presentation_mode(started, app_env, presentations: bool, hides: bool) -> None:  # type: ignore[no-untyped-def]
+    started.cfg.hide_during_presentations = presentations
+    app_env.desktop.notification_state = win32.QUNS_PRESENTATION_MODE
+    started._check_fullscreen()
+    assert started.hidden_fullscreen is hides
+
+
+def test_a_fullscreen_foreground_window_of_another_app_hides_the_cat(started, app_env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    app_env.desktop.foreground, app_env.desktop.fullscreen = 77, True
+    started._check_fullscreen()
+    assert started.hidden_fullscreen
+    monkeypatch.setattr(win32, "window_pid", lambda hwnd: started.own_pid)      # our own window: not hidden
+    started._check_fullscreen()
+    assert not started.hidden_fullscreen
+
+
+def test_menus_and_popups_are_closed_while_hidden(started, app_env) -> None:  # type: ignore[no-untyped-def]
+    pet = started
+    pet._open_menu()
+    assert pet.menu.isVisible()
+    pet._set_hidden(True)
+    assert not pet.menu.isVisible()
+    pet._open_menu()
+    assert not pet.menu.isVisible()                    # (nothing opens while hidden)
+    pet._set_hidden(False)
+
+
+def test_a_new_monitor_layout_is_picked_up(started, app_env) -> None:  # type: ignore[no-untyped-def]
+    pet = started
+    new = Monitor(2, (-2560, 0, 0, 1440), (-2560, 0, 0, 1400), 144, True, "TEST2")
+    app_env.desktop.monitors = [new]
+    pet._refresh_monitors()
+    assert pet.monitors == [new] and pet.errors == []
+    assert -2560 <= pet.brain.x < 0                    # the cat was put on the remaining screen
+    n = len(pet.brain.win_rects)
+    pet._refresh_monitors()
+    assert pet.monitors == [new] and len(pet.brain.win_rects) == n
+
+
+def test_keep_on_top(started, app_env) -> None:  # type: ignore[no-untyped-def]
+    started._keep_on_top()
+    assert ("keep_topmost", started.overlay.hwnd()) in app_env.desktop.calls
+
+
+def test_the_window_under_the_cat_is_followed(started, app_env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    pet = started
+    app_env.desktop.windows = [_win(404, (200, 600, 1400, 1000))]
+    pet._refresh_windows()
+    rides: list[tuple] = []
+    monkeypatch.setattr(pet.brain, "ride_window", lambda hwnd, rect: rides.append((hwnd, rect)))
+    surf = next(s for s in pet.brain.smap.surfaces if s.hwnd == 404)
+    pet.brain.mode, pet.brain.surf = "ground", surf
+    pet._ride_window()                                  # (the fake user32 says: no such window)
+    assert rides == [(404, None)] and pet._ledge_t == 0.0
+
+
+def test_tray_status(started) -> None:  # type: ignore[no-untyped-def]
+    started._sync_tray()
+    assert started.tray.toolTip().startswith("Pixel Cat - ")
+    started.brain.set_paused(True)
+    started._sync_tray()
+    assert [a.text() for a in started.tray.menu.actions()][0] == "Resume"
+
+
+def test_the_tick_survives_errors(started) -> None:  # type: ignore[no-untyped-def]
+    def boom(dt, ctx):  # type: ignore[no-untyped-def]
+        raise ValueError("bad frame")
+
+    started.brain.update = boom
+    started._tick()
+    assert started.errors == ["tick: update loop error"]
+
+
+# ---------------------------------------------------------------- saving and quitting
+def test_save_writes_the_cats_state(pet, app_env) -> None:  # type: ignore[no-untyped-def]
+    pet.needs.energy, pet.quiet = 0.33, True
+    pet.brain.mode, pet.brain.x, pet.brain.y = "ground", 640.4, 1039.0
+    pet.save()
+    st = app_env.saved_states[-1]
+    assert st is pet.saved
+    assert (st.energy, st.quiet, st.pos_x, st.pos_y, st.watches) == (0.33, True, 640, 1039, [])
+
+
+def test_quit_saves_stops_and_hides_everything(pet, app_env) -> None:  # type: ignore[no-untyped-def]
+    pet.start()
+    pet.qapp = FakeQApp()
+    pet._ensure_chat().show()
+    pet.quit()
+    assert pet._quitting and pet.qapp.quits == 1 and app_env.saved_states
+    assert not any(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer,
+                                          pet.save_timer))
+    assert not pet.overlay.isVisible() and not pet.chat.isVisible() and not pet.ball_win.isVisible()
+    assert pet.agent.cancel.is_set() and pet.watches._stop.is_set() and pet.model_status._stop.is_set()
+
+
+def test_quit_still_quits_when_saving_fails(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    pet.qapp = FakeQApp()
+
+    def broken() -> None:
+        raise OSError("disk full")
+
+    pet.save = broken
+    with pytest.raises(OSError):
+        pet.quit()
+    assert pet.qapp.quits == 1
+
+
+def test_quit_from_the_menu_and_the_quit_request(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from pixelcat.desktop import system
+
+    pet.qapp = FakeQApp()
+    pet._on_menu("quit")
+    assert pet.qapp.quits == 1
+    monkeypatch.setattr(system, "quit_requested", lambda handle: True)
+    pet._check_quit_request()
+    assert pet.qapp.quits == 2
+
+
+def test_autostart_question(pet, app_env) -> None:  # type: ignore[no-untyped-def]
+    pet.saved.autostart_asked = False
+    pet._ask_autostart()
+    assert pet._dialog.isVisible()
+    pet._dialog.yes.click()
+    assert pet.saved.autostart_asked and app_env.autostart_set == [True] and app_env.saved_states
+
+
+def test_looking_inside_windows_for_ledges(make_app, app_env) -> None:  # type: ignore[no-untyped-def]
+    from pixelcat.settings import Config
+
+    cfg = Config()
+    cfg.explore_windows = True
+    pet = make_app(cfg=cfg)
+    searches: list[tuple] = []
+    pet.ledges.start = lambda wins, area, own, min_len, scale: searches.append(  # type: ignore[method-assign]
+        ([w.hwnd for w in wins], area, min_len, scale)) or True          # (no screen capture thread)
+    pet.start()
+    searches.clear()
+    app_env.desktop.windows = [_win(505, (100, 200, 1000, 900)), _win(606, (3000, 0, 3500, 500), 1)]
+    pet.brain.mode, pet.brain.ride_t = "ground", 0.0
+    pet.brain.set_state(S.SITTING, travel=False)
+    pet._ledge_t = -100.0
+    pet._refresh_windows()
+    assert searches == [([505, 606], (0, 0, 1920, 1040), 16 * 3, 3)]
+    pet._refresh_windows()
+    assert len(searches) == 1                           # (not again right away)
+    pet._on_menu("explore")
+    assert not pet.cfg.explore_windows and pet.ledges.wins == {}
