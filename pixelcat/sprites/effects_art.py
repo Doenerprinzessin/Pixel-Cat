@@ -131,6 +131,7 @@ ICONS: dict[str, list[str]] = {
     "bolt_off": ["    g  ", "   gg  ", "  gg   ", " ggggg ", "   gg  ", "  gg   ", "  g    "],
     "plus": ["   w   ", "   w   ", "   w   ", "wwwwwww", "   w   ", "   w   ", "   w   "],
     "close": ["w     w", " w   w ", "  w w  ", "   w   ", "  w w  ", " w   w ", "w     w"],
+    "history": ["  www  ", " w   w ", "w  w  w", "w  ww w", "w     w", " w   w ", "  www  "],   # chat: saved chats
     "full": ["wwwwwww", "wwwwwww", "w     w", "w     w", "w     w", "w     w", "wwwwwww"],      # chat: fullscreen
     "unfull": ["  wwwww", "  wwwww", "wwwww w", "wwwww w", "w   www", "w   w  ", "wwwww  "],     # ...and back
     "send": ["w      ", "ww     ", "wwww   ", "wwwwww ", "wwww   ", "ww     ", "w      "],

@@ -115,6 +115,10 @@ class ChatWindow(QWidget):
     auto_toggled = Signal()
     watch_cancel_requested = Signal(int)
     layout_changed = Signal()               # the user resized it or switched fullscreen (to be saved)
+    history_toggled = Signal()              # the clock button: show / hide the saved chats
+    history_open = Signal(str)              # a saved chat to reopen (its id)
+    history_delete = Signal(str)
+    history_delete_all = Signal()
 
     SIZE_U = (175.0, 225.0)                 # the usual size, in art pixels
     MIN_U = (150.0, 160.0)
@@ -212,12 +216,32 @@ class ChatWindow(QWidget):
         self.model_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.model_btn.clicked.connect(self.model_menu_requested.emit)
         self._model_temp = False
+        # the saved chats (the clock button): a search field and the list, in place of the messages
+        self._hist_on = False
+        self._hist_items: list = []                 # chats.ChatInfo, model = its label
+        self._hist_current: str | None = None
+        self._hist_confirm = ""                     # a chat id ("delete?" asked) or "*" (delete all?)
+        self.hist_panel = QFrame()
+        self.hist_search = QLineEdit()
+        self.hist_search.setPlaceholderText("Search your chats…")
+        self.hist_search.textChanged.connect(lambda _t: self._render_history())
+        self.hist_view = QTextBrowser()
+        self.hist_view.setOpenExternalLinks(False)
+        self.hist_view.setOpenLinks(False)
+        self.hist_view.anchorClicked.connect(self._history_link)
+        self.hist_view.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        hl = QVBoxLayout(self.hist_panel)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.addWidget(self.hist_search)
+        hl.addWidget(self.hist_view, 1)
+        self.hist_panel.hide()
         row = QHBoxLayout()
         row.addWidget(self.input, 1)
         row.addWidget(self.model_btn)
         row.addWidget(self.send_btn)
         self.lay = QVBoxLayout(self)
         self.lay.addWidget(self.view, 1)
+        self.lay.addWidget(self.hist_panel, 1)
         self.lay.addWidget(self.model_bar)
         self.lay.addWidget(self.watch_bar)
         self.lay.addWidget(self.confirm)
@@ -225,7 +249,8 @@ class ChatWindow(QWidget):
         self.lay.addLayout(row)
         self._grips = {side: _Grip(self, side) for side in "tblr"}     # (on top of everything else)
         self.apply_scale(2)
-        QShortcut(QKeySequence("Ctrl+N"), self, activated=self.new_chat_requested.emit)
+        QShortcut(QKeySequence("Ctrl+N"), self, activated=lambda: (self.hide_history(), self.new_chat_requested.emit()))
+        QShortcut(QKeySequence("Ctrl+H"), self, activated=self.history_toggled.emit)
         QShortcut(QKeySequence("F11"), self, activated=self.toggle_fullscreen)
         self.setToolTip("")
         self._flush()
@@ -251,6 +276,7 @@ class ChatWindow(QWidget):
             self.set_watches(self._watch_items)
         self.lay.setContentsMargins(5 * u, (7 + 8) * u, 6 * u, 6 * u)
         self.lay.setSpacing(3 * u)
+        self.hist_panel.layout().setSpacing(3 * u)
         if self._full:
             self.setGeometry(self._screen_area())
         else:
@@ -421,6 +447,7 @@ class ChatWindow(QWidget):
             auto = theme.text_pixmap("AUTO", u, QColor(theme.current().on_accent))
             p.drawPixmap(self._auto_rect().x() - auto.width() - 2 * u, (bar_h - auto.height()) // 2 + u // 2, auto)
         p.drawPixmap(self._auto_rect().topLeft(), self.sprites.icon("bolt_on" if self.auto_mode else "bolt_off", u))
+        p.drawPixmap(self._hist_rect().topLeft(), self.sprites.icon("history", u))
         p.drawPixmap(self._new_rect().topLeft(), self.sprites.icon("plus", u))
         p.drawPixmap(self._full_rect().topLeft(), self.sprites.icon("unfull" if self._full else "full", u))
         p.drawPixmap(self._close_rect().topLeft(), self.sprites.icon("close", u))
@@ -433,10 +460,11 @@ class ChatWindow(QWidget):
         room = self._auto_rect().x() - 2 * u - 15 * u
         if self.auto_mode:
             room -= theme.text_size("AUTO", u)[0] + 2 * u
-        for text in ([f"{name} CHAT", name] if name else ["MEOW CHAT", "CHAT"]):
+        for text in (["CHAT HISTORY", "HISTORY"] if self._hist_on else
+                     [f"{name} CHAT", name] if name else ["MEOW CHAT", "CHAT"]):
             if theme.text_size(text, u)[0] <= room:
                 return text
-        t = name or "CHAT"
+        t = "HISTORY" if self._hist_on else name or "CHAT"
         while len(t) > 1 and theme.text_size(t + "..", u)[0] > room:
             t = t[:-1]
         return t.rstrip() + ".."
@@ -449,9 +477,13 @@ class ChatWindow(QWidget):
         u = self.u
         return QRect(self.width() - 28 * u, 3 * u, 9 * u, 9 * u)
 
-    def _auto_rect(self):  # type: ignore[no-untyped-def]
+    def _hist_rect(self) -> QRect:
         u = self.u
         return QRect(self.width() - 54 * u, 3 * u, 9 * u, 9 * u)
+
+    def _auto_rect(self):  # type: ignore[no-untyped-def]
+        u = self.u
+        return QRect(self.width() - 67 * u, 3 * u, 9 * u, 9 * u)
 
     def set_auto_mode(self, on: bool) -> None:
         self.auto_mode = on
@@ -531,7 +563,11 @@ class ChatWindow(QWidget):
             self.toggle_fullscreen()
             return
         if self._new_rect().contains(pos):
+            self.hide_history()
             self.new_chat_requested.emit()
+            return
+        if self._hist_rect().contains(pos):
+            self.history_toggled.emit()
             return
         if self._auto_rect().contains(pos):
             self.auto_toggled.emit()
@@ -542,7 +578,7 @@ class ChatWindow(QWidget):
     def mouseDoubleClickEvent(self, e: QMouseEvent) -> None:
         """A double click on the title bar: fullscreen and back (like a window's maximize)."""
         pos = e.position().toPoint()
-        buttons = (self._close_rect(), self._full_rect(), self._new_rect(), self._auto_rect())
+        buttons = (self._close_rect(), self._full_rect(), self._new_rect(), self._hist_rect(), self._auto_rect())
         if pos.y() <= 14 * self.u and not any(r.contains(pos) for r in buttons):
             self._drag = None
             self.toggle_fullscreen()
@@ -556,7 +592,9 @@ class ChatWindow(QWidget):
 
     def keyPressEvent(self, e: QKeyEvent) -> None:
         if e.key() == Qt.Key.Key_Escape:
-            if self._busy:
+            if self._hist_on:
+                self.hide_history()
+            elif self._busy:
                 self.stop_requested.emit()
             else:
                 self.hide()
@@ -567,6 +605,130 @@ class ChatWindow(QWidget):
         e.ignore()
         self.hide()
 
+    # ------------------------------------------------------------- saved chats
+    @property
+    def history_shown(self) -> bool:
+        return self._hist_on
+
+    def show_history(self, items: list, current: str | None) -> None:
+        """The saved chats (newest first) in place of the messages; ``current`` = the open one."""
+        self._hist_items, self._hist_current, self._hist_confirm = list(items), current, ""
+        if not self._hist_on:
+            self._hist_on = True
+            self.hist_search.blockSignals(True)
+            self.hist_search.clear()
+            self.hist_search.blockSignals(False)
+            self.view.hide()
+            self.hist_panel.show()
+            self.update()
+        self._render_history()
+        if self.isVisible():
+            self.hist_search.setFocus()
+
+    def set_history(self, items: list, current: str | None) -> None:
+        """The list changed (a chat deleted): shown again, the search stays."""
+        self._hist_items, self._hist_current, self._hist_confirm = list(items), current, ""
+        self._render_history()
+
+    def hide_history(self) -> None:
+        if not self._hist_on:
+            return
+        self._hist_on = False
+        self.hist_panel.hide()
+        self.view.show()
+        self.update()
+        if self.isVisible() and self.input.isEnabled():
+            self.input.setFocus()
+
+    @staticmethod
+    def _when(t: float) -> str:
+        from datetime import datetime, timedelta
+
+        d = datetime.fromtimestamp(t)
+        today = datetime.now().date()
+        if d.date() == today:
+            return f"Today {d:%H:%M}"
+        if d.date() == today - timedelta(days=1):
+            return f"Yesterday {d:%H:%M}"
+        return f"{d:%d %b %H:%M}" if d.year == today.year else f"{d:%d %b %Y}"
+
+    def _render_history(self) -> None:
+        st = theme.current()
+        px = self.small_px
+        q = " ".join(self.hist_search.text().lower().split())
+        items = [i for i in self._hist_items if not q or q in i.title.lower() or q in i.find]
+        n = len(self._hist_items)
+        a = f"text-decoration:none;color:{st.link}"
+        if self._hist_confirm == "*":
+            top = (f'Delete all {n} saved chat{"s" if n != 1 else ""}? This can\'t be undone. '
+                   f'<a href="delall:yes" style="{a}"><b>yes, delete them</b></a> &nbsp; '
+                   f'<a href="delall:no" style="{a}">no</a>')
+        else:
+            top = f'<a href="back:" style="{a}">← back to the chat</a>'
+            if n:
+                top += (f' &nbsp;·&nbsp; {n} saved chat{"s" if n != 1 else ""} &nbsp;·&nbsp; '
+                        f'<a href="delall:ask" style="text-decoration:none;color:{st.muted}">delete all</a>')
+        parts = [f'<p style="color:{st.text};font-size:{px}px">{top}</p>']
+        if not self._hist_items:
+            parts.append(f'<p style="color:{st.muted}">No saved chats yet - every chat lands here once you\'ve '
+                         'talked to me.</p>')
+        elif not items:
+            parts.append(f'<p style="color:{st.muted}">No chat matches “{html.escape(q)}”.</p>')
+        for it in items:
+            cur = it.id == self._hist_current
+            bg = st.user_bubble if cur else st.cat_bubble
+            meta = [self._when(it.updated), f"{it.count} message{'s' if it.count != 1 else ''}"]
+            if it.model:
+                meta.append(html.escape(it.model))
+            if cur:
+                meta.append("open now")
+            if self._hist_confirm == it.id:
+                act = (f'<a href="del:{it.id}:yes" style="text-decoration:none;color:{st.accent}"><b>delete?</b></a>'
+                       f' &nbsp;<a href="del:{it.id}:no" style="{a}">no</a>')
+            else:
+                act = f'<a href="del:{it.id}" style="text-decoration:none;color:{st.muted}">delete</a>'
+            parts.append(
+                f'<table width="100%" cellspacing="0" cellpadding="6"><tr><td bgcolor="{bg}">'
+                f'<a href="open:{it.id}" style="text-decoration:none;color:{st.text}"><b>{html.escape(it.title)}</b></a>'
+                f'<br><span style="color:{st.muted};font-size:{px}px">{" · ".join(meta)}</span></td>'
+                f'<td bgcolor="{bg}" align="right" valign="middle" style="white-space:nowrap">'
+                f'<span style="font-size:{px}px;white-space:nowrap">{act}</span></td></tr></table>'
+                '<p style="margin:0;font-size:4px">&nbsp;</p>')
+        sb = self.hist_view.verticalScrollBar()
+        keep = sb.value()
+        self.hist_view.setHtml("".join(parts))
+        sb.setValue(min(keep, sb.maximum()))
+
+    def _history_link(self, url: QUrl) -> None:
+        kind, _sep, rest = url.toString().partition(":")
+        if kind == "back":
+            self.hide_history()
+        elif kind == "open":
+            self.history_open.emit(rest)
+        elif kind == "del":
+            cid, _s, ans = rest.partition(":")
+            self._hist_confirm = "" if ans else cid
+            if ans == "yes":
+                self.history_delete.emit(cid)
+            else:
+                self._render_history()
+        elif kind == "delall":
+            self._hist_confirm = "*" if rest == "ask" else ""
+            if rest == "yes":
+                self.history_delete_all.emit()
+            else:
+                self._render_history()
+
+    def load(self, msgs: list[tuple[str, str]]) -> None:
+        """Show a saved chat (role, text) in place of this one."""
+        self._confirm_cb = None
+        self.confirm.hide()
+        self.drop_choice()
+        self.msgs = [Msg(r, t) for r, t in msgs] or [Msg("cat", GREETING)]
+        self.set_busy(False)
+        self.hide_history()
+        self._reset_view()
+
     # ------------------------------------------------------------- messages
     def _send(self) -> None:
         if self._busy:  # the button reads STOP while the cat is working
@@ -575,6 +737,7 @@ class ChatWindow(QWidget):
         text = self.input.text().strip()
         if not text or self._confirm_cb is not None:
             return
+        self.hide_history()
         self.input.clear()
         self.add("user", text)
         self.send_requested.emit(text)

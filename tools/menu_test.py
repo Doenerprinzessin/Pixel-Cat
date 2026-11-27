@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -180,6 +181,191 @@ def name_and_chat_checks(pet, m, row) -> None:  # type: ignore[no-untyped-def]  
           and small.size_u == ChatWindow.MIN_U and small.is_full)
     for w in (other, odd, small):
         w.deleteLater()
+
+
+def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # noqa: C901 - linear checks
+    """The chat history (its own folder in build\\, never the real one) and the chat's effort."""
+    import shutil
+
+    from PySide6.QtCore import QPointF, QUrl
+    from PySide6.QtGui import QMouseEvent
+
+    from pixelcat import chats as chats_mod
+    from pixelcat.chats import ChatStore
+
+    folder = ROOT / "build" / "chathisttest"
+    shutil.rmtree(folder, ignore_errors=True)
+    pet.chats = ChatStore(folder)
+    chat = pet._ensure_chat()
+    chat.hide_history()
+    pet.new_chat()
+    pet.history[:] = [
+        {"role": "user", "content": "Plan my trip to Rome please"},
+        {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "look_at_screen", "arguments": {}}}],
+         "raw": [{"type": "thinking", "signature": "abc"}]},
+        {"role": "tool", "content": "Screenshot of the screen.", "tool_name": "look_at_screen", "images": ["iVBORw0"]},
+        {"role": "assistant", "content": "Here is your Rome plan: the Colosseum first."}]
+    chat.add("user", "Plan my trip to Rome please")
+    chat.add("info", "👀 Looked at the screen")
+    chat.add("cat", "Here is your Rome plan: the Colosseum first.")
+    pet.chat_effort = "high"
+    pet._store_chat()
+    idx = pet.chats.index()
+    files = list(folder.glob("*.chat"))
+    raw = files[0].read_bytes() if files else b""
+    check("a chat is saved: titled with the first question, the effort with it",
+          len(idx) == 1 and idx[0].title == "Plan my trip to Rome please" and idx[0].count == 1 and len(files) == 1,
+          str(idx[:1]))
+    check("...encrypted (the file doesn't show what was said)", raw and b"Rome" not in raw and "Rome".encode(
+        "utf-16-le") not in raw)
+    cid = idx[0].id
+    data = pet.chats.load(cid) or {}
+    hist = data.get("history") or []
+    check("...without screenshots or a model's replay blocks; the greeting isn't kept",
+          len(hist) == 4 and "images" not in hist[2] and "not kept" in hist[2]["content"] and "raw" not in hist[1]
+          and data.get("chat_effort") == "high" and [m[0] for m in data.get("msgs", [])] == ["user", "info", "cat"])
+    pet._store_chat()
+    check("an unchanged chat isn't written again", files[0].read_bytes() == raw)
+    pet.new_chat()
+    check("a new chat: the old one stays saved, the effort goes back to the default",
+          pet.history == [] and pet._chat_id is None and pet.chat_effort is None and len(pet.chats.index()) == 1)
+    chat.mousePressEvent(QMouseEvent(QMouseEvent.Type.MouseButtonPress, QPointF(chat._hist_rect().center()),
+                                     QPointF(chat.mapToGlobal(chat._hist_rect().center())), Qt.MouseButton.LeftButton,
+                                     Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+    shown = chat.hist_view.toPlainText()
+    check("the clock button shows the saved chats (title, when, how many messages)",
+          chat.history_shown and "Plan my trip to Rome please" in shown and "1 message" in shown
+          and chat._title_text() == "CHAT HISTORY" and not chat.view.isVisibleTo(chat), shown[:120])
+    chat.hist_search.setText("colosseum")
+    found = "Plan my trip" in chat.hist_view.toPlainText()
+    chat.hist_search.setText("zebra")
+    check("search finds a chat by what was said in it", found and "No chat matches" in chat.hist_view.toPlainText())
+    chat.hist_search.setText("")
+    chat._history_link(QUrl(f"open:{cid}"))
+    check("clicking a chat reopens it: the messages, what the AI remembers, its effort",
+          pet._chat_id == cid and len(pet.history) == 4 and pet.chat_effort == "high" and not chat.history_shown
+          and [m.role for m in chat.msgs][:3] == ["user", "info", "cat"] and "remember it" in chat.msgs[-1].text,
+          str([(m.role, m.text[:30]) for m in chat.msgs]))
+    before = files[0].read_bytes()
+    pet._store_chat()
+    check("only opening it doesn't change it (it keeps its place in the list)", files[0].read_bytes() == before)
+    pet.history.append({"role": "user", "content": "And Florence?"})
+    chat.add("user", "And Florence?")
+    pet._store_chat()
+    idx = pet.chats.index()
+    check("talking on: the same chat is updated, not a new one", len(idx) == 1 and idx[0].id == cid
+          and idx[0].count == 2)
+    pet.new_chat()
+    pet.history[:] = [{"role": "user", "content": "What's 2+2?"}, {"role": "assistant", "content": "4"}]
+    chat.add("user", "What's 2+2?")
+    chat.add("cat", "4")
+    pet._store_chat()
+    cid2 = pet._chat_id
+    idx = pet.chats.index()
+    check("a second chat: the newest first", [i.id for i in idx] == [cid2, cid])
+    pet._local_command("/history")
+    chat._history_link(QUrl(f"del:{cid}"))
+    asked = "delete?" in chat.hist_view.toPlainText() and len(pet.chats.index()) == 2
+    chat._history_link(QUrl(f"del:{cid}:yes"))
+    check("/history; delete asks once more, then the chat is gone (the open one stays)",
+          chat.history_shown and asked and [i.id for i in pet.chats.index()] == [cid2] and pet._chat_id == cid2)
+    chat._history_link(QUrl(f"del:{cid2}"))
+    chat._history_link(QUrl(f"del:{cid2}:yes"))
+    check("deleting the open chat starts a fresh one", pet.chats.index() == [] and pet.history == []
+          and pet._chat_id is None and chat.history_shown and "No saved chats yet" in chat.hist_view.toPlainText())
+    for q in ("One?", "Two?"):
+        pet.new_chat()
+        pet.history[:] = [{"role": "user", "content": q}]
+        pet._store_chat()
+    chat.show_history(pet._history_items(), pet._chat_id)
+    chat._history_link(QUrl("delall:ask"))
+    asked = "Delete all 2 saved chats?" in chat.hist_view.toPlainText()
+    chat._history_link(QUrl("delall:yes"))
+    check("delete all: asks first, then every chat (and the open one) is gone",
+          asked and pet.chats.index() == [] and not list(folder.glob("*.chat")) and pet.history == [])
+    chat._history_link(QUrl("back:"))
+    keep = chats_mod.KEEP
+    chats_mod.KEEP = 3
+    try:
+        ids = []
+        for n in range(5):
+            cid_n = f"20200101-00000{n}-ab{n:02x}"
+            ids.append(cid_n)
+            pet.chats.save({"id": cid_n, "created": 0, "msgs": [["user", f"chat {n}"]],
+                            "history": [{"role": "user", "content": f"chat {n}"}], "model": ""})
+            time.sleep(0.01)
+        left = [i.id for i in pet.chats.index()]
+    finally:
+        chats_mod.KEEP = keep
+    check("only the newest are kept (the oldest chats are deleted)", left == ids[:1:-1]
+          and len(list(folder.glob("*.chat"))) == 3, str(left))
+    (folder / "index.dat").write_bytes(b"broken")
+    check("a damaged list is rebuilt from the chats", sorted(i.id for i in pet.chats.index()) == sorted(left))
+    pet.chats.save({"id": "20200102-000000-abcd", "created": 0, "msgs": [["user", "hi"]],
+                    "history": [{"role": "user", "content": "hi"}], "model": "anthropic:claude-gone",
+                    "chat_model": "anthropic:claude-gone"})
+    real_auth = pet._ext_auth
+    pet._ext_auth = lambda p: ""                     # type: ignore[method-assign]   (nothing connected)
+    pet.open_saved_chat("20200102-000000-abcd")
+    pet._ext_auth = real_auth                        # type: ignore[method-assign]
+    check("a chat whose model isn't there any more opens with the default model (and says so)",
+          pet.chat_model is None and "isn't available" in chat.msgs[-1].text, chat.msgs[-1].text)
+    pet.chats.delete_all()
+    pet.new_chat()
+
+    # ---- effort, from the chat's model button
+    def effort_menu():  # type: ignore[no-untyped-def]
+        return pet._model_menu_items()[-1]
+
+    real_model = pet.cfg.model
+    pet.cfg.model = "qwen3.5:35b-a3b"                # (a local default, whatever this PC uses)
+    m = effort_menu()
+    check("the model button's menu has Effort: Default + Low/Medium/High for a local model (what each does)",
+          m.key == "chateffort" and [c.key for c in m.children] == [
+              "chateffort:default", "chateffort:low", "chateffort:medium", "chateffort:high"]
+          and m.children[1].note == "NO THINKING" and m.children[0].checked, str([c.label for c in m.children]))
+    pet._on_model_menu("chateffort:high")
+    check("High: this chat always thinks; the button shows it", pet.chat_effort == "high" and pet._think_now() is True
+          and chat.model_btn.text().endswith("· HIGH") and chat._model_temp and effort_menu().children[3].checked,
+          chat.model_btn.text())
+    pet._on_model_menu("chateffort:low")
+    low = pet._think_now()
+    pet._on_model_menu("chateffort:medium")
+    pet.history[:] = [{"role": "user", "content": "hi"}]
+    planning = pet._think_now()
+    pet.history.append({"role": "user", "content": "[tool result for wait] ok", "_tool": True})
+    routine = pet._think_now()
+    check("Low never thinks; Medium thinks when planning, not for routine steps",
+          low is False and planning is True and routine is False)
+    pet._on_model_menu("chateffort:default")
+    check("Default goes back", pet.chat_effort is None and not chat._model_temp)
+    pet._ext_p("anthropic")["models"] = [{"id": "claude-t", "name": "Claude T", "effort": ["low", "medium", "high"]},
+                                         {"id": "claude-n", "name": "Claude N", "effort": []}]
+    pet._ext_p("copilot")["models"] = [{"id": "gpt-c", "name": "GPT C", "efforts": ["low", "medium", "high", "xhigh"]}]
+    looks = {}
+    for tag in ("anthropic:claude-t", "anthropic:claude-n", "copilot:gpt-c", "openai:gpt-o"):
+        pet.chat_model = tag
+        looks[tag] = [c.key.split(":")[1] for c in effort_menu().children]
+    check("online models: only the levels the model has", looks == {
+        "anthropic:claude-t": ["default", "low", "medium", "high"], "anthropic:claude-n": ["none"],
+        "copilot:gpt-c": ["default", "low", "medium", "high", "xhigh"],
+        "openai:gpt-o": ["default", "low", "medium", "high", "xhigh", "max"]}, str(looks))
+    pet.chat_model = "anthropic:claude-t"
+    pet.saved.ext_settings["thinking"] = False
+    pet.saved.ext_settings["effort"] = "low"
+    base = pet._ext_think_effort()
+    pet._local_command("/effort max")
+    refused = pet.chat_effort is None and "low, medium, high" in chat.msgs[-1].text
+    pet._local_command("/effort high")
+    check("an online model gets this chat's effort (thinking on); /effort sets it, only to levels it has",
+          base == (False, "low") and refused and pet._ext_think_effort() == (True, "high"), chat.msgs[-1].text)
+    pet.saved.ext_settings.pop("thinking")
+    pet.saved.ext_settings.pop("effort")
+    pet.chat_model = None
+    pet.new_chat()
+    pet.cfg.model = real_model
+    check("a new chat starts with the default effort", pet.chat_effort is None)
+    shutil.rmtree(folder, ignore_errors=True)
 
 
 def main() -> int:
@@ -488,6 +674,7 @@ def main() -> int:
     check("'Start with Windows' shows the real setting (not changed by this test)",
           next(c for c in sets if c.key == "autostart").checked is system.autostart_enabled())
     name_and_chat_checks(pet, m, row)
+    history_and_effort_checks(pet)
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)}/{len(results)} checks passed", flush=True)
     return 0 if not failed else 1

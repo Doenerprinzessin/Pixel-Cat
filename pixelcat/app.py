@@ -2,6 +2,7 @@
 tray, desktop queries, persistence and the LLM tool layer together."""
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import threading
@@ -9,6 +10,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import replace as dc_replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from . import naming, paths, persistence, progress
+from .chats import ChatStore, new_id
 from .desktop import system, win32
 from .desktop.monitors import Monitor, enumerate_monitors, monitor_at, primary
 from .desktop.windows import enumerate_windows, foreground_window, is_fullscreen_window
@@ -41,7 +44,7 @@ from .persistence import SavedState, save_state
 from .settings import Config
 from .sprites.library import SpriteLibrary
 from .ui.ball import BallOverlay
-from .ui.chat import ChatWindow
+from .ui.chat import GREETING, ChatWindow
 from .ui.dialogs import PixelDialog
 from .llm import external, models
 from .llm.model_status import model_on_disk
@@ -55,6 +58,10 @@ from .games.qt_host import PopupWin, QtHost, art_pixmap
 from .sprites import hats as hat_art
 
 log = logging.getLogger(__name__)
+
+# a chat's effort with a local model: how much it thinks (shown next to each level)
+LOCAL_EFFORTS = {"low": "NO THINKING", "medium": "THINKS WHEN PLANNING", "high": "ALWAYS THINKS"}
+EFFORT_SHORT = {"low": "LOW", "medium": "MED", "high": "HIGH", "xhigh": "XHIGH", "max": "MAX"}   # the model button
 
 
 _NOTE_RE = re.compile(r"\((?:Steps I took|steps i took):[^)]*\)\s*|\[memory note:[^\]]*\]\s*", re.I)
@@ -177,6 +184,11 @@ class PixelCatApp(QObject):
         self.model_menu.title = "MODEL FOR THIS CHAT"
         self.model_menu.triggered.connect(self._on_model_menu)
         self.chat_model: str | None = None               # this chat only (None: the default)
+        self.chat_effort: str | None = None              # this chat's effort (None: the default)
+        self.chats = ChatStore()                         # the chat history (%APPDATA%\PixelCat\chats)
+        self._chat_id: str | None = None                 # the open chat's id there (None: not saved yet)
+        self._chat_created = 0.0
+        self._chat_sig = ""                              # what was saved last (unchanged: not written again)
         self._download_ok: set[str] = set()              # models the user said yes to downloading
         self.creds = external.Credentials()              # API keys and sign-ins (keys.dat, encrypted)
         self._later = _Later()
@@ -336,6 +348,7 @@ class PixelCatApp(QObject):
         if self.brain.mode == "ground":
             st.pos_x, st.pos_y = int(self.brain.x), int(self.brain.y)
         save_state(st)
+        self._store_chat()
 
     def quit(self) -> None:
         log.info("quitting")
@@ -858,9 +871,13 @@ class PixelCatApp(QObject):
             return
         m = models.find(self._effective_model())
         short = m.short if m else external.short_label(self._effective_model())
-        tip = (f"This chat uses {models.label(self._effective_model())} - click to change it. "
-               f"The default is {models.label(self.cfg.model)} (Settings -> AI model).")
-        self.chat.set_model_chip(short, self.chat_model is not None, tip)
+        if self.chat_effort:
+            short += " · " + EFFORT_SHORT.get(self.chat_effort, self.chat_effort.upper())
+        tip = (f"This chat uses {models.label(self._effective_model())}"
+               + (f" with {external.EFFORTS.get(self.chat_effort, self.chat_effort)} effort" if self.chat_effort else "")
+               + f" - click to change the model or the effort. The default is {models.label(self.cfg.model)} "
+               "(Settings -> AI model).")
+        self.chat.set_model_chip(short, self.chat_model is not None or self.chat_effort is not None, tip)
 
     def _choose_default_model(self, tag: str) -> None:
         if tag == self.cfg.model:
@@ -899,25 +916,102 @@ class PixelCatApp(QObject):
         self._update_model_chip()
 
     def _open_model_menu(self) -> None:
-        """The chat's model button: pick a model for this chat only."""
+        """The chat's model button: pick a model (and the effort) for this chat only."""
         if self.chat is None:
             return
-        items = [MenuItem("chatmodel:default", f"Default ({models.label(self.cfg.model)})", radio=True,
-                          checked=self.chat_model is None)]
-        items += self._model_items("chatmodel:", self.chat_model or "")
-        items += self._ext_chat_items()
-        self.model_menu.items = items
+        self.model_menu.items = self._model_menu_items()
         g = self.chat.model_btn.mapToGlobal(self.chat.model_btn.rect().topLeft())
         mon = monitor_at(self.monitors, self.brain.x, self.brain.y - 1)
         r = (g.x(), g.y(), g.x() + self.chat.model_btn.width(), g.y() + self.chat.model_btn.height())
         self.model_menu.popup_near(r, mon.work, self.ui_unit(mon))
 
+    def _model_menu_items(self) -> list[MenuItem]:
+        items = [MenuItem("chatmodel:default", f"Default ({models.label(self.cfg.model)})", radio=True,
+                          checked=self.chat_model is None)]
+        items += self._model_items("chatmodel:", self.chat_model or "")
+        items += self._ext_chat_items()
+        items.append(self._effort_menu())
+        return items
+
     def _on_model_menu(self, key: str) -> None:
+        if key.startswith("chateffort:"):
+            level = key.split(":", 1)[1]
+            if level != "none":
+                self._set_chat_effort(None if level == "default" else level)
+            if self.model_menu.isVisible():
+                self.model_menu.refresh(self._model_menu_items())
+            return
         if not key.startswith("chatmodel:"):
             return
         self.model_menu.close()
         tag = key.split(":", 1)[1]
         self._choose_chat_model(None if tag == "default" else tag)
+
+    # ---------------------------------------------------------------- effort (this chat)
+    def _effort_levels(self) -> list[str] | None:
+        """The effort levels the chat's model has (None: it has none to pick)."""
+        ext = external.parse(self._effective_model())
+        if not ext:
+            return list(LOCAL_EFFORTS)
+        p, mid = ext
+        info = self._ext_info(p, mid)
+        if p == "anthropic" and isinstance(info.get("effort"), list):
+            return [e for e in external.EFFORTS if e in info["effort"]] or None
+        if p == "copilot" and isinstance(info.get("efforts"), list):
+            return [e for e in external.EFFORTS if e in info["efforts"]] or None
+        return list(external.EFFORTS)
+
+    def _default_effort(self) -> str:
+        """The effort a chat has without its own: Settings (online models) or the thinking setting."""
+        if external.parse(self._effective_model()):
+            return str(self.saved.ext_settings.get("effort", "medium"))
+        mode = self.cfg.think
+        if isinstance(mode, str) and mode.lower() != "auto":
+            mode = mode.lower() in ("true", "on", "yes")
+        return "high" if mode is True else "low" if mode is False else "medium"
+
+    def _effort_menu(self) -> MenuItem:
+        levels = self._effort_levels()
+        local = not external.parse(self._effective_model())
+        cur = self.chat_effort
+        if levels is None:
+            kids = [MenuItem("chateffort:none", "This model has no effort levels", info=True)]
+        else:
+            dflt = external.EFFORTS.get(self._default_effort(), "Medium")
+            kids = [MenuItem("chateffort:default", f"Default ({dflt})", radio=True, checked=cur is None)]
+            kids += [MenuItem(f"chateffort:{e}", external.EFFORTS[e], radio=True, checked=cur == e,
+                              note=LOCAL_EFFORTS[e] if local else "") for e in levels]
+        return MenuItem("chateffort", "Effort", "bolt_on", children=kids, separator_before=True,
+                        note=external.EFFORTS[cur].upper() if cur in external.EFFORTS else "DEFAULT")
+
+    def _set_chat_effort(self, level: str | None) -> None:
+        if level is not None and level not in external.EFFORTS:
+            return
+        if level == self.chat_effort:
+            return
+        self.chat_effort = level
+        self._update_model_chip()
+        log.info("chat effort: %s", level or "default")
+        if self.chat is None:
+            return
+        if level is None:
+            self.chat.add("info", f"This chat uses the default effort again "
+                                  f"({external.EFFORTS.get(self._default_effort(), 'Medium')}).")
+            return
+        local = not external.parse(self._effective_model())
+        how = {"low": " - no thinking, the fastest answers", "medium": " - I think when I plan a task",
+               "high": " - I always think first"}.get(level, " - I always think first") if local else ""
+        if not local and not self.saved.ext_settings.get("thinking", True):
+            how = " (thinking is on for this chat, although it's off in Settings)"
+        self.chat.add("info", f"This chat now uses {external.EFFORTS[level]} effort{how}. A new chat goes back "
+                              "to the default.")
+
+    def _ext_think_effort(self) -> tuple[bool, str]:
+        """Thinking and effort for an online model: this chat's effort, else Settings."""
+        st = self.saved.ext_settings
+        if self.chat_effort is not None:
+            return True, self.chat_effort
+        return bool(st.get("thinking", True)), str(st.get("effort", "medium"))
 
     def _choose_chat_model(self, tag: str | None) -> None:
         assert self.chat is not None
@@ -1956,7 +2050,7 @@ class PixelCatApp(QObject):
         if not self._ext_gate(p):
             return None
         st = self.saved.ext_settings
-        think, effort = bool(st.get("thinking", True)), str(st.get("effort", "medium"))
+        think, effort = self._ext_think_effort()
         tools = self.toolbox.schemas() if self.cfg.enable_tools else None
         if p == "anthropic":
             from .llm.anthropic_client import AnthropicWorker
@@ -2576,6 +2670,10 @@ class PixelCatApp(QObject):
             self.chat.auto_toggled.connect(lambda: self.set_auto_mode(not self.saved.auto_mode))
             self.chat.watch_cancel_requested.connect(self._cancel_watch)
             self.chat.model_menu_requested.connect(self._open_model_menu)
+            self.chat.history_toggled.connect(self._toggle_history)
+            self.chat.history_open.connect(self.open_saved_chat)
+            self.chat.history_delete.connect(self._delete_saved_chat)
+            self.chat.history_delete_all.connect(self._delete_all_chats)
             self.chat.set_auto_mode(self.saved.auto_mode)
             self.chat.set_watches([(w.id, w.short()) for w in self.watches.active()])
             self._show_model_banner()
@@ -2619,7 +2717,9 @@ class PixelCatApp(QObject):
             self.model_status.ensure()   # Ollama and the model up? (if not: started, and the chat says so)
 
     def new_chat(self) -> None:
-        """Forget the conversation (frees the model's context) and start fresh."""
+        """Forget the conversation (frees the model's context) and start fresh.  The one so far
+        stays in the chat history."""
+        self.save()
         if self.worker is not None:
             self.worker.cancel()
             self.worker = None
@@ -2628,11 +2728,14 @@ class PixelCatApp(QObject):
         self.agent.shot = None
         self.agent.last_hwnd = 0
         self.history.clear()
+        self._chat_id, self._chat_created, self._chat_sig = None, 0.0, ""
         self._drop_copilot_chat()
-        if self.chat_model is not None:              # a new chat starts with the default model
-            self.chat_model = None
-            self.model_status.override = None
-            self.model_status.ensure(force=True)
+        if self.chat_model is not None or self.chat_effort is not None:   # (a new chat: the defaults)
+            self.chat_effort = None
+            if self.chat_model is not None:
+                self.chat_model = None
+                self.model_status.override = None
+                self.model_status.ensure(force=True)
             self._update_model_chip()
         self._sent = None
         self._pending_calls.clear()
@@ -2643,6 +2746,110 @@ class PixelCatApp(QObject):
         if self.chat is not None:
             self.chat.reset()
         log.info("new chat started")
+
+    # ---------------------------------------------------------------- the chat history
+    def _chat_signature(self) -> str:
+        assert self.chat is not None
+        shape = ([(m.role, m.text) for m in self.chat.msgs], [(m.get("role"), len(str(m.get("content") or "")),
+                                                                len(m.get("tool_calls") or [])) for m in self.history],
+                 self.chat_model, self.chat_effort)
+        return hashlib.sha1(json.dumps(shape, default=str).encode("utf-8")).hexdigest()
+
+    def _store_chat(self) -> None:
+        """The open chat goes into the chat history (by ``save``; written only when it changed).
+        A chat in which the user hasn't asked anything yet isn't kept."""
+        if self.chat is None or not any(m.get("role") == "user" and not m.get("_tool") and not m.get("_wake")
+                                         for m in self.history):
+            return
+        sig = self._chat_signature()
+        if sig == self._chat_sig:
+            return
+        data = {"id": self._chat_id or new_id(), "created": self._chat_created or time.time(),
+                "msgs": [[m.role, m.text] for m in self.chat.msgs if not (m.role == "cat" and m.text == GREETING)],
+                "history": self.history, "model": self._effective_model(), "chat_model": self.chat_model,
+                "chat_effort": self.chat_effort}
+        try:
+            self.chats.save(data)
+        except Exception:  # noqa: BLE001 - the chat keeps working without its history
+            log.exception("couldn't save the chat to the chat history")
+            return
+        self._chat_id, self._chat_created, self._chat_sig = data["id"], data["created"], sig
+
+    def _history_items(self) -> list[Any]:
+        try:
+            return [dc_replace(i, model=models.label(i.model) if i.model else "") for i in self.chats.index()]
+        except Exception:  # noqa: BLE001
+            log.exception("couldn't read the chat history")
+            return []
+
+    def _toggle_history(self) -> None:
+        """The chat's clock button (Ctrl+H, /history): the saved chats, or back to the chat."""
+        chat = self._ensure_chat()
+        if chat.history_shown:
+            chat.hide_history()
+            return
+        self.save()                                      # (the open chat is in the list, up to date)
+        chat.show_history(self._history_items(), self._chat_id)
+
+    def open_saved_chat(self, cid: str) -> None:
+        """Reopen a saved chat: what it showed, what the AI remembers, its model and effort."""
+        chat = self._ensure_chat()
+        if cid == self._chat_id:
+            chat.hide_history()
+            return
+        data = self.chats.load(cid)
+        if data is None:
+            chat.set_history(self._history_items(), self._chat_id)
+            chat.add("error", "That chat can't be opened any more - it was deleted or is damaged.")
+            return
+        self.new_chat()                                  # (stops what runs; the open chat stays saved)
+        self.history[:] = [dict(m) for m in data.get("history") or [] if isinstance(m, dict) and m.get("role")]
+        self._chat_id, self._chat_created = cid, float(data.get("created") or time.time())
+        notes = []
+        tag = data.get("chat_model")
+        if isinstance(tag, str) and tag:
+            ext = external.parse(tag)
+            if (self._ext_auth(ext[0]) if ext else models.find(tag) is not None and model_on_disk(tag)):
+                self.chat_model = tag
+                self.model_status.override = tag
+                self.model_status.ensure(force=True)
+            else:
+                notes.append(f"It used {models.label(tag)}, which isn't available now - so it uses the default, "
+                             f"{models.label(self.cfg.model)}.")
+        eff = data.get("chat_effort")
+        self.chat_effort = eff if eff in external.EFFORTS else None
+        self._update_model_chip()
+        self._show_model_banner()
+        chat.load([(r, t) for r, t in data.get("msgs") or [] if isinstance(r, str) and isinstance(t, str)])
+        when = datetime.fromtimestamp(float(data.get("updated") or time.time()))
+        chat.add("info", f"🕘 Our chat from {when:%d %b %Y, %H:%M} - I remember it, just keep talking. "
+                         + " ".join(notes))
+        self._chat_sig = self._chat_signature()          # (only opened, not changed: it keeps its place)
+        log.info("saved chat %s reopened (%d messages)", cid, len(self.history))
+
+    def _delete_saved_chat(self, cid: str) -> None:
+        try:
+            self.chats.delete(cid)
+        except Exception:  # noqa: BLE001
+            log.exception("couldn't delete chat %s", cid)
+        if cid == self._chat_id:                         # the open one: it goes, a fresh chat starts
+            self.history.clear()
+            self.new_chat()
+        if self.chat is not None:
+            self.chat.set_history(self._history_items(), self._chat_id)
+        log.info("saved chat %s deleted", cid)
+
+    def _delete_all_chats(self) -> None:
+        try:
+            n = self.chats.delete_all()
+        except Exception:  # noqa: BLE001
+            log.exception("couldn't delete the chat history")
+            n = 0
+        self.history.clear()                             # (the open chat goes too)
+        self.new_chat()
+        if self.chat is not None:
+            self.chat.set_history(self._history_items(), self._chat_id)
+        log.info("chat history deleted (%d chats)", n)
 
     def set_auto_mode(self, on: bool) -> None:
         self.saved.auto_mode = on
@@ -2724,6 +2931,28 @@ class PixelCatApp(QObject):
         if cmd in ("/new", "/clear"):
             self.new_chat()
             return True
+        if cmd in ("/history", "/chats"):
+            if not self._ensure_chat().history_shown:
+                self._toggle_history()
+            return True
+        if cmd == "/effort" or cmd.startswith("/effort "):
+            assert self.chat is not None
+            arg = cmd[7:].strip()
+            arg = {"default": "", "normal": "medium", "med": "medium", "extra high": "xhigh", "extra": "xhigh",
+                   "x-high": "xhigh", "maximum": "max"}.get(arg, arg)
+            levels = self._effort_levels()
+            if cmd == "/effort" or (arg and arg not in external.EFFORTS):
+                now = external.EFFORTS.get(self.chat_effort or "", "") or \
+                    f"the default ({external.EFFORTS.get(self._default_effort(), 'Medium')})"
+                pick = ", ".join(e for e in levels) if levels else "none - this model has no effort levels"
+                self.chat.add("info", f"This chat's effort: {now}. /effort LEVEL changes it for this chat "
+                                      f"({pick}), /effort default goes back. Or use the model button next to SEND.")
+            elif arg and levels is not None and arg not in levels:
+                self.chat.add("info", f"{models.label(self._effective_model())} has these effort levels: "
+                                      f"{', '.join(levels)}.")
+            else:
+                self._set_chat_effort(arg or None)
+            return True
         if cmd == "/permissions":
             allowed = ", ".join(self.saved.auto_approved_tools) or "none"
             assert self.chat is not None
@@ -2774,9 +3003,11 @@ class PixelCatApp(QObject):
             return True
         if cmd in ("/help", "/?"):
             assert self.chat is not None
-            self.chat.add("info", "Commands: /new (fresh chat), /auto on|off (no permission cards), "
+            self.chat.add("info", "Commands: /new (fresh chat), /history (our earlier chats), /auto on|off "
+                                  "(no permission cards), "
                                   "/force end <app> (like Task Manager), /force open <app> (as admin), "
-                                  "/watches, /unwatch, /model (AI model for this chat), /getmodel (download "
+                                  "/watches, /unwatch, /model (AI model for this chat), /effort (how hard it "
+                                  "thinks, this chat), /getmodel (download "
                                   "the AI model), /permissions, "
                                   "/permissions reset. "
                                   "Ask me to open, close, switch or minimize apps, search the web, control music, "
@@ -2844,6 +3075,7 @@ class PixelCatApp(QObject):
             self.chat.set_busy(False)
         if was_wake:
             self._announce_reply()
+        self.save()                                      # (the chat history gets this exchange)
         QTimer.singleShot(400, self._drain_wakes)   # something fired while this task ran
 
     def _on_escape(self) -> None:
@@ -3101,8 +3333,10 @@ class PixelCatApp(QObject):
 
     def _think_now(self) -> bool | None:
         """'auto': think when a request starts (planning) or after a failed step (recovering);
-        routine steps (type the next item, press a key) stay fast."""
-        mode = self.cfg.think
+        routine steps (type the next item, press a key) stay fast.  This chat's effort decides
+        first: low = never, medium = 'auto', high and up = always."""
+        eff = self.chat_effort
+        mode = self.cfg.think if eff is None else "auto" if eff == "medium" else eff != "low"
         if not isinstance(mode, str):
             return mode
         if mode.lower() != "auto":
