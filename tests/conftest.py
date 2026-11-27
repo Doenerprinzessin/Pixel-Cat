@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import locale
 import os
 import socket
 import sys
@@ -74,6 +75,13 @@ def isolated_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     from pixelcat import paths
     monkeypatch.setattr(paths, "_known_cache", {})
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def c_locale() -> None:
+    """On macOS/Linux creating a QApplication calls setlocale(LC_ALL, ""), which
+    changes strftime's day/month names for every later test; Windows doesn't."""
+    locale.setlocale(locale.LC_ALL, "C")
 
 
 _real_connect = socket.socket.connect
