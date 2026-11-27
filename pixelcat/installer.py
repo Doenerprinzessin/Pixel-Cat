@@ -32,8 +32,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from . import __version__, paths
-from .adapters.windows import elevation, system
+from . import __version__
+from .adapters.windows import elevation, known_folders, system
 
 log = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ def layout() -> Layout:
     roaming = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
     return Layout((_known(_USER_PROGRAMS) or local / "Programs") / "PixelCat",
                   _known(_START_MENU) or roaming / "Microsoft" / "Windows" / "Start Menu" / "Programs",
-                  paths.shell_folder("desktop"), UNINSTALL_KEY, system.RUN_KEY, roaming / "PixelCat",
+                  known_folders.shell_folder("desktop"), UNINSTALL_KEY, system.RUN_KEY, roaming / "PixelCat",
                   local / "PixelCat")
 
 
@@ -249,9 +249,10 @@ def uninstall(lay: Layout, delete_data: bool) -> list[str]:
         if lay.data_dir.exists():
             left.append(str(lay.data_dir))
         else:
+            from .adapters.windows.platform import WindowsSaveMarks
             from .persistence import forget_folder
 
-            forget_folder(lay.data_dir)
+            forget_folder(lay.data_dir, WindowsSaveMarks())
         if lay.tools_dir is not None:
             shutil.rmtree(lay.tools_dir, ignore_errors=True)
     return left
@@ -531,11 +532,13 @@ def _write_ai_settings(lay: Layout, plan: AiPlan) -> None:
 
 def _save_ai_choice(lay: Layout, plan: AiPlan) -> None:
     """The user agreed: the cat may download the model (written into the cat's protected save)."""
+    from .adapters.windows.platform import WindowsSaveMarks, WindowsSecretStore
     from .persistence import load_state, save_state
 
-    st = load_state(lay.data_dir)
+    secrets, marks = WindowsSecretStore(), WindowsSaveMarks()
+    st = load_state(lay.data_dir, secrets=secrets, marks=marks)
     st.model_download_ok = True
-    save_state(st, lay.data_dir, touch=False)
+    save_state(st, lay.data_dir, touch=False, secrets=secrets, marks=marks)
 
 
 def setup_ai(lay: Layout, plan: AiPlan, progress: Callable[[str], None], cancel: threading.Event,

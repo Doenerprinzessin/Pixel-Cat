@@ -127,16 +127,16 @@ def test_array_item_schemas(toolbox: ToolBox) -> None:
 ])
 def test_eyes_need_a_confirm_only_for_remote_models(cfg, hooks, url: str, eyes: str) -> None:
     cfg.ollama_url = url
-    tb = ToolBox(cfg, hooks.hooks())
+    tb = ToolBox(cfg, hooks.hooks(), folders=hooks.folders)
     assert {n: tb.specs[n].confirm for n in EYES} == dict.fromkeys(EYES, eyes)
 
 
 def test_open_app_description_lists_whitelist_and_start_menu(cfg, hooks) -> None:
     cfg.apps = {"zeta": ["z.exe"], "alpha": ["a.exe"]}
-    desc = ToolBox(cfg, hooks.hooks()).specs["open_app"].description
+    desc = ToolBox(cfg, hooks.hooks(), folders=hooks.folders).specs["open_app"].description
     assert desc.startswith("Open an app by name: alpha, zeta or any app installed in the Start menu.")
     cfg.allow_start_menu_apps = False
-    desc = ToolBox(cfg, hooks.hooks()).specs["open_app"].description
+    desc = ToolBox(cfg, hooks.hooks(), folders=hooks.folders).specs["open_app"].description
     assert desc.startswith("Open an app by name: alpha, zeta. ")
 
 

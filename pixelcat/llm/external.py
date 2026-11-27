@@ -30,12 +30,15 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from PySide6.QtCore import QThread, Signal
 
 from .. import paths, savecrypt
+
+if TYPE_CHECKING:
+    from ..ports import SecretStore
 
 log = logging.getLogger(__name__)
 
@@ -215,8 +218,9 @@ class Credentials:
 
     MAGIC = b"PXCATK1\n"
 
-    def __init__(self, folder: Path | None = None) -> None:
+    def __init__(self, folder: Path | None = None, *, secrets: SecretStore) -> None:
         self.folder = folder
+        self.secrets = secrets
         self._data: dict[str, Any] | None = None
         self._lock = threading.RLock()
 
@@ -229,7 +233,7 @@ class Credentials:
             try:
                 raw = self._path().read_bytes()
                 if raw.startswith(self.MAGIC):
-                    data = json.loads(savecrypt.unprotect(raw[len(self.MAGIC):]).decode("utf-8"))
+                    data = json.loads(self.secrets.unprotect(raw[len(self.MAGIC):]).decode("utf-8"))
                     self._data = data if isinstance(data, dict) else {}
             except FileNotFoundError:
                 pass
@@ -248,7 +252,7 @@ class Credentials:
                 data.pop(name, None)
             else:
                 data[name] = value
-            blob = self.MAGIC + savecrypt.protect(json.dumps(data).encode("utf-8"))
+            blob = self.MAGIC + self.secrets.protect(json.dumps(data).encode("utf-8"))
             path = self._path()
             tmp = path.with_name(path.name + ".tmp")
             tmp.write_bytes(blob)
@@ -259,7 +263,7 @@ class MemoryCredentials(Credentials):
     """Credentials that are only tried, not kept (checking a new key)."""
 
     def __init__(self, data: dict[str, Any]) -> None:
-        super().__init__()
+        super().__init__(secrets=None)  # type: ignore[arg-type] - never read from or written to keys.dat
         self._data = dict(data)
 
     def set(self, name: str, value: Any) -> None:

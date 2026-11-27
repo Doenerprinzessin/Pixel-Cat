@@ -1,5 +1,6 @@
 """persistence: the protected save (save.dat / save.bak), the old state.json, the
-converted-folder mark in the registry, export/import and the XP limit."""
+converted-folder mark, export/import and the XP limit.  The secret store and the save marks
+are fakes (the Windows ones are tested in tests/adapters/windows)."""
 from __future__ import annotations
 
 import base64
@@ -12,18 +13,34 @@ from pathlib import Path
 import pytest
 
 from pixelcat import paths, persistence, progress, savecrypt
-from pixelcat.persistence import SavedState, load_state, save_state
+from pixelcat.persistence import SavedState
 
 DATA = Path(__file__).parent / "data"
 SIGNED = b"PXCAT1S\n"
 WIN = b"PXCAT1W\n"
 
 
+class Env:
+    """The fake ports, and load/save with them."""
+
+    def __init__(self, marks, secrets) -> None:  # type: ignore[no-untyped-def]
+        self.marks, self.secrets = marks, secrets
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        return iter((self.marks, self.secrets))
+
+    def save(self, st: SavedState, folder: Path | None = None, touch: bool = True) -> None:
+        persistence.save_state(st, folder, touch, secrets=self.secrets, marks=self.marks)
+
+    def load(self, folder: Path | None = None) -> SavedState:
+        return persistence.load_state(folder, secrets=self.secrets, marks=self.marks)
+
+
 @pytest.fixture
-def env(fake_winreg, dpapi, monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
-    """Fake registry + fake DPAPI; ``last_load`` restored afterwards."""
+def env(save_marks, dpapi, monkeypatch: pytest.MonkeyPatch) -> Env:  # type: ignore[no-untyped-def]
+    """Fake save marks + fake DPAPI; ``last_load`` restored afterwards."""
     monkeypatch.setattr(persistence, "last_load", persistence.last_load)
-    return fake_winreg, dpapi
+    return Env(save_marks, dpapi)
 
 
 @pytest.fixture
@@ -42,8 +59,8 @@ def files(d: Path) -> list[str]:
     return sorted(p.name for p in d.iterdir())
 
 
-def mark_of(reg, folder: Path):  # type: ignore[no-untyped-def]
-    return reg.values(persistence.REG_PATH).get(persistence._folder_id(folder))
+def mark_of(marks, folder: Path):  # type: ignore[no-untyped-def]
+    return marks.marked.get(persistence._folder_id(folder))
 
 
 def write_signed(path: Path, data) -> None:  # type: ignore[no-untyped-def]
@@ -52,9 +69,9 @@ def write_signed(path: Path, data) -> None:  # type: ignore[no-untyped-def]
 
 # ---------------------------------------------------------------- save / load
 def test_save_loads_back_and_is_not_plain_text(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
-    save_state(played(), folder)
+    env.save(played(), folder)
     raw = (folder / "save.dat").read_bytes()
-    st = load_state(folder)
+    st = env.load(folder)
     assert (st.xp, st.skin, st.best_round, st.auto_mode) == (900, "ginger", 7, True)
     assert st.game_plays == {"laser": 3, "mice": 2}
     assert persistence.last_load == "save"
@@ -63,7 +80,7 @@ def test_save_loads_back_and_is_not_plain_text(env, folder: Path) -> None:  # ty
 
 
 def test_save_writes_an_identical_backup_and_no_temp_files(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
-    save_state(played(), folder)
+    env.save(played(), folder)
     assert files(folder) == ["save.bak", "save.dat"]
     assert (folder / "save.bak").read_bytes() == (folder / "save.dat").read_bytes()
 
@@ -76,47 +93,47 @@ def test_every_field_round_trips(env, folder: Path) -> None:  # type: ignore[no-
                     ui_size="large", ui_font="pixel", auto_approved_tools=["open_app"], auto_mode=True,
                     watches=[{"id": 1}], ext_settings={"a": 1}, ext_usage={"b": 2}, cat_name="Mochi",
                     chat_size=[200.0, 120.0], chat_full=True)
-    save_state(st, folder, touch=False)
-    assert asdict(load_state(folder)) == asdict(st)
+    env.save(st, folder, touch=False)
+    assert asdict(env.load(folder)) == asdict(st)
 
 
 def test_save_touch_updates_last_seen(env, folder: Path, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(persistence.time, "time", lambda: 1234.5)
     st = SavedState(last_seen=1.0)
-    save_state(st, folder)
+    env.save(st, folder)
     assert st.last_seen == 1234.5
     st2 = SavedState(last_seen=1.0)
-    save_state(st2, folder, touch=False)
-    assert st2.last_seen == 1.0 and load_state(folder).last_seen == 1.0
+    env.save(st2, folder, touch=False)
+    assert st2.last_seen == 1.0 and env.load(folder).last_seen == 1.0
 
 
 def test_default_folder_is_the_data_dir(env) -> None:  # type: ignore[no-untyped-def]
-    save_state(played())
+    env.save(played())
     assert (paths.data_dir() / "save.dat").is_file()
-    assert load_state().xp == 900
+    assert env.load().xp == 900
 
 
 def test_nothing_saved_is_a_fresh_cat(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
-    st = load_state(folder)
+    st = env.load(folder)
     assert asdict(st) | {"last_seen": 0} == asdict(SavedState()) | {"last_seen": 0}
     assert persistence.last_load == "fresh"
 
 
 def test_save_into_an_unwritable_place_does_not_raise(env, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
-    reg, _ = env
+    marks, _ = env
     blocker = tmp_path / "file"
     blocker.write_text("not a folder")
-    save_state(played(), blocker / "sub")
-    assert reg.values(persistence.REG_PATH) == {}
+    env.save(played(), blocker / "sub")
+    assert marks.marked == {}
 
 
 # ---------------------------------------------------------------- damaged / changed saves
 def test_hand_edited_save_loads_the_backup(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
-    save_state(played(), folder)
+    env.save(played(), folder)
     raw = bytearray((folder / "save.dat").read_bytes())
     raw[-5] ^= 0x20
     (folder / "save.dat").write_bytes(bytes(raw))
-    st = load_state(folder)
+    st = env.load(folder)
     assert st.xp == 900 and persistence.last_load == "backup"
 
 
@@ -130,17 +147,17 @@ def test_hand_edited_save_loads_the_backup(env, folder: Path) -> None:  # type: 
     SIGNED + savecrypt.seal(b"\xff\xfe"),
 ], ids=["plain-json", "empty", "win-garbage", "signed-garbage", "signed-not-json", "signed-not-dict", "signed-not-utf8"])
 def test_unreadable_save_dat_falls_back_to_the_backup(env, folder: Path, content: bytes) -> None:  # type: ignore[no-untyped-def]
-    save_state(played(), folder)
+    env.save(played(), folder)
     (folder / "save.dat").write_bytes(content)
-    st = load_state(folder)
+    st = env.load(folder)
     assert st.xp == 900 and persistence.last_load == "backup"
 
 
 def test_both_unreadable_starts_fresh_and_keeps_the_files_aside(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
-    save_state(played(), folder)
+    env.save(played(), folder)
     for name in ("save.dat", "save.bak"):
         (folder / name).write_bytes(b"edited")
-    st = load_state(folder)
+    st = env.load(folder)
     assert st.xp == 0 and persistence.last_load == "unreadable"
     kept = files(folder)
     assert len(kept) == 2
@@ -150,7 +167,7 @@ def test_both_unreadable_starts_fresh_and_keeps_the_files_aside(env, folder: Pat
 
 def test_only_an_unreadable_backup_starts_fresh(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
     (folder / "save.bak").write_bytes(b"edited")
-    assert load_state(folder).xp == 0
+    assert env.load(folder).xp == 0
     assert persistence.last_load == "unreadable"
     assert not (folder / "save.bak").exists()
 
@@ -158,9 +175,9 @@ def test_only_an_unreadable_backup_starts_fresh(env, folder: Path) -> None:  # t
 def test_a_save_from_another_account_is_unreadable(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
     _, dpapi = env
     dpapi.account = b"someone else"
-    save_state(played(), folder)
+    env.save(played(), folder)
     dpapi.account = b"this account"
-    st = load_state(folder)
+    st = env.load(folder)
     assert st.xp == 0 and persistence.last_load == "unreadable"
 
 
@@ -171,7 +188,7 @@ def test_unreadable_files_that_cannot_be_moved_are_left(env, folder: Path, monke
         raise PermissionError(13, "in use")
 
     monkeypatch.setattr(Path, "rename", refuse)
-    st = load_state(folder)
+    st = env.load(folder)
     assert st.xp == 0 and persistence.last_load == "unreadable"
     assert files(folder) == ["save.dat"]
 
@@ -181,26 +198,26 @@ def test_unreadable_files_that_cannot_be_moved_are_left(env, folder: Path, monke
 def test_save_is_signed_when_windows_cannot_protect_it(env, folder: Path, error: Exception) -> None:  # type: ignore[no-untyped-def]
     _, dpapi = env
     dpapi.protect_error = error
-    save_state(played(), folder)
+    env.save(played(), folder)
     raw = (folder / "save.dat").read_bytes()
     assert raw.startswith(SIGNED)
     assert b"ginger" not in raw
     dpapi.protect_error = None
-    assert load_state(folder).xp == 900 and persistence.last_load == "save"
+    assert env.load(folder).xp == 900 and persistence.last_load == "save"
 
 
 def test_signed_save_loads_on_another_account(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
     _, dpapi = env
     dpapi.protect_error = OSError(5, "no")
-    save_state(played(), folder)
+    env.save(played(), folder)
     dpapi.account = b"someone else"
-    assert load_state(folder).xp == 900
+    assert env.load(folder).xp == 900
 
 
 def test_golden_signed_save_still_loads(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
     """A save.dat in the signed format, written by the code of PR 0, must keep loading."""
     (folder / "save.dat").write_bytes((DATA / "signed_save_v1.dat").read_bytes())
-    st = load_state(folder)
+    st = env.load(folder)
     assert persistence.last_load == "save"
     assert (st.xp, st.skin, st.hat, st.best_round, st.plays, st.pets, st.feeds) == (900, "ginger", "party", 7, 2, 5, 4)
     assert st.game_plays == {"laser": 3, "mice": 2} and st.game_best == {"laser": 12.5}
@@ -233,7 +250,7 @@ def test_golden_signed_save_still_loads(env, folder: Path) -> None:  # type: ign
 ], ids=lambda v: json.dumps(v, default=str)[:40] if isinstance(v, dict) else None)
 def test_loaded_values_are_checked(env, folder: Path, data: dict, expect: dict) -> None:  # type: ignore[no-untyped-def]
     write_signed(folder / "save.dat", data)
-    st = load_state(folder)
+    st = env.load(folder)
     assert {k: getattr(st, k) for k in expect} == expect
     assert not hasattr(st, "no_such_field")
 
@@ -248,7 +265,7 @@ def test_loaded_values_are_checked(env, folder: Path, data: dict, expect: dict) 
 def test_xp_is_cut_to_what_the_games_played_could_give(env, folder: Path, xp: int, plays: int,  # type: ignore[no-untyped-def]
                                                        game_plays: dict, expect: int) -> None:
     write_signed(folder / "save.dat", {"xp": xp, "plays": plays, "game_plays": game_plays})
-    assert load_state(folder).xp == expect
+    assert env.load(folder).xp == expect
 
 
 def test_xp_limit() -> None:
@@ -258,44 +275,43 @@ def test_xp_limit() -> None:
 
 # ---------------------------------------------------------------- the old state.json
 def test_state_json_is_converted_once_and_deleted(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
-    reg, _ = env
+    marks, _ = env
     (folder / "state.json").write_text(json.dumps({"xp": 450, "game_plays": {"treats": 4}, "hat": "x", "pets": 3,
                                                    "last_seen": 42.0}), "utf-8")
-    st = load_state(folder)
+    st = env.load(folder)
     assert (st.xp, st.pets, st.hat, st.last_seen) == (450, 3, "x", 42.0)
     assert persistence.last_load == "converted"
     assert files(folder) == ["save.bak", "save.dat"]
-    assert load_state(folder).xp == 450 and persistence.last_load == "save"
-    assert mark_of(reg, folder) == 1
-    assert reg.types_of(persistence.REG_PATH)[persistence._folder_id(folder)] == reg.REG_DWORD
+    assert env.load(folder).xp == 450 and persistence.last_load == "save"
+    assert mark_of(marks, folder) == 1
 
 
 def test_a_new_state_json_in_a_converted_folder_is_ignored(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
     (folder / "state.json").write_text(json.dumps({"xp": 450, "game_plays": {"treats": 4}}), "utf-8")
-    load_state(folder)
+    env.load(folder)
     for n in ("save.dat", "save.bak"):
         (folder / n).unlink()
     (folder / "state.json").write_text(json.dumps({"xp": 600, "game_plays": {"treats": 4}}), "utf-8")
-    st = load_state(folder)
+    st = env.load(folder)
     assert st.xp == 0 and persistence.last_load == "fresh"
     assert (folder / "state.json").exists()
 
 
 def test_saving_marks_the_folder_as_converted(env, folder: Path, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
-    reg, _ = env
+    marks, _ = env
     other = tmp_path / "other"
-    save_state(played(), folder)
-    assert mark_of(reg, folder) == 1
-    assert mark_of(reg, other) is None
+    env.save(played(), folder)
+    assert mark_of(marks, folder) == 1
+    assert mark_of(marks, other) is None
     (other).mkdir()
     (other / "state.json").write_text(json.dumps({"pets": 2}), "utf-8")
-    assert load_state(other).pets == 2 and persistence.last_load == "converted"
+    assert env.load(other).pets == 2 and persistence.last_load == "converted"
 
 
 @pytest.mark.parametrize("content", ["{broken", "[1, 2]", "\"text\""], ids=["broken", "list", "string"])
 def test_unreadable_state_json_converts_to_a_fresh_cat(env, folder: Path, content: str) -> None:  # type: ignore[no-untyped-def]
     (folder / "state.json").write_text(content, "utf-8")
-    st = load_state(folder)
+    st = env.load(folder)
     assert st.xp == 0 and persistence.last_load == "converted"
     assert files(folder) == ["save.bak", "save.dat"]
 
@@ -304,45 +320,45 @@ def test_state_json_is_kept_when_the_converted_save_cannot_be_read_back(env, fol
     _, dpapi = env
     dpapi.unprotect_error = savecrypt.Unreadable("broken DPAPI")
     (folder / "state.json").write_text(json.dumps({"pets": 3}), "utf-8")
-    st = load_state(folder)
+    st = env.load(folder)
     assert st.pets == 3 and persistence.last_load == "converted"
     assert (folder / "state.json").exists()
 
 
 def test_without_a_registry_conversion_still_works(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
-    reg, _ = env
-    reg.fail = PermissionError
+    marks, _ = env
+    marks.fail = PermissionError
     (folder / "state.json").write_text(json.dumps({"pets": 3}), "utf-8")
-    assert load_state(folder).pets == 3
+    assert env.load(folder).pets == 3
     assert files(folder) == ["save.bak", "save.dat"]
     for n in ("save.dat", "save.bak"):
         (folder / n).unlink()
     (folder / "state.json").write_text(json.dumps({"pets": 5}), "utf-8")
-    assert load_state(folder).pets == 5               # (not remembered: converted again)
+    assert env.load(folder).pets == 5               # (not remembered: converted again)
 
 
 def test_folder_mark_name_format(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
     """The registry value name must stay the same, or converted folders are forgotten."""
-    reg, _ = env
-    save_state(played(), folder)
+    marks, _ = env
+    env.save(played(), folder)
     name = hashlib.sha256(str(folder.resolve()).lower().encode("utf-8")).hexdigest()[:24]
-    assert reg.values(persistence.REG_PATH) == {name: 1}
+    assert marks.marked == {name: 1}
 
 
 def test_forget_folder_removes_the_mark(env, folder: Path, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
-    reg, _ = env
-    save_state(played(), folder)
-    save_state(played(), tmp_path / "other")
-    persistence.forget_folder(folder)
-    assert mark_of(reg, folder) is None
-    assert mark_of(reg, tmp_path / "other") == 1
+    marks, _ = env
+    env.save(played(), folder)
+    env.save(played(), tmp_path / "other")
+    persistence.forget_folder(folder, marks)
+    assert mark_of(marks, folder) is None
+    assert mark_of(marks, tmp_path / "other") == 1
 
 
 def test_forget_folder_without_a_mark_is_fine(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
-    reg, _ = env
-    persistence.forget_folder(folder)
-    reg.fail = PermissionError
-    persistence.forget_folder(folder)
+    marks, _ = env
+    persistence.forget_folder(folder, marks)
+    marks.fail = PermissionError
+    persistence.forget_folder(folder, marks)
 
 
 # ---------------------------------------------------------------- export / import
@@ -447,43 +463,3 @@ def test_import_round_trip_into_a_state(tmp_path: Path) -> None:
     persistence.apply_progress(st, persistence.read_export(p))
     assert (st.xp, st.skin, st.best_round, st.game_plays) == (900, "ginger", 7, {"laser": 3, "mice": 2})
     assert not st.auto_mode and st.auto_approved_tools == []
-
-
-# ---------------------------------------------------------------- real Windows
-@pytest.fixture
-def real_reg_path(test_reg_key: str, monkeypatch: pytest.MonkeyPatch) -> str:
-    path = test_reg_key + r"\ProtectedSaves"
-    monkeypatch.setattr(persistence, "REG_PATH", path)
-    monkeypatch.setattr(persistence, "last_load", persistence.last_load)
-    return path
-
-
-@pytest.mark.windows
-def test_real_save_round_trip_with_dpapi_and_registry(real_reg_path: str, real_reg_read, folder: Path) -> None:  # type: ignore[no-untyped-def]
-    save_state(played(), folder)
-    raw = (folder / "save.dat").read_bytes()
-    assert raw.startswith(WIN) and b"ginger" not in raw
-    assert load_state(folder).xp == 900 and persistence.last_load == "save"
-    assert real_reg_read(real_reg_path, persistence._folder_id(folder)) == 1
-    persistence.forget_folder(folder)
-    assert real_reg_read(real_reg_path, persistence._folder_id(folder)) is None
-
-
-@pytest.mark.windows
-def test_real_state_json_conversion_is_remembered(real_reg_path: str, folder: Path) -> None:
-    (folder / "state.json").write_text(json.dumps({"xp": 450, "game_plays": {"treats": 4}}), "utf-8")
-    assert load_state(folder).xp == 450 and persistence.last_load == "converted"
-    for n in ("save.dat", "save.bak"):
-        (folder / n).unlink()
-    (folder / "state.json").write_text(json.dumps({"xp": 600, "game_plays": {"treats": 4}}), "utf-8")
-    assert load_state(folder).xp == 0 and persistence.last_load == "fresh"
-
-
-@pytest.mark.windows
-def test_real_save_for_another_account_is_unreadable(real_reg_path: str, folder: Path,  # type: ignore[no-untyped-def]
-                                                    monkeypatch: pytest.MonkeyPatch) -> None:
-    real = savecrypt._ENTROPY
-    monkeypatch.setattr(savecrypt, "_ENTROPY", b"another account or PC")
-    save_state(played(), folder)
-    monkeypatch.setattr(savecrypt, "_ENTROPY", real)
-    assert load_state(folder).xp == 0 and persistence.last_load == "unreadable"

@@ -34,12 +34,15 @@ import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import urlparse
 
 from .. import paths
 from ..settings import Config
 from .agent import AgentError, DesktopAgent, ToolOutput
+
+if TYPE_CHECKING:
+    from ..ports import KnownFolders
 
 log = logging.getLogger(__name__)
 
@@ -109,9 +112,10 @@ class AppHooks:
 
 
 class ToolBox:
-    def __init__(self, cfg: Config, hooks: AppHooks) -> None:
+    def __init__(self, cfg: Config, hooks: AppHooks, *, folders: KnownFolders) -> None:
         self.cfg = cfg
         self.hooks = hooks
+        self.folders = folders                # the user's real Documents, Desktop ... (the platform's)
         self.specs: dict[str, ToolSpec] = {}
         self.agent = DesktopAgent(cfg, hooks.own_pid)
         self._admin_seen: set[str] = set()   # apps Windows refused to start without admin rights
@@ -526,11 +530,11 @@ class ToolBox:
         if not text:
             raise ToolError("no file path given")
         parts = re.split(r"[\\/]", text, maxsplit=1)
-        alias = paths.known_folder(parts[0].rstrip(":")) if len(parts) == 2 and not re.match(r"^[a-zA-Z]:", text) \
-            and not text.startswith("\\\\") else None
+        alias = paths.known_folder(parts[0].rstrip(":"), self.folders) \
+            if len(parts) == 2 and not re.match(r"^[a-zA-Z]:", text) and not text.startswith("\\\\") else None
         p = alias / parts[1] if alias is not None else Path(os.path.expandvars(text)).expanduser()
         if not p.is_absolute():
-            p = (paths.known_folder("documents") or Path.home()) / p
+            p = (paths.known_folder("documents", self.folders) or Path.home()) / p
         p = p.resolve()
         if not any(p == r or r in p.parents for r in self._allowed_roots()):
             raise ToolError(f"{p} is outside the folders I'm allowed to touch ({', '.join(self.cfg.allowed_roots)})")
@@ -1031,16 +1035,16 @@ class ToolBox:
         """Like file paths elsewhere ('downloads', 'downloads/x.pdf', full paths), but the file
         may not exist yet and may be any type (it is only looked at, never opened)."""
         text = str(raw).strip().strip('"').strip("'").rstrip("\\/")
-        alias = paths.known_folder(text)
+        alias = paths.known_folder(text, self.folders)
         if alias is not None:
             p = alias
         else:
             parts = re.split(r"[\\/]", text, maxsplit=1)
-            alias = paths.known_folder(parts[0].rstrip(":")) if len(parts) == 2 and not re.match(r"^[a-zA-Z]:", text) \
-                and not text.startswith("\\\\") else None
+            alias = paths.known_folder(parts[0].rstrip(":"), self.folders) \
+                if len(parts) == 2 and not re.match(r"^[a-zA-Z]:", text) and not text.startswith("\\\\") else None
             p = alias / parts[1] if alias is not None else Path(os.path.expandvars(text)).expanduser()
             if not p.is_absolute():
-                p = (paths.known_folder("documents") or Path.home()) / p
+                p = (paths.known_folder("documents", self.folders) or Path.home()) / p
         p = p.resolve()
         if not any(p == r or r in p.parents for r in self._allowed_roots()):
             raise ToolError(f"{p} is outside the folders I'm allowed to look at ({', '.join(self.cfg.allowed_roots)})")
@@ -1049,17 +1053,17 @@ class ToolBox:
     def _allowed_roots(self) -> list[Path]:
         roots = []
         for alias in self.cfg.allowed_roots:
-            p = paths.known_folder(alias)
+            p = paths.known_folder(alias, self.folders)
             if p is not None:
                 roots.append(p.resolve())
         return roots
 
     def _resolve_dir(self, folder: str, must_exist: bool) -> Path:
         folder = folder.strip().strip('"')
-        alias = paths.known_folder(folder)
+        alias = paths.known_folder(folder, self.folders)
         p = alias if alias is not None else Path(os.path.expandvars(folder)).expanduser()
         if not p.is_absolute():
-            p = (paths.known_folder("documents") or Path.home()) / p
+            p = (paths.known_folder("documents", self.folders) or Path.home()) / p
         p = p.resolve()
         if not any(p == r or r in p.parents for r in self._allowed_roots()):
             raise ToolError(f"{p} is outside the folders I'm allowed to touch "

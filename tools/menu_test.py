@@ -195,7 +195,7 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
 
     folder = ROOT / "build" / "chathisttest"
     shutil.rmtree(folder, ignore_errors=True)
-    pet.chats = ChatStore(folder)
+    pet.chats = ChatStore(folder, secrets=pet.platform.secrets)
     chat = pet._ensure_chat()
     chat.hide_history()
     pet.new_chat()

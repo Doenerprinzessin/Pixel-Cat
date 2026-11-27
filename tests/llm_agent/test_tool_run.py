@@ -187,7 +187,7 @@ def test_open_app_uri_and_start_menu_use_startfile(toolbox: ToolBox, desk, no_wa
 
 def test_open_app_with_admin_rights(cfg, hooks, desk, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     cfg.apps["tool"] = ["C:\\Tools\\tool.exe", "--fast", "a b"]
-    tb = ToolBox(cfg, hooks.hooks())
+    tb = ToolBox(cfg, hooks.hooks(), folders=hooks.folders)
     waits: list = []
     monkeypatch.setattr(tb.agent, "wait_for_window", lambda b, n, timeout=15.0: waits.append(timeout) or "")
     desk.admin_targets.add(str(cfg.apps["tool"]))
@@ -413,7 +413,7 @@ def watches(monkeypatch):  # type: ignore[no-untyped-def]
 
 @pytest.fixture
 def wtb(cfg, hooks, watches) -> ToolBox:  # type: ignore[no-untyped-def]
-    return ToolBox(cfg, hooks.hooks(watches=watches))
+    return ToolBox(cfg, hooks.hooks(watches=watches), folders=hooks.folders)
 
 
 def test_wait_for_starts_a_watch(wtb: ToolBox, watches) -> None:  # type: ignore[no-untyped-def]

@@ -49,6 +49,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     setup_logging(False)
     win32.set_dpi_awareness()
     app = QApplication(sys.argv[:1])          # screenshots and their marks need it
+    from pixelcat.bootstrap import build_platform
     from pixelcat.llm.tools import AppHooks, ToolBox, ToolError
     from pixelcat.settings import load_config
 
@@ -67,7 +68,8 @@ def main() -> int:  # noqa: C901 - a linear test script
         cmd("report")
         return json.loads(helper.stdout.readline())
 
-    tb = ToolBox(load_config(), AppHooks(lambda a: "", lambda s, label: "", lambda: "", lambda t: "", os.getpid()))
+    tb = ToolBox(load_config(), AppHooks(lambda a: "", lambda s, label: "", lambda: "", lambda t: "", os.getpid()),
+                 folders=build_platform().folders)
     ag = tb.agent
     start_cursor = win32.cursor_pos()
 

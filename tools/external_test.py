@@ -44,10 +44,13 @@ sys.path.insert(0, str(ROOT))
 import requests  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from pixelcat.bootstrap import build_platform  # noqa: E402
 from pixelcat.llm import anthropic_client as AC  # noqa: E402
 from pixelcat.llm import chatgpt_signin as CS  # noqa: E402
 from pixelcat.llm import external as X  # noqa: E402
 from pixelcat.llm import openai_client as OC  # noqa: E402
+
+SECRETS = build_platform().secrets                 # keys.dat, as the app keeps it
 
 app = QApplication(sys.argv[:1])
 app.setQuitOnLastWindowClosed(False)
@@ -493,14 +496,14 @@ def main() -> int:  # noqa: C901 - a linear test script
           and tl == [(200_000, 250_000), (968_000, 990_000), (128_000, 130_000), (None, None)], str(tl))
 
     # keys --------------------------------------------------------------------------------------
-    cr = X.Credentials()
+    cr = X.Credentials(secrets=SECRETS)
     cr.set("anthropic_key", "sk-ant-secret-123")
     raw = (Path(os.environ["APPDATA"]) / "PixelCat" / "keys.dat").read_bytes()
     check("keys.dat is encrypted (the key isn't in it as text) and reads back",
-          b"sk-ant-secret" not in raw and X.Credentials().get("anthropic_key") == "sk-ant-secret-123")
+          b"sk-ant-secret" not in raw and X.Credentials(secrets=SECRETS).get("anthropic_key") == "sk-ant-secret-123")
     mem = X.MemoryCredentials({"openai_key": "sk-try"})
     mem.set("x", 1)
-    check("a key that is only being checked is never written", X.Credentials().get("openai_key") is None
+    check("a key that is only being checked is never written", X.Credentials(secrets=SECRETS).get("openai_key") is None
           and mem.get("openai_key") == "sk-try")
 
     # messages ------------------------------------------------------------------------------------
@@ -537,7 +540,7 @@ def main() -> int:  # noqa: C901 - a linear test script
           and items.index(pic[1]) > items.index(outs[1]))
 
     # Claude --------------------------------------------------------------------------------------
-    creds = X.Credentials()
+    creds = X.Credentials(secrets=SECRETS)
     info = {"adaptive": True, "effort": ["low", "medium", "high", "xhigh", "max"], "max_tokens": 128000}
     S["mode"] = "tool"
     tools = [{"type": "function", "function": {"name": "open_app", "description": "Open an app",

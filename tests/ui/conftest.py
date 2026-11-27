@@ -189,12 +189,12 @@ class Clipboard:
 
 
 @pytest.fixture
-def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path) -> AppEnv:  # type: ignore[no-untyped-def]
+def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path, fake_platform) -> AppEnv:  # type: ignore[no-untyped-def]
     """Everything ``PixelCatApp`` touches outside the process, replaced."""
     from PySide6.QtGui import QDesktopServices, QGuiApplication
 
     import pixelcat.app as app_mod
-    from pixelcat import persistence, savecrypt, settings
+    from pixelcat import persistence, settings
     from pixelcat.adapters.windows import control, hardware, monitors, system
     from pixelcat.llm import model_status
     from pixelcat.sprites.library import SpriteLibrary
@@ -209,8 +209,8 @@ def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path) -> AppE
     monkeypatch.setattr(app_mod, "save_state", lambda st, *a, **k: env.saved_states.append(st))
     monkeypatch.setattr(persistence, "last_load", "fresh")            # (another test may have loaded a save)
     monkeypatch.setattr(app_mod.PixelCatApp, "_documents", staticmethod(lambda: tmp_path / "Documents"))
-    monkeypatch.setattr(system, "autostart_enabled", lambda: desktop.autostart)
-    monkeypatch.setattr(system, "set_autostart", lambda on: (env.autostart_set.append(on), True)[1])
+    fake_platform.autostart.answers("enabled", lambda: desktop.autostart)
+    fake_platform.autostart.answers("set", lambda on: (env.autostart_set.append(on), True)[1])
     monkeypatch.setattr(system, "create_quit_event", lambda: 0)
     monkeypatch.setattr(system, "quit_requested", lambda handle: False)
     monkeypatch.setattr(system, "session_locked", lambda: False)
@@ -219,8 +219,8 @@ def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path) -> AppE
     monkeypatch.setattr(hardware, "detect", lambda fresh=False: hardware.Hardware(
         ram_gb=32.0, cores=8, cpu="Test CPU", avx2=True, gpus=[], disk_free_gb=500.0))
     monkeypatch.setattr(model_status.ModelStatus, "ensure", lambda self, force=False: env.ensures.append(force))
-    monkeypatch.setattr(savecrypt, "protect", _fake_protect)
-    monkeypatch.setattr(savecrypt, "unprotect", _fake_unprotect)
+    fake_platform.secrets.answers("protect", _fake_protect)
+    fake_platform.secrets.answers("unprotect", _fake_unprotect)
     monkeypatch.setattr(settings, "save_user_setting", lambda k, v: env.user_settings.append((k, v)))
     monkeypatch.setattr(tray.Tray, "show", lambda self: None)
     monkeypatch.setattr(tray.Tray, "showMessage", lambda self, *a, **k: None)

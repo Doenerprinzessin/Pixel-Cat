@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from pixelcat import installer, paths
+from pixelcat.adapters.windows.platform import WindowsKnownFolders
 
 REAL = "C:\\Users\\Someone\\RealProfile"
 
@@ -36,7 +37,7 @@ def _inside(path: Path | None, folder: Path) -> bool:
 @pytest.mark.parametrize("alias", ["desktop", "documents", "downloads", "pictures", "music", "videos", "notes"])
 def test_known_folders_stay_inside_the_test_folder(shell_answers_the_real_profile, isolated_dirs: Path,
                                                    alias: str) -> None:
-    p = paths.known_folder(alias)
+    p = paths.known_folder(alias, WindowsKnownFolders())
     assert _inside(p, isolated_dirs), p
     assert shell_answers_the_real_profile.SHGetKnownFolderPath.calls == []
 

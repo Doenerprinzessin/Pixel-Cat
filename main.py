@@ -91,7 +91,7 @@ def main() -> int:
     from pixelcat.settings import load_config
 
     cfg = load_config()
-    saved = load_state()
+    saved = load_state(secrets=platform.secrets, marks=platform.save_marks)
     log.info("starting Pixel Cat (model=%s)", cfg.model)
     for scr in qapp.screens():
         log.info("qt screen %s geometry=%s dpr=%.2f", scr.name(), scr.geometry().getRect(), scr.devicePixelRatio())

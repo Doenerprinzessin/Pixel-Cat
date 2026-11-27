@@ -189,12 +189,12 @@ class PixelCatApp(QObject):
         self.model_menu.triggered.connect(self._on_model_menu)
         self.chat_model: str | None = None               # this chat only (None: the default)
         self.chat_effort: str | None = None              # this chat's effort (None: the default)
-        self.chats = ChatStore()                         # the chat history (%APPDATA%\PixelCat\chats)
+        self.chats = ChatStore(secrets=platform.secrets)  # the chat history (%APPDATA%\PixelCat\chats)
         self._chat_id: str | None = None                 # the open chat's id there (None: not saved yet)
         self._chat_created = 0.0
         self._chat_sig = ""                              # what was saved last (unchanged: not written again)
         self._download_ok: set[str] = set()              # models the user said yes to downloading
-        self.creds = external.Credentials()              # API keys and sign-ins (keys.dat, encrypted)
+        self.creds = external.Credentials(secrets=platform.secrets)  # API keys and sign-ins (keys.dat, encrypted)
         self._later = _Later()
         self._resume_after_switch = False                # token limit: go on once another model is picked
         self._ext_notes: set[str] = set()
@@ -237,7 +237,7 @@ class PixelCatApp(QObject):
         self._promise_nudged = False
         self.toolbox = ToolBox(cfg, AppHooks(self._tool_cat_action, self._tool_set_timer, self._tool_screenshot,
                                              self._tool_clipboard, self.own_pid, watches=self.watches,
-                                             task_request=self._task_request))
+                                             task_request=self._task_request), folders=platform.folders)
         self.history: list[dict[str, Any]] = []
         self.worker: ChatWorker | None = None
         self._live_workers: set[ChatWorker] = set()
@@ -351,7 +351,7 @@ class PixelCatApp(QObject):
         st.watches = self.watches.to_list()
         if self.brain.mode == "ground":
             st.pos_x, st.pos_y = int(self.brain.x), int(self.brain.y)
-        save_state(st)
+        save_state(st, secrets=self.platform.secrets, marks=self.platform.save_marks)
         self._store_chat()
 
     def quit(self) -> None:
@@ -421,7 +421,7 @@ class PixelCatApp(QObject):
 
     def _autostart_answer(self, yes: bool) -> None:
         self.saved.autostart_asked = True
-        system.set_autostart(yes)
+        self.platform.autostart.set(yes)
         self.save()
 
     # ================================================================ loops
@@ -717,7 +717,7 @@ class PixelCatApp(QObject):
                 MenuItem("export", "Export progress...", "export"),
                 MenuItem("import", "Import progress...", "import")]),
             MenuItem("quiet", "Quiet mode", checked=self.quiet, separator_before=True),
-            MenuItem("autostart", "Start with Windows", checked=system.autostart_enabled()),
+            MenuItem("autostart", "Start with Windows", checked=self.platform.autostart.enabled()),
             MenuItem("automode", "Chat auto mode", checked=self.saved.auto_mode),
             MenuItem("preload_ai", "Load AI at start", checked=self.cfg.preload_on_start),
             MenuItem("explore", "Sit inside windows", checked=self.cfg.explore_windows)]
@@ -2289,7 +2289,7 @@ class PixelCatApp(QObject):
             elif key == "automode":
                 self.set_auto_mode(not self.saved.auto_mode)
             elif key == "autostart":
-                system.set_autostart(not system.autostart_enabled())
+                self.platform.autostart.set(not self.platform.autostart.enabled())
                 self.saved.autostart_asked = True
             elif key == "preload_ai":
                 from .settings import save_user_setting
@@ -2566,9 +2566,8 @@ class PixelCatApp(QObject):
             return QFileDialog.getSaveFileName(None, title, start, filt)[0]
         return QFileDialog.getOpenFileName(None, title, start, filt)[0]
 
-    @staticmethod
-    def _documents() -> Path:
-        return paths.shell_folder("documents") or Path.home() / "Documents"
+    def _documents(self) -> Path:
+        return self.platform.folders.known_folder("documents") or Path.home() / "Documents"
 
     def export_progress(self) -> None:
         """Menu -> Settings -> Your progress -> Export: a signed file that loads on any PC."""
@@ -3735,7 +3734,7 @@ class PixelCatApp(QObject):
             self.chat.add("info", f"⏰ Time's up: {label}")
 
     def _tool_screenshot(self) -> str:
-        folder = (paths.known_folder("pictures") or Path.home()) / "PixelCat Screenshots"
+        folder = (paths.known_folder("pictures", self.platform.folders) or Path.home()) / "PixelCat Screenshots"
         folder.mkdir(parents=True, exist_ok=True)
         out = folder / datetime.now().strftime("screenshot_%Y%m%d_%H%M%S.png")
         chat_vis = self.chat is not None and self.chat.isVisible()

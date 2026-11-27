@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pixelcat import chats, paths, savecrypt
+from pixelcat import chats, paths
 from pixelcat.chats import ChatStore
 
 
@@ -20,7 +20,7 @@ def clock(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
 
 @pytest.fixture
 def store(dpapi, clock, tmp_path: Path) -> ChatStore:  # type: ignore[no-untyped-def]
-    return ChatStore(tmp_path / "chats")
+    return ChatStore(tmp_path / "chats", secrets=dpapi)
 
 
 def cid(n: int) -> str:
@@ -165,7 +165,7 @@ def test_damaged_index_is_rebuilt_from_the_chats(store: ChatStore) -> None:
     (store.folder() / f"{cid(9)}.chat").write_bytes(b"not ours")
     assert [i.id for i in store.index()] == [cid(2), cid(1)]
     assert [i.title for i in store.index()] == ["chat 2", "chat 1"]
-    assert ChatStore._read(store.folder() / "index.dat")          # written again
+    assert store._read(store.folder() / "index.dat")          # written again
 
 
 def test_missing_index_is_rebuilt(store: ChatStore) -> None:
@@ -199,7 +199,7 @@ def test_delete_and_delete_all(store: ChatStore) -> None:
 
 
 def test_default_folder_is_in_the_data_dir(dpapi) -> None:  # type: ignore[no-untyped-def]
-    store = ChatStore()
+    store = ChatStore(secrets=dpapi)
     assert store.folder() == paths.data_dir() / "chats"
     assert store.folder().is_dir()
 
@@ -235,16 +235,3 @@ def test_write_gives_up_after_20_tries(store: ChatStore, monkeypatch: pytest.Mon
     with pytest.raises(PermissionError):
         store.save(chat(1))
     assert len(tries) == 20
-
-
-# ---------------------------------------------------------------- real DPAPI
-@pytest.mark.windows
-def test_real_chats_round_trip(tmp_path: Path) -> None:
-    store = ChatStore(tmp_path / "chats")
-    store.save({"id": cid(1), "created": 1.0, "msgs": [["user", "secret plan"]],
-                "history": [{"role": "user", "content": "secret plan"}], "model": "m"})
-    assert b"secret" not in (store.folder() / f"{cid(1)}.chat").read_bytes()
-    assert store.load(cid(1))["title"] == "secret plan"
-    assert [i.id for i in ChatStore(tmp_path / "chats").index()] == [cid(1)]
-    with pytest.raises(savecrypt.Unreadable):
-        savecrypt.unprotect(b"\x00" * 64)

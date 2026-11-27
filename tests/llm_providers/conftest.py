@@ -4,7 +4,7 @@
   server-sent events, NDJSON) and records every request.  Routes are ``(method, path)``;
   each route holds a list of responses - one is used per request, the last one repeats.
 * ``creds``: in-memory credentials (never written, never encrypted).
-* ``fake_crypt``: savecrypt.protect/unprotect replaced by a reversible fake, so keys.dat
+* ``fake_crypt``: a reversible fake secret store (pass it as ``secrets=``), so keys.dat
   tests never reach Windows' DPAPI (they run the same on Windows CI).
 * ``record``: a Recorder of every signal a provider worker emits, in order.
 * Module globals the providers keep between requests (learned settings, model names, test
@@ -32,22 +32,23 @@ def creds():
     return MemoryCredentials({})
 
 
-@pytest.fixture
-def fake_crypt(monkeypatch: pytest.MonkeyPatch):
-    """savecrypt.protect/unprotect as a reversible byte flip (never DPAPI)."""
-    from pixelcat import savecrypt
+class FakeCrypt:
+    """A SecretStore that flips the bytes (never DPAPI)."""
 
-    def protect(data: bytes) -> bytes:
+    def protect(self, data: bytes) -> bytes:
         return b"FAKE" + bytes(b ^ 0x5A for b in data)
 
-    def unprotect(blob: bytes) -> bytes:
+    def unprotect(self, blob: bytes) -> bytes:
+        from pixelcat import savecrypt
+
         if not blob.startswith(b"FAKE"):
             raise savecrypt.Unreadable("not ours")
         return bytes(b ^ 0x5A for b in blob[4:])
 
-    monkeypatch.setattr(savecrypt, "protect", protect)
-    monkeypatch.setattr(savecrypt, "unprotect", unprotect)
-    return protect, unprotect
+
+@pytest.fixture
+def fake_crypt() -> FakeCrypt:
+    return FakeCrypt()
 
 
 # ------------------------------------------------------------------ provider state

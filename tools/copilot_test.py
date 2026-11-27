@@ -40,9 +40,12 @@ sys.path.insert(0, str(ROOT))
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from pixelcat.bootstrap import build_platform  # noqa: E402
 from pixelcat.llm import copilot_client as CC  # noqa: E402
 from pixelcat.llm import external as X  # noqa: E402
 from pixelcat.llm import github_signin as GS  # noqa: E402
+
+SECRETS = build_platform().secrets                 # keys.dat, as the app keeps it
 
 app = QApplication(sys.argv[:1])
 app.setQuitOnLastWindowClosed(False)
@@ -244,7 +247,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     GS.CLIENT_ID = ""
     hidden = not GS.available()
     GS.CLIENT_ID = "Iv-pixel"
-    creds = X.Credentials()
+    creds = X.Credentials(secrets=SECRETS)
     shown: list = []
     info = GS.sign_in(creds, lambda code, uri: shown.append((code, uri)), threading.Event())
     raw = (Path(os.environ["APPDATA"]) / "PixelCat" / "keys.dat").read_bytes()

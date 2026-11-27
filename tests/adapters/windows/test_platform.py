@@ -8,9 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from adapters.windows.fakes import by_hwnd, enum_windows, out, raising
-from pixelcat import domain, installer, paths, persistence, savecrypt
-from pixelcat.adapters.windows import (capture, control, elevation, escwatch, hardware, inputs, ledges, monitors,
-                                       notifications, platform, system, uia, volume, win32, windows)
+from pixelcat import domain, installer
+from pixelcat.adapters.windows import (capture, control, dpapi, elevation, escwatch, hardware, inputs, known_folders,
+                                       ledges, monitors, notifications, platform, registry, system, uia, volume, win32,
+                                       windows)
 from pixelcat.domain import AppWindow, KillPlan, UserState
 
 EV = threading.Event()
@@ -120,11 +121,14 @@ DELEGATES = [
     ("processes", "uac_prompt_open", (), elevation, "uac_prompt_open"),
     ("notifications", "open_feed", (), notifications, "Feed"),
     ("notifications", "remember_own", ("Title", "text"), notifications, "remember_own"),
-    ("secrets", "protect", (b"data",), savecrypt, "protect"),
-    ("secrets", "unprotect", (b"blob",), savecrypt, "unprotect"),
-    ("folders", "known_folder", ("documents",), paths, "shell_folder"),
+    ("secrets", "protect", (b"data",), dpapi, "protect"),
+    ("secrets", "unprotect", (b"blob",), dpapi, "unprotect"),
+    ("folders", "known_folder", ("documents",), known_folders, "shell_folder"),
     ("autostart", "enabled", (), system, "autostart_enabled"),
     ("autostart", "set", (True,), system, "set_autostart"),
+    ("save_marks", "is_marked", ("abc",), registry, "is_marked"),
+    ("save_marks", "mark", ("abc",), registry, "mark"),
+    ("save_marks", "forget", ("abc",), registry, "forget"),
     ("installer", "is_setup_name", ("PixelCat-Setup.exe",), installer, "is_setup_name"),
     ("installer", "run_quiet", (SimpleNamespace(uninstall=True),), installer, "run_quiet"),
     ("installer", "run_window", ("install",), installer, "run_window"),
@@ -255,7 +259,7 @@ def test_instance(plat, monkeypatch):  # type: ignore[no-untyped-def]
 
 # ---------------------------------------------------------------- the save marks (winreg, errors propagate)
 def test_save_marks(plat, fake_winreg, monkeypatch):  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(persistence, "REG_PATH", r"Software\PixelCatTest\Marks")
+    monkeypatch.setattr(registry, "REG_PATH", r"Software\PixelCatTest\Marks")
     with pytest.raises(OSError):
         plat.save_marks.is_marked("abc")
     plat.save_marks.mark("abc")

@@ -5,7 +5,7 @@
 * Tests marked ``@pytest.mark.windows`` run only on Windows: they exercise the
   real Win32 / UI Automation / DPAPI / registry code.
 * Every test gets its own ``%APPDATA%``, ``%LOCALAPPDATA%``, home folder, Known
-  Folders (Desktop, Documents ... answered from ``paths._known_cache``) and installer
+  Folders (Desktop, Documents ... answered from ``known_folders._known_cache``) and installer
   root (``PIXELCAT_TEST_ROOT``), so nothing touches the developer's real settings,
   saves, notes, Start menu or registry.
 * On Windows the shell resolves Known Folders (Desktop, Documents, Start menu ...)
@@ -18,12 +18,15 @@
 """
 from __future__ import annotations
 
+import ctypes
 import locale
 import os
 import shutil
 import socket
 import sys
 import tempfile
+import types
+import uuid
 from pathlib import Path
 
 import pytest
@@ -132,12 +135,12 @@ def isolated_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("OLLAMA_MODELS", raising=False)
     # On Windows the shell would still answer with the developer's real Desktop, Documents,
     # Pictures ..., so the Known Folders are answered from the cache, inside tmp_path.
-    from pixelcat import paths
+    from pixelcat.adapters.windows import known_folders
     known = {}
-    for name in paths._KNOWN_FOLDER_IDS:
+    for name in known_folders._KNOWN_FOLDER_IDS:
         known[name] = home / name.capitalize()
         known[name].mkdir()
-    monkeypatch.setattr(paths, "_known_cache", known)
+    monkeypatch.setattr(known_folders, "_known_cache", known)
     # ... and the installer's layout() moves everything (Start menu, program folder,
     # registry keys) under a test root instead of asking the shell.
     monkeypatch.setenv("PIXELCAT_TEST_ROOT", str(tmp_path / "install-root"))
@@ -191,8 +194,8 @@ def real_profile(monkeypatch: pytest.MonkeyPatch) -> None:
         else:
             monkeypatch.delenv(var, raising=False)
     monkeypatch.delenv("PIXELCAT_TEST_ROOT", raising=False)
-    from pixelcat import paths
-    monkeypatch.setattr(paths, "_known_cache", {})
+    from pixelcat.adapters.windows import known_folders
+    monkeypatch.setattr(known_folders, "_known_cache", {})
 
 
 @pytest.fixture
@@ -201,6 +204,99 @@ def fake_platform():  # type: ignore[no-untyped-def]
     from fakes.platform import FakePlatform
 
     return FakePlatform()
+
+
+# ---------------------------------------------------------------- Known Folders (the Windows adapter's ctypes calls)
+class FakeKnownFolders:
+    """``ctypes.windll`` with ``shell32.SHGetKnownFolderPath`` / ``ole32.CoTaskMemFree``."""
+
+    def __init__(self, fake_dll) -> None:  # type: ignore[no-untyped-def]
+        self.folders: dict[str, str] = {}      # GUID (upper case) -> path
+        self.hresult = 0
+        self.asked: list[str] = []
+        self.shell32 = fake_dll("shell32")
+        self.ole32 = fake_dll("ole32")
+        self.shell32.SHGetKnownFolderPath.result = self._get
+
+    def _get(self, guid_ref, flags, token, out_ref) -> int:  # type: ignore[no-untyped-def]
+        guid = str(uuid.UUID(bytes_le=bytes(guid_ref._obj))).upper()
+        self.asked.append(guid)
+        if self.hresult != 0:
+            return self.hresult
+        if guid not in self.folders:
+            return -2147024894                 # HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+        out_ref._obj.value = self.folders[guid]
+        return 0
+
+    @property
+    def freed(self) -> int:
+        return len(self.ole32.CoTaskMemFree.calls)
+
+
+@pytest.fixture
+def known_folders(monkeypatch: pytest.MonkeyPatch, fake_dll) -> FakeKnownFolders:  # type: ignore[no-untyped-def]
+    fake = FakeKnownFolders(fake_dll)
+    from pixelcat.adapters.windows import known_folders as windows_known_folders
+    monkeypatch.setattr(windows_known_folders, "_known_cache", {})
+    monkeypatch.setattr(ctypes, "windll", types.SimpleNamespace(shell32=fake.shell32, ole32=fake.ole32),
+                        raising=False)
+    return fake
+
+
+@pytest.fixture
+def no_windll(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows APIs unavailable: any ``ctypes.windll`` use raises."""
+    class _Broken:
+        def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
+            raise OSError(126, "The specified module could not be found")
+
+    from pixelcat.adapters.windows import known_folders
+    monkeypatch.setattr(known_folders, "_known_cache", {})
+    monkeypatch.setattr(ctypes, "windll", _Broken(), raising=False)
+
+
+# ---------------------------------------------------------------- real registry (Windows only)
+@pytest.fixture
+def test_reg_key():  # type: ignore[no-untyped-def]
+    """A unique ``HKCU\\Software\\PixelCatTests\\<uuid>`` path, deleted with its subkeys afterwards."""
+    import winreg
+
+    base = r"Software\PixelCatTests"
+    key = base + "\\" + uuid.uuid4().hex
+
+    def delete_tree(path: str) -> None:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_ALL_ACCESS) as k:
+                while True:
+                    try:
+                        sub = winreg.EnumKey(k, 0)
+                    except OSError:
+                        break
+                    delete_tree(path + "\\" + sub)
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+        except FileNotFoundError:
+            pass
+
+    yield key
+    delete_tree(key)
+    try:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base)    # only succeeds when empty
+    except OSError:
+        pass
+
+
+@pytest.fixture
+def real_reg_read():  # type: ignore[no-untyped-def]
+    import winreg
+
+    def read(path: str, name: str):  # type: ignore[no-untyped-def]
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as k:
+                return winreg.QueryValueEx(k, name)[0]
+        except FileNotFoundError:
+            return None
+
+    return read
 
 
 @pytest.fixture

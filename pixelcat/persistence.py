@@ -25,9 +25,12 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import paths, savecrypt
+
+if TYPE_CHECKING:
+    from .ports import SaveMarks, SecretStore
 
 log = logging.getLogger(__name__)
 
@@ -37,9 +40,6 @@ _MAGIC_SIGNED = b"PXCAT1S\n"             # save.dat fallback (Windows couldn't p
 EXPORT_EXT = ".pixelcat"
 _EXPORT_TAG = "PXCAT-EXPORT-1:"
 MAX_XP_PER_PLAY = 200                    # every game gives less (the most today: ~100)
-# HKCU: folders already converted (the installer tests keep theirs apart, as their other keys)
-REG_PATH = (r"Software\PixelCatInstallTest\ProtectedSaves" if os.environ.get("PIXELCAT_TEST_ROOT")
-            else r"Software\PixelCat\ProtectedSaves")
 
 # Progress that an export carries.  Not: chat permissions, auto mode, watches, window
 # position, first-run questions - an imported file must never switch those on.
@@ -145,41 +145,32 @@ def _folder_id(folder: Path) -> str:
     return hashlib.sha256(str(folder.resolve()).lower().encode("utf-8")).hexdigest()[:24]
 
 
-def _converted(folder: Path) -> bool:
+def _converted(folder: Path, marks: SaveMarks) -> bool:
     try:
-        import winreg
-
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH) as k:
-            return bool(winreg.QueryValueEx(k, _folder_id(folder))[0])
+        return marks.is_marked(_folder_id(folder))
     except OSError:
         return False
 
 
-def _mark_converted(folder: Path) -> None:
+def _mark_converted(folder: Path, marks: SaveMarks) -> None:
     try:
-        import winreg
-
-        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, REG_PATH, 0, winreg.KEY_SET_VALUE) as k:
-            winreg.SetValueEx(k, _folder_id(folder), 0, winreg.REG_DWORD, 1)
+        marks.mark(_folder_id(folder))
     except OSError:
         log.warning("couldn't remember that the save is protected", exc_info=True)
 
 
-def forget_folder(folder: Path) -> None:
+def forget_folder(folder: Path, marks: SaveMarks) -> None:
     """The folder was deleted (uninstall with "delete its memory"): drop its mark."""
     try:
-        import winreg
-
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH, 0, winreg.KEY_SET_VALUE) as k:
-            winreg.DeleteValue(k, _folder_id(folder))
+        marks.forget(_folder_id(folder))
     except OSError:
         pass
 
 
 # ------------------------------------------------------------------ the save
-def _decode(raw: bytes) -> SavedState:
+def _decode(raw: bytes, secrets: SecretStore) -> SavedState:
     if raw.startswith(_MAGIC_WIN):
-        plain = savecrypt.unprotect(raw[len(_MAGIC_WIN):])
+        plain = secrets.unprotect(raw[len(_MAGIC_WIN):])
     elif raw.startswith(_MAGIC_SIGNED):
         plain = savecrypt.unseal(raw[len(_MAGIC_SIGNED):])
     else:
@@ -190,10 +181,10 @@ def _decode(raw: bytes) -> SavedState:
         raise savecrypt.Unreadable(f"damaged ({e})") from e
 
 
-def _encode(st: SavedState) -> bytes:
+def _encode(st: SavedState, secrets: SecretStore) -> bytes:
     plain = json.dumps(asdict(st), separators=(",", ":")).encode("utf-8")
     try:
-        return _MAGIC_WIN + savecrypt.protect(plain)
+        return _MAGIC_WIN + secrets.protect(plain)
     except (OSError, AttributeError):
         log.exception("Windows couldn't protect the save - signing it instead")
         return _MAGIC_SIGNED + savecrypt.seal(plain)
@@ -205,7 +196,7 @@ def _write(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
-def load_state(folder: Path | None = None) -> SavedState:
+def load_state(folder: Path | None = None, *, secrets: SecretStore, marks: SaveMarks) -> SavedState:
     """The saved state: save.dat, else its backup, else the old state.json (converted once),
     else a new cat.  ``last_load`` says which: "save", "backup", "converted", "fresh", or
     "unreadable" (files there but none could be read - they are kept aside)."""
@@ -217,7 +208,7 @@ def load_state(folder: Path | None = None) -> SavedState:
         if not path.is_file():
             continue
         try:
-            st = _decode(path.read_bytes())
+            st = _decode(path.read_bytes(), secrets)
         except (OSError, savecrypt.Unreadable) as e:
             log.warning("%s can't be read: %s", name, e)
             bad.append(path)
@@ -238,7 +229,7 @@ def load_state(folder: Path | None = None) -> SavedState:
         return SavedState()
     legacy = d / LEGACY_NAME
     if legacy.is_file():
-        if _converted(d):
+        if _converted(d, marks):
             log.warning("ignoring %s: this folder already uses the protected save", LEGACY_NAME)
         else:
             try:
@@ -246,9 +237,9 @@ def load_state(folder: Path | None = None) -> SavedState:
             except (OSError, ValueError, savecrypt.Unreadable):
                 log.exception("%s unreadable - starting fresh", LEGACY_NAME)
                 st = SavedState()
-            save_state(st, d, touch=False)
+            save_state(st, d, touch=False, secrets=secrets, marks=marks)
             try:
-                _decode((d / SAVE_NAME).read_bytes())    # the protected copy works: the old file goes
+                _decode((d / SAVE_NAME).read_bytes(), secrets)    # the protected copy works: the old file goes
                 legacy.unlink()
                 log.info("converted %s to the protected save", LEGACY_NAME)
             except (OSError, savecrypt.Unreadable):
@@ -259,21 +250,22 @@ def load_state(folder: Path | None = None) -> SavedState:
     return SavedState()
 
 
-def save_state(st: SavedState, folder: Path | None = None, touch: bool = True) -> None:
+def save_state(st: SavedState, folder: Path | None = None, touch: bool = True, *, secrets: SecretStore,
+               marks: SaveMarks) -> None:
     """save.dat, then the same into save.bak (each written atomically: tmp file + replace)."""
     if touch:
         st.last_seen = time.time()
     d = folder or paths.data_dir()
     try:
         d.mkdir(parents=True, exist_ok=True)
-        data = _encode(st)
+        data = _encode(st, secrets)
         _write(d / SAVE_NAME, data)
         _write(d / BACKUP_NAME, data)
     except OSError:
         log.exception("could not save state")
         return
-    if not _converted(d):
-        _mark_converted(d)
+    if not _converted(d, marks):
+        _mark_converted(d, marks)
 
 
 # ------------------------------------------------------------------ export / import

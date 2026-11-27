@@ -32,9 +32,12 @@ sys.path.insert(0, str(ROOT))
 import winreg  # noqa: E402
 
 from pixelcat import paths, persistence, progress, savecrypt  # noqa: E402
+from pixelcat.adapters.windows import dpapi, registry  # noqa: E402
+from pixelcat.adapters.windows.platform import WindowsSaveMarks, WindowsSecretStore  # noqa: E402
 from pixelcat.persistence import SavedState, load_state, save_state  # noqa: E402
 
-persistence.REG_PATH = r"Software\PixelCatSaveTest\ProtectedSaves"
+registry.REG_PATH = r"Software\PixelCatSaveTest\ProtectedSaves"
+STORAGE = {"secrets": WindowsSecretStore(), "marks": WindowsSaveMarks()}     # the app's (see bootstrap)
 results: list[tuple[str, bool, str]] = []
 
 
@@ -44,7 +47,7 @@ def check(name: str, ok: bool, info: str = "") -> None:
 
 
 def clear_reg() -> None:
-    for key in (persistence.REG_PATH, r"Software\PixelCatSaveTest"):
+    for key in (registry.REG_PATH, r"Software\PixelCatSaveTest"):
         try:
             winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
         except OSError:
@@ -65,21 +68,21 @@ def main() -> int:  # noqa: C901 - a linear test script
     d = TEST / "a"
     d.mkdir()
     # Windows data protection ------------------------------------------------------------
-    blob = savecrypt.protect(b"hello cat")
+    blob = dpapi.protect(b"hello cat")
     bad = bytearray(blob)
     bad[len(bad) // 2] ^= 1
     try:
-        savecrypt.unprotect(bytes(bad))
+        dpapi.unprotect(bytes(bad))
         refused = False
     except savecrypt.Unreadable:
         refused = True
     check("Windows protects data for this account; a changed byte is refused",
-          savecrypt.unprotect(blob) == b"hello cat" and refused)
+          dpapi.unprotect(blob) == b"hello cat" and refused)
 
     # the save ------------------------------------------------------------------------------
-    save_state(played(), d)
+    save_state(played(), d, **STORAGE)
     raw = (d / "save.dat").read_bytes()
-    st = load_state(d)
+    st = load_state(d, **STORAGE)
     check("the save loads back, and isn't readable text", st.xp == 900 and st.skin == "ginger"
           and st.auto_mode and persistence.last_load == "save" and b"xp" not in raw and b"ginger" not in raw,
           persistence.last_load)
@@ -87,33 +90,33 @@ def main() -> int:  # noqa: C901 - a linear test script
     edited = bytearray(raw)
     edited[-5] ^= 0x20
     (d / "save.dat").write_bytes(bytes(edited))
-    st = load_state(d)
+    st = load_state(d, **STORAGE)
     check("a hand-edited save.dat: the backup is loaded, nothing is lost",
           st.xp == 900 and persistence.last_load == "backup", persistence.last_load)
     (d / "save.dat").write_text(json.dumps({"xp": 99999}), "utf-8")      # "just write the JSON"
-    st = load_state(d)
+    st = load_state(d, **STORAGE)
     check("a plain-text save.dat isn't accepted either", st.xp == 900 and persistence.last_load == "backup")
     (d / "save.bak").write_bytes(bytes(edited))
-    st = load_state(d)
+    st = load_state(d, **STORAGE)
     kept = [n for n in files(d) if n.startswith("unreadable-")]
     check("both edited: a fresh start, the unreadable files kept aside",
           st.xp == 0 and persistence.last_load == "unreadable" and len(kept) == 2
           and not (d / "save.dat").exists(), str(files(d)))
     real = savecrypt._ENTROPY
     savecrypt._ENTROPY = b"another account or PC"
-    save_state(played(), d)
+    save_state(played(), d, **STORAGE)
     savecrypt._ENTROPY = real
-    st = load_state(d)
+    st = load_state(d, **STORAGE)
     check("a save protected for someone else (another account/PC) isn't read", st.xp == 0
           and persistence.last_load == "unreadable")
-    real_protect = savecrypt.protect
+    real_protect = dpapi.protect
 
     def broken(_data: bytes) -> bytes:
         raise OSError(5, "no")
-    savecrypt.protect = broken                       # type: ignore[assignment]
-    save_state(played(), d)
-    savecrypt.protect = real_protect                 # type: ignore[assignment]
-    st = load_state(d)
+    dpapi.protect = broken                         # type: ignore[assignment]
+    save_state(played(), d, **STORAGE)
+    dpapi.protect = real_protect                   # type: ignore[assignment]
+    st = load_state(d, **STORAGE)
     check("if Windows can't protect it, the save is signed instead (and still loads)",
           st.xp == 900 and (d / "save.dat").read_bytes().startswith(b"PXCAT1S"))
 
@@ -122,20 +125,20 @@ def main() -> int:  # noqa: C901 - a linear test script
     e.mkdir()
     (e / "state.json").write_text(json.dumps({"xp": 450, "game_plays": {"treats": 4}, "hat": "x", "pets": 3}),
                                   "utf-8")
-    st = load_state(e)
+    st = load_state(e, **STORAGE)
     check("the old state.json is converted once (kept: XP, plays) and deleted",
           st.xp == 450 and st.pets == 3 and persistence.last_load == "converted"
           and files(e) == ["save.bak", "save.dat"], str(files(e)))
     for n in ("save.dat", "save.bak"):
         (e / n).unlink()
     (e / "state.json").write_text(json.dumps({"xp": 600, "game_plays": {"treats": 4}}), "utf-8")
-    st = load_state(e)
+    st = load_state(e, **STORAGE)
     check("...a new state.json later is ignored (delete the save + write JSON doesn't work)",
           st.xp == 0 and persistence.last_load == "fresh")
     f = TEST / "c"
     f.mkdir()
     (f / "state.json").write_text(json.dumps({"xp": 99999, "game_plays": {"laser": 2}, "plays": 1}), "utf-8")
-    st = load_state(f)
+    st = load_state(f, **STORAGE)
     check("XP the games played can't have given is cut down", st.xp == 3 * persistence.MAX_XP_PER_PLAY,
           str(st.xp))
 
@@ -205,7 +208,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     ask[-1]._finish(True)
     app.processEvents()
     backups = list((paths.data_dir() / "progress-backups").glob("before-import-*.pixelcat"))
-    disk = load_state()
+    disk = load_state(**STORAGE)
     check("...then loads it: XP, skin and records follow; chat auto mode stays off",
           pet.saved.xp == big.xp and pet.saved.skin == "ginger" and pet.sprites.skin.key == "ginger"
           and pet.saved.best_round == 7 and pet.game.best == 7 and not pet.saved.auto_mode

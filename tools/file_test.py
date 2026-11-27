@@ -116,7 +116,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     spec, a = tb.prepare("read_file", {"path": "desktop/does-not-matter.txt"}) if False else (None, None)
     from pixelcat.paths import known_folder
     p = tb._resolve_file("desktop/x.txt", False)
-    check("'desktop/...' means the user's real Desktop", p.parent == known_folder("desktop").resolve(), str(p))
+    check("'desktop/...' means the user's real Desktop", p.parent == known_folder("desktop", pet.platform.folders).resolve(), str(p))
 
     if "--chat" in sys.argv:
         chat_part(pet, app)

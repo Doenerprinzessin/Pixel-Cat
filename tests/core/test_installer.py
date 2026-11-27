@@ -13,13 +13,17 @@ from pathlib import Path
 import pytest
 
 from pixelcat import __version__, installer, paths, persistence, settings
-from pixelcat.adapters.windows import elevation, hardware, system
+from pixelcat.adapters.windows import elevation, hardware, registry, system
+from pixelcat.adapters.windows.known_folders import shell_folder
+from pixelcat.adapters.windows.platform import WindowsSaveMarks, WindowsSecretStore
 from pixelcat.installer import AiPlan, InstallError, Layout
 from pixelcat.llm import external, model_status, models
 
 USER_PROGRAMS = "5CD7AEE2-2219-4A67-B85D-6C9CE15660CB"
 START_MENU = "A77F5D77-2E2B-44C3-A6A2-ABA601054A51"
 DESKTOP = "B4BFCC3A-DB2C-424C-B029-7FE99A87C641"
+# the installer keeps the save with the Windows adapter's secret store and marks
+WINDOWS_STORAGE = {"secrets": WindowsSecretStore(), "marks": WindowsSaveMarks()}
 
 STRONG = hardware.Hardware(ram_gb=64, cores=16, cpu="fast", avx2=True, gpus=[], disk_free_gb=500)
 MEDIUM = hardware.Hardware(ram_gb=16, cores=8, cpu="ok", avx2=True, gpus=[], disk_free_gb=500)
@@ -277,9 +281,9 @@ def test_install_does_not_add_autostart(lay: Layout, src: Path, links, fake_winr
 
 # ---------------------------------------------------------------- uninstall
 @pytest.fixture
-def installed(lay: Layout, src: Path, links, fake_winreg, dpapi) -> Layout:  # type: ignore[no-untyped-def]
+def installed(lay: Layout, src: Path, links, fake_winreg, win_dpapi) -> Layout:  # type: ignore[no-untyped-def]
     installer.install(lay, src, desktop_shortcut=True)
-    persistence.save_state(persistence.SavedState(pets=3), lay.data_dir)
+    persistence.save_state(persistence.SavedState(pets=3), lay.data_dir, **WINDOWS_STORAGE)
     lay.tools_dir.mkdir(parents=True)
     (lay.tools_dir / "ant.exe").write_bytes(b"MZ")
     return lay
@@ -292,7 +296,7 @@ def test_uninstall_keeps_the_memory_by_default(installed: Layout, fake_winreg) -
     assert not fake_winreg.has_key(lay.uninstall_key)
     assert installer.installed_version(lay) == "?"           # (the exe is removed by remove_program_folder)
     assert (lay.data_dir / "save.dat").exists() and lay.tools_dir.exists()
-    assert fake_winreg.values(persistence.REG_PATH) != {}
+    assert fake_winreg.values(registry.REG_PATH) != {}
 
 
 def test_uninstall_can_delete_the_memory(installed: Layout, fake_winreg, root_handlers) -> None:  # type: ignore[no-untyped-def]
@@ -304,7 +308,7 @@ def test_uninstall_can_delete_the_memory(installed: Layout, fake_winreg, root_ha
     assert installer.uninstall(lay, delete_data=True) == []
     assert not lay.data_dir.exists() and not lay.tools_dir.exists()
     assert fh not in root_handlers.handlers and fh.stream is None
-    assert fake_winreg.values(persistence.REG_PATH) == {}     # the folder's converted mark is forgotten
+    assert fake_winreg.values(registry.REG_PATH) == {}     # the folder's converted mark is forgotten
     assert lay.install_dir.exists()
 
 
@@ -686,7 +690,7 @@ def test_ai_plan_with_a_broken_user_config(machine, lay: Layout, fake_winreg, mo
 
 # ---------------------------------------------------------------- setup_ai
 @pytest.fixture
-def ai_env(machine, lay: Layout, fake_winreg, dpapi, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):  # type: ignore[no-untyped-def]
+def ai_env(machine, lay: Layout, fake_winreg, win_dpapi, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):  # type: ignore[no-untyped-def]
     """setup_ai with Ollama's download, signature check and installer faked."""
     import tempfile
 
@@ -730,7 +734,7 @@ def test_setup_ai_ready_model_on_a_strong_pc(ai_env, lay: Layout) -> None:  # ty
     p.model_ready = True
     assert ai_env.run(plan=p) == "The AI chat is ready."
     assert not (lay.data_dir / "config.json").exists()           # the default model: nothing to write
-    st = persistence.load_state(lay.data_dir)
+    st = persistence.load_state(lay.data_dir, **WINDOWS_STORAGE)
     assert st.model_download_ok is True
 
 
@@ -770,7 +774,7 @@ def test_setup_ai_installs_ollama_first(ai_env, lay: Layout) -> None:  # type: i
     assert ai_env.progress == ["Downloading Ollama… 50% (0.5 of 1.0 GB)", "Downloading Ollama… (0.7 GB)",
                                "Checking that it really comes from Ollama…", "Installing Ollama… (about a minute)"]
     assert list(ai_env.temp.iterdir()) == []                     # the setup and .part are deleted
-    assert persistence.load_state(lay.data_dir).model_download_ok
+    assert persistence.load_state(lay.data_dir, **WINDOWS_STORAGE).model_download_ok
 
 
 def test_setup_ai_refuses_an_unsigned_ollama_setup(ai_env, lay: Layout) -> None:  # type: ignore[no-untyped-def]
@@ -976,7 +980,7 @@ def real_src(tmp_path: Path) -> Path:
 def real_lay(tmp_path: Path, test_reg_key: str, real_profile, monkeypatch: pytest.MonkeyPatch) -> Layout:  # type: ignore[no-untyped-def]
     """Everything the install writes goes to tmp_path and the test registry key; only the
     environment is the real profile's, because the shell link code resolves Known Folders."""
-    monkeypatch.setattr(persistence, "REG_PATH", test_reg_key + r"\ProtectedSaves")
+    monkeypatch.setattr(registry, "REG_PATH", test_reg_key + r"\ProtectedSaves")
     return make_layout(tmp_path / "root", test_reg_key)
 
 
@@ -1023,7 +1027,7 @@ def test_real_known_folders_layout(real_profile, monkeypatch: pytest.MonkeyPatch
     assert start_menu is not None and start_menu.is_dir(), f"Start menu folder: {start_menu}"
     lay = installer.layout()
     assert lay.install_dir.name == "PixelCat" and lay.install_dir.parent.name.lower() == "programs"
-    assert lay.programs_dir == start_menu and lay.desktop_dir == paths.shell_folder("desktop")
+    assert lay.programs_dir == start_menu and lay.desktop_dir == shell_folder("desktop")
     assert lay.uninstall_key == installer.UNINSTALL_KEY       # read only: nothing is written here
 
 

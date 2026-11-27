@@ -17,8 +17,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "pixelcat"
 
+# The storage side of the core: it gets the secret store, known folders and save marks passed in (ports).
+STORAGE_CORE = ["paths.py", "persistence.py", "savecrypt.py", "chats.py", "llm/external.py"]
 # The platform-independent core: it may use pixelcat.domain, never pixelcat.adapters (nor the old pixelcat.desktop).
-CORE = ["engine", "games", "sprites", "domain", "settings.py", "progress.py"]
+CORE = ["engine", "games", "sprites", "domain", "settings.py", "progress.py", *STORAGE_CORE]
+WINDOWS_ONLY = {"ctypes", "winreg", "msvcrt", "_winapi"}
 # Qt glue that still calls Win32 directly; a later slice of PR 2 puts these calls behind desktop ports.
 CORE_EXCEPTIONS = {"games/qt_host.py"}
 
@@ -80,6 +83,12 @@ def test_core_does_not_import_adapters(path):
     assert not bad, f"pixelcat/{_rel(path)} imports {bad}; use pixelcat.domain (or a port) instead"
 
 
+@pytest.mark.parametrize("path", _files(*STORAGE_CORE), ids=_rel)
+def test_storage_core_makes_no_windows_calls(path):
+    bad = sorted(name for name in _imports(path) if name.split(".")[0] in WINDOWS_ONLY)
+    assert not bad, f"pixelcat/{_rel(path)} imports {bad}; use the storage ports instead"
+
+
 @pytest.mark.parametrize("path", _files("ports"), ids=_rel)
 def test_ports_import_only_stdlib_and_the_domain(path):
     # Qt only for type hints (under TYPE_CHECKING: see test_ports_load_without_qt_ctypes_or_adapters)
@@ -135,6 +144,14 @@ def test_cat_and_game_logic_load_without_adapters():
                     importlib.import_module(m.name)
     """)
     assert "pixelcat.games.mice" in loaded and "pixelcat.engine.brain" in loaded
+    assert not {m for m in loaded if _is(m, "pixelcat.adapters")}
+
+
+def test_storage_core_loads_without_adapters():
+    # (only the adapters: on Windows the standard library and Qt may load ctypes/winreg themselves)
+    loaded = _loaded_after("import pixelcat.paths, pixelcat.persistence, pixelcat.savecrypt, pixelcat.chats, "
+                           "pixelcat.llm.external")
+    assert "pixelcat.persistence" in loaded and "pixelcat.llm.external" in loaded
     assert not {m for m in loaded if _is(m, "pixelcat.adapters")}
 
 

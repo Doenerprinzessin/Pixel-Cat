@@ -42,8 +42,11 @@ sys.path.insert(0, str(ROOT))
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from pixelcat.bootstrap import build_platform  # noqa: E402
 from pixelcat.llm import ant_tool as T  # noqa: E402
 from pixelcat.llm import external as X  # noqa: E402
+
+SECRETS = build_platform().secrets                 # keys.dat, as the app keeps it
 
 app = QApplication(sys.argv[:1])
 app.setQuitOnLastWindowClosed(False)
@@ -236,7 +239,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     import anthropic
     X.BASE_URLS["anthropic"] = BASE
     from pixelcat.llm import anthropic_client as AC
-    ms = AC.list_models(X.Credentials(), "signin")
+    ms = AC.list_models(X.Credentials(secrets=SECRETS), "signin")
     check("...and the requests use the sign-in's token", [m["id"] for m in ms] == ["claude-sonnet-5-5"]
           and S["auth"][-1] == "Bearer tok-from-ant", S["auth"][-1][:20])
     APPROVE.unlink()
@@ -253,7 +256,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("sign out: ant signs the profile out, Pixel Cat's sign-in folder is gone",
           (FAKE / "logged_out").exists() and not T.signin_dir().exists())
     try:
-        AC.client(X.Credentials(), "signin")
+        AC.client(X.Credentials(secrets=SECRETS), "signin")
         msg = "made a client"
     except anthropic.CredentialsError as e:
         msg = str(e)

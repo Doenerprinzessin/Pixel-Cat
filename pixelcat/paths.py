@@ -4,6 +4,12 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from .domain.folders import KNOWN_FOLDERS
+
+if TYPE_CHECKING:
+    from .ports import KnownFolders
 
 
 def app_dir() -> Path:
@@ -43,48 +49,11 @@ def cache_dir() -> Path:
     return path
 
 
-# Windows "known folders" - asked from Windows itself, because companies often redirect them
-# (Desktop/Documents to a network share, Pictures to OneDrive "Bilder" ...).
-_KNOWN_FOLDER_IDS = {
-    "desktop": "B4BFCC3A-DB2C-424C-B029-7FE99A87C641",
-    "documents": "FDD39AD0-238F-46AF-ADB4-6C85480369C7",
-    "downloads": "374DE290-123F-4565-9164-39C4925E467B",
-    "pictures": "33E28130-4E1E-4676-835A-98395C3BC3BB",
-    "music": "4BD8D571-6D19-48D3-BE97-422220080E43",
-    "videos": "18989B1D-99B5-455B-841C-AB7C74E4DDFC",
-}
-_known_cache: dict[str, Path | None] = {}
+def notes_dir(folders: KnownFolders) -> Path:
+    return (folders.known_folder("documents") or Path.home() / "Documents") / "PixelCat Notes"
 
 
-def shell_folder(name: str) -> Path | None:
-    """The real location of a Windows known folder (SHGetKnownFolderPath), or None."""
-    if name in _known_cache:
-        return _known_cache[name]
-    path: Path | None = None
-    try:
-        import ctypes
-        import uuid
-        from ctypes import wintypes
-
-        guid = (ctypes.c_ubyte * 16).from_buffer_copy(uuid.UUID(_KNOWN_FOLDER_IDS[name]).bytes_le)
-        out = ctypes.c_wchar_p()
-        fn = ctypes.windll.shell32.SHGetKnownFolderPath
-        fn.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.HANDLE, ctypes.POINTER(ctypes.c_wchar_p)]
-        fn.restype = ctypes.c_long
-        if fn(ctypes.byref(guid), 0, None, ctypes.byref(out)) == 0 and out.value:
-            path = Path(out.value)
-        ctypes.windll.ole32.CoTaskMemFree(out)
-    except Exception:  # noqa: BLE001 - fall back to the usual place
-        path = None
-    _known_cache[name] = path
-    return path
-
-
-def notes_dir() -> Path:
-    return (shell_folder("documents") or Path.home() / "Documents") / "PixelCat Notes"
-
-
-def known_folder(alias: str) -> Path | None:
+def known_folder(alias: str, folders: KnownFolders) -> Path | None:
     """Resolve friendly folder aliases used by the chat tools to the user's real folders."""
     alias = alias.strip().lower().replace(" ", "_")
     alias = {"docs": "documents", "my_documents": "documents", "my_desktop": "desktop",
@@ -93,7 +62,7 @@ def known_folder(alias: str) -> Path | None:
     if alias == "home":
         return Path.home()
     if alias in ("pixelcat_notes", "notes"):
-        return notes_dir()
-    if alias in _KNOWN_FOLDER_IDS:
-        return shell_folder(alias) or Path.home() / alias.capitalize()
+        return notes_dir(folders)
+    if alias in KNOWN_FOLDERS:
+        return folders.known_folder(alias) or Path.home() / alias.capitalize()
     return None

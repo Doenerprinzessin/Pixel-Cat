@@ -1,29 +1,29 @@
 """Fixtures for the top-level pixelcat modules (save, paths, installer, settings ...).
 
-The Windows seams used by these modules are faked here, in one place:
+The core gets its storage ports passed in; the fakes for them are here:
+
+* ``dpapi``         - a :class:`~pixelcat.ports.SecretStore`: reversible, tamper-checking and
+  bound to an "account" (pass it as ``secrets=``).
+* ``save_marks``    - a :class:`~pixelcat.ports.SaveMarks` in memory (pass it as ``marks=``).
+
+and for the Windows-only installer, which still calls the platform itself:
 
 * ``fake_winreg``   - an in-memory registry installed as ``sys.modules["winreg"]``
   (the modules do ``import winreg`` inside their functions, so this also replaces
   the real one on Windows).
-* ``dpapi``         - replaces ``savecrypt.protect`` / ``savecrypt.unprotect`` with a
-  reversible, tamper-checking fake bound to an "account".
-* ``known_folders`` - a fake ``ctypes.windll`` whose ``SHGetKnownFolderPath`` answers
-  from a GUID -> path table (``no_windll``: every Windows API call fails).
-
-When the refactor moves these behind ports, only this file should need updating.
+* ``win_dpapi``     - ``dpapi`` behind ``pixelcat.adapters.windows.dpapi``.
+* ``known_folders`` / ``no_windll`` (in tests/conftest.py) - a fake ``ctypes.windll``.
 """
 from __future__ import annotations
 
-import ctypes
 import hashlib
 import hmac
 import sys
 import types
-import uuid
 
 import pytest
 
-from pixelcat import paths, savecrypt
+from pixelcat import savecrypt
 
 # ---------------------------------------------------------------- registry
 class _Key:
@@ -179,99 +179,49 @@ class FakeDpapi:
 
 
 @pytest.fixture
-def dpapi(monkeypatch: pytest.MonkeyPatch) -> FakeDpapi:
-    fake = FakeDpapi()
-    monkeypatch.setattr(savecrypt, "protect", fake.protect)
-    monkeypatch.setattr(savecrypt, "unprotect", fake.unprotect)
-    return fake
-
-
-# ---------------------------------------------------------------- Known Folders
-class FakeKnownFolders:
-    """``ctypes.windll`` with ``shell32.SHGetKnownFolderPath`` / ``ole32.CoTaskMemFree``."""
-
-    def __init__(self, fake_dll) -> None:  # type: ignore[no-untyped-def]
-        self.folders: dict[str, str] = {}      # GUID (upper case) -> path
-        self.hresult = 0
-        self.asked: list[str] = []
-        self.shell32 = fake_dll("shell32")
-        self.ole32 = fake_dll("ole32")
-        self.shell32.SHGetKnownFolderPath.result = self._get
-
-    def _get(self, guid_ref, flags, token, out_ref) -> int:  # type: ignore[no-untyped-def]
-        guid = str(uuid.UUID(bytes_le=bytes(guid_ref._obj))).upper()
-        self.asked.append(guid)
-        if self.hresult != 0:
-            return self.hresult
-        if guid not in self.folders:
-            return -2147024894                 # HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
-        out_ref._obj.value = self.folders[guid]
-        return 0
-
-    @property
-    def freed(self) -> int:
-        return len(self.ole32.CoTaskMemFree.calls)
+def dpapi() -> FakeDpapi:
+    return FakeDpapi()
 
 
 @pytest.fixture
-def known_folders(monkeypatch: pytest.MonkeyPatch, fake_dll) -> FakeKnownFolders:  # type: ignore[no-untyped-def]
-    fake = FakeKnownFolders(fake_dll)
-    monkeypatch.setattr(paths, "_known_cache", {})
-    monkeypatch.setattr(ctypes, "windll", types.SimpleNamespace(shell32=fake.shell32, ole32=fake.ole32),
-                        raising=False)
-    return fake
+def win_dpapi(monkeypatch: pytest.MonkeyPatch, dpapi: FakeDpapi) -> FakeDpapi:
+    """``dpapi`` behind the Windows adapter's own functions (for the installer, which uses that adapter)."""
+    from pixelcat.adapters.windows import dpapi as windows_dpapi
+
+    monkeypatch.setattr(windows_dpapi, "protect", dpapi.protect)
+    monkeypatch.setattr(windows_dpapi, "unprotect", dpapi.unprotect)
+    return dpapi
+
+
+# ---------------------------------------------------------------- save marks
+class FakeSaveMarks:
+    """The protected-save marks in memory: ``marked`` maps folder ids to 1 (as the registry
+    values); with ``fail`` set every call raises it (like winreg without access)."""
+
+    def __init__(self) -> None:
+        self.marked: dict[str, int] = {}
+        self.fail: type[OSError] | None = None
+
+    def _check(self) -> None:
+        if self.fail is not None:
+            raise self.fail(5, "Access is denied")
+
+    def is_marked(self, folder_id: str) -> bool:
+        self._check()
+        if folder_id not in self.marked:
+            raise FileNotFoundError(2, "The system cannot find the file specified")
+        return bool(self.marked[folder_id])
+
+    def mark(self, folder_id: str) -> None:
+        self._check()
+        self.marked[folder_id] = 1
+
+    def forget(self, folder_id: str) -> None:
+        self._check()
+        if self.marked.pop(folder_id, None) is None:
+            raise FileNotFoundError(2, "The system cannot find the file specified")
 
 
 @pytest.fixture
-def no_windll(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Windows APIs unavailable: any ``ctypes.windll`` use raises."""
-    class _Broken:
-        def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
-            raise OSError(126, "The specified module could not be found")
-
-    monkeypatch.setattr(paths, "_known_cache", {})
-    monkeypatch.setattr(ctypes, "windll", _Broken(), raising=False)
-
-
-# ---------------------------------------------------------------- real registry (Windows only)
-@pytest.fixture
-def test_reg_key():  # type: ignore[no-untyped-def]
-    """A unique ``HKCU\\Software\\PixelCatTests\\<uuid>`` path, deleted with its subkeys afterwards."""
-    import winreg
-
-    base = r"Software\PixelCatTests"
-    key = base + "\\" + uuid.uuid4().hex
-
-    def delete_tree(path: str) -> None:
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_ALL_ACCESS) as k:
-                while True:
-                    try:
-                        sub = winreg.EnumKey(k, 0)
-                    except OSError:
-                        break
-                    delete_tree(path + "\\" + sub)
-            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
-        except FileNotFoundError:
-            pass
-
-    yield key
-    delete_tree(key)
-    try:
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base)    # only succeeds when empty
-    except OSError:
-        pass
-
-
-@pytest.fixture
-def real_reg_read():  # type: ignore[no-untyped-def]
-    import winreg
-
-    def read(path: str, name: str):  # type: ignore[no-untyped-def]
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as k:
-                return winreg.QueryValueEx(k, name)[0]
-        except FileNotFoundError:
-            return None
-
-    return read
+def save_marks() -> FakeSaveMarks:
+    return FakeSaveMarks()

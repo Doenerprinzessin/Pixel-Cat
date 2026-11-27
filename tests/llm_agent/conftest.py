@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from fakes.platform import FakeKnownFolders
 from llm_agent.agent_fakes import FOLDER_ALIASES, OWN_PID, Clock, FakeDesktop, Hooks
 from pixelcat import paths
 from pixelcat.llm.agent import DesktopAgent
@@ -25,10 +26,18 @@ def folders(isolated_dirs: Path) -> dict[str, Path]:
     for alias in FOLDER_ALIASES:
         p = base / alias.capitalize()
         p.mkdir(parents=True)
-        paths._known_cache[alias] = p
         out[alias] = p
-    out["notes"] = paths.notes_dir()
     return out
+
+
+@pytest.fixture(autouse=True)
+def folder_port(folders: dict[str, Path]) -> FakeKnownFolders:
+    """The KnownFolders port the tools get: it knows ``folders`` (and ``folders["notes"]`` is set from it)."""
+    port = FakeKnownFolders()
+    known = dict(folders)
+    port.answers("known_folder", known.get)
+    folders["notes"] = paths.notes_dir(port)
+    return port
 
 
 @pytest.fixture(autouse=True)
@@ -44,13 +53,15 @@ def cfg() -> Config:
 
 
 @pytest.fixture
-def hooks() -> Hooks:
-    return Hooks()
+def hooks(folder_port) -> Hooks:  # type: ignore[no-untyped-def]
+    h = Hooks()
+    h.folders = folder_port
+    return h
 
 
 @pytest.fixture
 def toolbox(cfg: Config, hooks: Hooks) -> ToolBox:
-    return ToolBox(cfg, hooks.hooks())
+    return ToolBox(cfg, hooks.hooks(), folders=hooks.folders)
 
 
 @pytest.fixture

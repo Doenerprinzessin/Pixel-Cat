@@ -13,9 +13,9 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from . import (capture, control, elevation, escwatch, hardware, inputs, ledges, monitors, notifications, system, uia,
-               volume, win32, windows)
-from ... import installer, paths, persistence, savecrypt
+from . import (capture, control, dpapi, elevation, escwatch, hardware, inputs, known_folders, ledges, monitors,
+               notifications, registry, system, uia, volume, win32, windows)
+from ... import installer
 from ...domain import (AppWindow, ClipboardKind, Element, ElementKinds, Hardware, KillPlan, Monitor, Snapshot,
                        UserState, WindowId, WinInfo)
 from ...ports import ClipboardBackup, EscapeWatcher, Keys, NotificationFeed, Platform, Rect
@@ -352,15 +352,15 @@ class WindowsNotifications:
 # ------------------------------------------------------------------ storage (the code moves here in a later step)
 class WindowsSecretStore:
     def protect(self, data: bytes) -> bytes:
-        return savecrypt.protect(data)
+        return dpapi.protect(data)
 
     def unprotect(self, blob: bytes) -> bytes:
-        return savecrypt.unprotect(blob)
+        return dpapi.unprotect(blob)
 
 
 class WindowsKnownFolders:
     def known_folder(self, name: str) -> Path | None:
-        return paths.shell_folder(name)
+        return known_folders.shell_folder(name)
 
 
 class WindowsAutostart:
@@ -375,22 +375,13 @@ class WindowsSaveMarks:
     """HKCU values named after the folder (raises OSError like winreg)."""
 
     def is_marked(self, folder_id: str) -> bool:
-        import winreg
-
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, persistence.REG_PATH) as k:
-            return bool(winreg.QueryValueEx(k, folder_id)[0])
+        return registry.is_marked(folder_id)
 
     def mark(self, folder_id: str) -> None:
-        import winreg
-
-        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, persistence.REG_PATH, 0, winreg.KEY_SET_VALUE) as k:
-            winreg.SetValueEx(k, folder_id, 0, winreg.REG_DWORD, 1)
+        registry.mark(folder_id)
 
     def forget(self, folder_id: str) -> None:
-        import winreg
-
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, persistence.REG_PATH, 0, winreg.KEY_SET_VALUE) as k:
-            winreg.DeleteValue(k, folder_id)
+        registry.forget(folder_id)
 
 
 class WindowsInstaller:

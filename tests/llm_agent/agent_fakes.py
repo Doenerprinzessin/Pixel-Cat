@@ -308,6 +308,7 @@ class Hooks:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
         self.request = "the user's request"
+        self.folders: Any = None            # the KnownFolders port for the ToolBox (set by the hooks fixture)
 
     def hooks(self, watches: Any = None, task_request: bool = True) -> AppHooks:
         return AppHooks(

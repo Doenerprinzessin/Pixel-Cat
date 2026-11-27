@@ -136,13 +136,13 @@ def test_fmt_reset(at, text):
 
 # ------------------------------------------------------------------ keys.dat
 def test_credentials_are_kept_encrypted_and_read_back(tmp_path, fake_crypt):
-    c = X.Credentials(tmp_path)
+    c = X.Credentials(tmp_path, secrets=fake_crypt)
     c.set("anthropic_key", "sk-ant-secret-123")
     c.set("chatgpt", {"access_token": "AT"})
     raw = (tmp_path / "keys.dat").read_bytes()
     assert raw.startswith(X.Credentials.MAGIC)
     assert b"sk-ant-secret" not in raw
-    again = X.Credentials(tmp_path)
+    again = X.Credentials(tmp_path, secrets=fake_crypt)
     assert again.get("anthropic_key") == "sk-ant-secret-123"
     assert again.get("chatgpt") == {"access_token": "AT"}
     assert again.get("missing", "dflt") == "dflt"
@@ -152,18 +152,18 @@ def test_credentials_are_kept_encrypted_and_read_back(tmp_path, fake_crypt):
 def test_credentials_default_to_the_data_folder(fake_crypt):
     from pixelcat import paths
 
-    X.Credentials().set("openai_key", "sk-1")
+    X.Credentials(secrets=fake_crypt).set("openai_key", "sk-1")
     assert (paths.data_dir() / "keys.dat").is_file()
-    assert X.Credentials().get("openai_key") == "sk-1"
+    assert X.Credentials(secrets=fake_crypt).get("openai_key") == "sk-1"
 
 
 def test_credentials_set_none_forgets(tmp_path, fake_crypt):
-    c = X.Credentials(tmp_path)
+    c = X.Credentials(tmp_path, secrets=fake_crypt)
     c.set("a", 1)
     c.set("b", 2)
     c.set("a", None)
-    assert X.Credentials(tmp_path).get("a") is None
-    assert X.Credentials(tmp_path).get("b") == 2
+    assert X.Credentials(tmp_path, secrets=fake_crypt).get("a") is None
+    assert X.Credentials(tmp_path, secrets=fake_crypt).get("b") == 2
 
 
 @pytest.mark.parametrize("content", [
@@ -175,11 +175,11 @@ def test_credentials_set_none_forgets(tmp_path, fake_crypt):
 ])
 def test_unreadable_keys_file_reads_as_empty(tmp_path, fake_crypt, content):
     (tmp_path / "keys.dat").write_bytes(content)
-    assert X.Credentials(tmp_path).get("anthropic_key") is None
+    assert X.Credentials(tmp_path, secrets=fake_crypt).get("anthropic_key") is None
 
 
 def test_missing_keys_file_reads_as_empty(tmp_path, fake_crypt):
-    assert X.Credentials(tmp_path).get("x") is None
+    assert X.Credentials(tmp_path, secrets=fake_crypt).get("x") is None
     assert not (tmp_path / "keys.dat").exists()
 
 

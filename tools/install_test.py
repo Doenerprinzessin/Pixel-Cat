@@ -36,6 +36,7 @@ import winreg  # noqa: E402
 
 from pixelcat import __version__, installer  # noqa: E402
 from pixelcat.adapters.windows import elevation, system  # noqa: E402
+from pixelcat.bootstrap import build_platform  # noqa: E402
 from pixelcat.persistence import load_state  # noqa: E402
 
 TEST_KEY = r"Software\PixelCatInstallTest"
@@ -136,7 +137,8 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("updating asks the running cat to close; it saves and quits by itself",
           rc == 0 and closed and "Setup asked me to close" in logtxt, f"exit {rc}, {time.time() - t0:.1f}s")
     check("...and the program is replaced", lay.exe.stat().st_mtime > before)
-    st = load_state(lay.data_dir)
+    plat = build_platform()
+    st = load_state(lay.data_dir, secrets=plat.secrets, marks=plat.save_marks)
     check("the cat keeps its memory across the update (its old state.json converted to the protected save)",
           st.best_round == 4 and not (lay.data_dir / "state.json").exists())
     # 3) --launch: the cat keeps running after Setup has finished ------------------------

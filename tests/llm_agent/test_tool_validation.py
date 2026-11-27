@@ -163,7 +163,7 @@ def test_open_app_start_menu_disabled(cfg, hooks, desk) -> None:  # type: ignore
     cfg.allow_start_menu_apps = False
     desk.shortcuts["spotify"] = ("Spotify", "C:/Start/Spotify.lnk")
     with pytest.raises(ToolError, match="can't find an app called 'spotify'"):
-        ToolBox(cfg, hooks.hooks()).prepare("open_app", {"name": "spotify"})
+        ToolBox(cfg, hooks.hooks(), folders=hooks.folders).prepare("open_app", {"name": "spotify"})
 
 
 def test_open_app_that_needs_admin_always_asks(toolbox: ToolBox, desk) -> None:  # type: ignore[no-untyped-def]
@@ -249,7 +249,7 @@ def test_folder_paths_inside_and_outside(toolbox: ToolBox, folders, tmp_path) ->
 
 def test_allowed_roots_come_from_the_config(cfg, hooks, folders) -> None:  # type: ignore[no-untyped-def]
     cfg.allowed_roots = ["downloads", "no_such_alias"]
-    tb = ToolBox(cfg, hooks.hooks())
+    tb = ToolBox(cfg, hooks.hooks(), folders=hooks.folders)
     assert prep(tb, "list_files", folder="downloads")["_path"] == folders["downloads"].resolve()
     assert "outside the folders I'm allowed to touch (downloads, no_such_alias)" in refused(tb, "list_files",
                                                                                             folder="desktop")
@@ -401,7 +401,7 @@ class FakeWatches:
 
 @pytest.fixture
 def wtb(cfg, hooks) -> ToolBox:  # type: ignore[no-untyped-def]
-    return ToolBox(cfg, hooks.hooks(watches=FakeWatches()))
+    return ToolBox(cfg, hooks.hooks(watches=FakeWatches()), folders=hooks.folders)
 
 
 def test_wait_for_needs_the_watch_manager(toolbox: ToolBox) -> None:
@@ -442,7 +442,7 @@ def test_wait_for_unfriendly_app_name_is_kept(wtb: ToolBox) -> None:
 
 
 def test_wait_for_without_task_request(cfg, hooks) -> None:  # type: ignore[no-untyped-def]
-    tb = ToolBox(cfg, hooks.hooks(watches=FakeWatches(), task_request=False))
+    tb = ToolBox(cfg, hooks.hooks(watches=FakeWatches(), task_request=False), folders=hooks.folders)
     assert prep(tb, "wait_for", event="time", minutes=1)["_watch"].request == ""
 
 

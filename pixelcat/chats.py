@@ -17,9 +17,12 @@ import secrets
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import paths, savecrypt
+
+if TYPE_CHECKING:
+    from .ports import SecretStore
 
 log = logging.getLogger(__name__)
 
@@ -72,8 +75,9 @@ def clean_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 class ChatStore:
-    def __init__(self, folder: Path | None = None) -> None:
+    def __init__(self, folder: Path | None = None, *, secrets: SecretStore) -> None:
         self._folder = folder
+        self.secrets = secrets
 
     # ------------------------------------------------------------------ files
     def folder(self) -> Path:
@@ -86,14 +90,12 @@ class ChatStore:
             raise ValueError(f"not a chat id: {cid!r}")
         return self.folder() / f"{cid}.chat"
 
-    @staticmethod
-    def _read(path: Path) -> Any:
-        return json.loads(savecrypt.unprotect(path.read_bytes()).decode("utf-8"))
+    def _read(self, path: Path) -> Any:
+        return json.loads(self.secrets.unprotect(path.read_bytes()).decode("utf-8"))
 
-    @staticmethod
-    def _write(path: Path, data: Any) -> None:
-        blob = savecrypt.protect(json.dumps(data, ensure_ascii=False, separators=(",", ":"),
-                                            default=str).encode("utf-8"))
+    def _write(self, path: Path, data: Any) -> None:
+        blob = self.secrets.protect(json.dumps(data, ensure_ascii=False, separators=(",", ":"),
+                                               default=str).encode("utf-8"))
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_bytes(blob)
         for attempt in range(20):        # (a virus scanner may hold the file for a moment)
