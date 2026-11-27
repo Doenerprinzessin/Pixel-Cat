@@ -39,13 +39,14 @@ def main() -> int:  # noqa: C901 - a linear test script
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     from pixelcat.app import PixelCatApp
+    from pixelcat.bootstrap import build_platform
     from pixelcat.engine.states import S
     from pixelcat.persistence import SavedState
     from pixelcat.settings import load_config
 
     saved = SavedState(autostart_asked=True)
     saved.tutorials_seen = ["ball"]             # (the first-time explanation is tested in menu/games_ui_test)
-    pet = PixelCatApp(app, load_config(), saved, selftest=0)
+    pet = PixelCatApp(app, load_config(), saved, selftest=0, platform=build_platform())
     pet.save = lambda: None                     # never touch the real state.json
     pet.start()
     game, bw, brain = pet.game, pet.ball_win, pet.brain

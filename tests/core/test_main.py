@@ -6,8 +6,8 @@ import types
 
 import pytest
 
-from pixelcat import installer, logsetup
-from pixelcat.adapters.windows import system, win32
+from fakes.platform import FakePlatform
+from pixelcat import bootstrap, installer, logsetup
 
 
 @pytest.fixture
@@ -16,12 +16,15 @@ def app_main(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
     import main
 
     calls: list = []
+    platform = FakePlatform()
     monkeypatch.setattr(logsetup, "setup_logging", lambda debug=False: calls.append(("logging", debug)))
-    monkeypatch.setattr(win32, "set_dpi_awareness", lambda: calls.append(("dpi",)))
-    monkeypatch.setattr(win32, "message_box", lambda text, *a, **k: calls.append(("message", text)))
-    monkeypatch.setattr(system, "acquire_single_instance", lambda: False)
-    monkeypatch.setattr(installer, "run_quiet", lambda args: calls.append(("quiet", args)) or 7)
-    monkeypatch.setattr(installer, "run_window", lambda mode: calls.append(("window", mode)) or 8)
+    monkeypatch.setattr(bootstrap, "build_platform", lambda *a, **k: platform)
+    platform.display.answers("set_dpi_awareness", lambda: calls.append(("dpi",)))
+    platform.system.answers("message_box", lambda text, *a, **k: calls.append(("message", text)))
+    platform.system.returns("acquire_single_instance", False)
+    platform.installer.answers("is_setup_name", installer.is_setup_name)     # the real name check
+    platform.installer.answers("run_quiet", lambda args: calls.append(("quiet", args)) or 7)
+    platform.installer.answers("run_window", lambda mode: calls.append(("window", mode)) or 8)
     monkeypatch.delattr(sys, "frozen", raising=False)
 
     def run(*argv: str, frozen: bool = False, exe: str = "PixelCat.exe") -> int:
@@ -31,7 +34,7 @@ def app_main(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
             monkeypatch.setattr(sys, "frozen", True, raising=False)
         return main.main()
 
-    return types.SimpleNamespace(run=run, calls=calls)
+    return types.SimpleNamespace(run=run, calls=calls, platform=platform)
 
 
 def test_installer_needs_the_built_exe(app_main, capsys: pytest.CaptureFixture) -> None:  # type: ignore[no-untyped-def]
@@ -62,6 +65,7 @@ def test_quiet_uninstall(app_main) -> None:  # type: ignore[no-untyped-def]
 def test_installer_window(app_main, argv: list[str], exe: str, mode: str) -> None:  # type: ignore[no-untyped-def]
     assert app_main.run(*argv, frozen=True, exe=exe) == 8
     assert app_main.calls[-1] == ("window", mode)
+    assert app_main.platform.system.calls == []     # the installer never takes the single-instance guard
 
 
 def test_a_second_cat_only_says_so(app_main) -> None:  # type: ignore[no-untyped-def]

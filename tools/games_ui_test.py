@@ -61,6 +61,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     import pixelcat.app as appmod
     from pixelcat import progress
     from pixelcat.app import PixelCatApp
+    from pixelcat.bootstrap import build_platform
     from pixelcat.engine.states import S
     from pixelcat.games import ORDER
     from pixelcat.persistence import SavedState
@@ -69,7 +70,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     saved = SavedState(autostart_asked=True)
     saved.xp = progress.xp_to_reach(progress.MAX_STAGE)          # everything unlocked
     saved.tutorials_seen = [k for k in ORDER if k != "laser"]
-    pet = PixelCatApp(app, load_config(), saved, selftest=0)
+    pet = PixelCatApp(app, load_config(), saved, selftest=0, platform=build_platform())
     pet.save = lambda: None                     # never touch the real state.json
     pet.start()
     brain, host = pet.brain, pet.host

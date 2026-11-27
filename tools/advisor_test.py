@@ -160,6 +160,7 @@ def main() -> int:  # noqa: C901 - a linear test script
 def app_checks() -> None:
     from pixelcat import persistence
     from pixelcat.app import PixelCatApp
+    from pixelcat.bootstrap import build_platform
     from pixelcat.adapters.windows import win32
     from pixelcat.llm.model_status import ONLINE_ONLY
     from pixelcat.logsetup import setup_logging
@@ -171,7 +172,7 @@ def app_checks() -> None:
     hardware._cached = weak
     cfg = load_config()
     cfg.ai_mode, cfg.preload_on_start = "online", False
-    pet = PixelCatApp(app, cfg, persistence.SavedState(autostart_asked=True), selftest=1)
+    pet = PixelCatApp(app, cfg, persistence.SavedState(autostart_asked=True), selftest=1, platform=build_platform())
     pet.save = lambda: None
     pet.model_status.ensure(force=True)
     end = time.time() + 10

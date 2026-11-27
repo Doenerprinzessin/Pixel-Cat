@@ -42,6 +42,7 @@ from .adapters.windows import notifications
 from .llm.watch import Watch, WatchManager
 from .logsetup import RateLimitedLogger
 from .persistence import SavedState, save_state
+from .ports import Platform
 from .settings import Config
 from .sprites.library import SpriteLibrary
 from .ui.ball import BallOverlay
@@ -127,9 +128,11 @@ class _Later(QObject):
 
 
 class PixelCatApp(QObject):
-    def __init__(self, qapp: QApplication, cfg: Config, saved: SavedState, selftest: float = 0.0) -> None:
+    def __init__(self, qapp: QApplication, cfg: Config, saved: SavedState, selftest: float = 0.0, *,
+                 platform: Platform) -> None:
         super().__init__()
         self.qapp = qapp
+        self.platform = platform        # the ports (from pixelcat.bootstrap)
         self.cfg = cfg
         self.t = cfg.tuning
         self.saved = saved

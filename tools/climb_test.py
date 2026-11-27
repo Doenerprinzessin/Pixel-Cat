@@ -82,13 +82,14 @@ def main() -> int:
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     from pixelcat.app import PixelCatApp
+    from pixelcat.bootstrap import build_platform
     from pixelcat.engine.states import S
     from pixelcat.persistence import SavedState
     from pixelcat.settings import load_config
 
     cfg = load_config()
     cfg.explore_windows = False          # (window tops and edges only - not the surfaces inside windows)
-    pet = PixelCatApp(app, cfg, SavedState(autostart_asked=True), selftest=0)
+    pet = PixelCatApp(app, cfg, SavedState(autostart_asked=True), selftest=0, platform=build_platform())
     pet.save = lambda: None
     pet.start()
     b = pet.brain

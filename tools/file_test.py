@@ -42,6 +42,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     app.setQuitOnLastWindowClosed(False)
     from pixelcat import paths
     from pixelcat.app import PixelCatApp
+    from pixelcat.bootstrap import build_platform
     from pixelcat.llm.agent import ToolOutput
     from pixelcat.llm.tools import ToolError
     from pixelcat.persistence import SavedState
@@ -49,7 +50,7 @@ def main() -> int:  # noqa: C901 - a linear test script
 
     shutil.rmtree(DIR, ignore_errors=True)
     DIR.mkdir(parents=True)
-    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0)
+    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0, platform=build_platform())
     pet.save = lambda: None
     tb = pet.toolbox
 

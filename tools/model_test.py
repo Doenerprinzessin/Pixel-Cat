@@ -338,6 +338,8 @@ def part_real() -> None:
     import requests
 
     from pixelcat.app import PixelCatApp
+
+    from pixelcat.bootstrap import build_platform
     from pixelcat.persistence import SavedState
     from pixelcat.settings import load_config
 
@@ -345,7 +347,7 @@ def part_real() -> None:
     base = cfg.ollama_url.rstrip("/")
     requests.post(base + "/api/generate", json={"model": cfg.model, "keep_alive": 0}, timeout=60)   # unload
     pump(3)
-    pet = PixelCatApp(app, cfg, SavedState(autostart_asked=True), selftest=0)
+    pet = PixelCatApp(app, cfg, SavedState(autostart_asked=True), selftest=0, platform=build_platform())
     pet.save = lambda: None
     t0 = time.time()
     pet.start(warm_model=True)

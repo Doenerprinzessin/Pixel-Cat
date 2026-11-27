@@ -104,6 +104,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     from pixelcat.app import PixelCatApp
+    from pixelcat.bootstrap import build_platform
     from pixelcat.llm.agent import ToolOutput
     from pixelcat.llm.tools import ToolError
     from pixelcat.persistence import SavedState
@@ -112,7 +113,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     from pixelcat.adapters.windows import inputs as _clip
     users_clipboard = _clip.backup_clipboard()   # put back at the end: the test uses the clipboard
     ed = Editor((260, 160, 900, 640))
-    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0)
+    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0, platform=build_platform())
     pet.save = lambda: None
     pet.start()
     tb, ag = pet.toolbox, pet.agent

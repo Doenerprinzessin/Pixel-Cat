@@ -273,13 +273,15 @@ def app_flow() -> None:
 
     from pixelcat import persistence
     from pixelcat.app import PixelCatApp
+    from pixelcat.bootstrap import build_platform
     from pixelcat.adapters.windows import win32
     from pixelcat.logsetup import setup_logging
     from pixelcat.settings import load_config
 
     setup_logging(False)
     win32.set_dpi_awareness()
-    pet = PixelCatApp(app, load_config(), persistence.SavedState(autostart_asked=True), selftest=1)
+    pet = PixelCatApp(app, load_config(), persistence.SavedState(autostart_asked=True), selftest=1,
+                      platform=build_platform())
     pet.save = lambda: None
     shutil.rmtree(T.tool_path().parent, ignore_errors=True)
     have = {"exe": None}

@@ -375,12 +375,13 @@ def main() -> int:
     app.setQuitOnLastWindowClosed(False)
     from pixelcat import settings
     from pixelcat.app import PixelCatApp
+    from pixelcat.bootstrap import build_platform
     from pixelcat.persistence import SavedState
     from pixelcat.settings import load_config
 
     written: list[tuple[str, object]] = []
     settings.save_user_setting = lambda k, v: written.append((k, v))   # never touch the real config
-    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=1)
+    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=1, platform=build_platform())
     pet.save = lambda: None
     m = pet.menu
     out = ROOT / "build" / "preview"

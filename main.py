@@ -37,28 +37,26 @@ def main() -> int:
                         help="with --uninstall --quiet: also delete the cat's settings and memory")
     args = parser.parse_args()
 
-    from pixelcat import paths
-    from pixelcat.adapters.windows import system, win32
+    from pixelcat import bootstrap, paths
     from pixelcat.logsetup import setup_logging
 
     setup_logging(args.debug)
     log = logging.getLogger("pixelcat")
-    win32.set_dpi_awareness()  # before any window exists
+    platform = bootstrap.build_platform()
+    platform.display.set_dpi_awareness()  # before any window exists
 
-    from pixelcat import installer
-
-    if args.install or args.uninstall or installer.is_setup_name(sys.executable):
+    if args.install or args.uninstall or platform.installer.is_setup_name(sys.executable):
         if not getattr(sys, "frozen", False):
             print("The installer works with the built exe: run  python build.py  and then dist\\PixelCat-Setup.exe")
             return 1
         log.info("%s (%s)", "uninstalling" if args.uninstall else "setup", sys.executable)
         if args.quiet:
-            return installer.run_quiet(args)
-        return installer.run_window("uninstall" if args.uninstall else "install")
+            return platform.installer.run_quiet(args)
+        return platform.installer.run_window("uninstall" if args.uninstall else "install")
 
-    if not args.export_sheets and not system.acquire_single_instance():
+    if not args.export_sheets and not platform.system.acquire_single_instance():
         log.info("another instance is running - exiting")
-        win32.message_box("Pixel Cat is already running! Look for it on your desktop or in the tray. 🐾")
+        platform.system.message_box("Pixel Cat is already running! Look for it on your desktop or in the tray. 🐾")
         return 0
 
     from PySide6.QtCore import QtMsgType, qInstallMessageHandler
@@ -97,7 +95,7 @@ def main() -> int:
     log.info("starting Pixel Cat (model=%s)", cfg.model)
     for scr in qapp.screens():
         log.info("qt screen %s geometry=%s dpr=%.2f", scr.name(), scr.geometry().getRect(), scr.devicePixelRatio())
-    pet = PixelCatApp(qapp, cfg, saved, selftest=args.selftest)
+    pet = PixelCatApp(qapp, cfg, saved, selftest=args.selftest, platform=platform)
     pet.start(warm_model=True)
     code = qapp.exec()
     log.info("bye (exit code %s)", code)
