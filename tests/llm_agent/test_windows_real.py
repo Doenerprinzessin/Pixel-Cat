@@ -16,7 +16,7 @@ pytestmark = pytest.mark.windows
 
 
 @pytest.fixture(autouse=True)
-def folders(isolated_dirs: Path) -> None:
+def folders(isolated_dirs: Path, real_profile) -> None:  # type: ignore[no-untyped-def]
     """Override: leave the known-folder cache empty so Windows itself is asked."""
     paths._known_cache.clear()
 

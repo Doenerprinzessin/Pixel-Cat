@@ -17,19 +17,13 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import hmac
-import os
 import sys
 import types
 import uuid
-from pathlib import Path
 
 import pytest
 
 from pixelcat import savecrypt
-
-# (read at import: tests/conftest.py has only moved %APPDATA% / %LOCALAPPDATA% so far)
-_REAL_PROFILE = os.environ.get("USERPROFILE")
-
 
 # ---------------------------------------------------------------- registry
 class _Key:
@@ -235,18 +229,6 @@ def no_windll(monkeypatch: pytest.MonkeyPatch) -> None:
             raise OSError(126, "The specified module could not be found")
 
     monkeypatch.setattr(ctypes, "windll", _Broken(), raising=False)
-
-
-@pytest.fixture
-def real_profile(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Windows only: the user's real profile folders in the environment again, so the real
-    Known Folders (some are defined relative to %USERPROFILE% / %APPDATA%) resolve normally."""
-    if not _REAL_PROFILE:
-        return
-    profile = Path(_REAL_PROFILE)
-    for var, value in (("USERPROFILE", profile), ("HOME", profile), ("APPDATA", profile / "AppData" / "Roaming"),
-                       ("LOCALAPPDATA", profile / "AppData" / "Local")):
-        monkeypatch.setenv(var, str(value))
 
 
 # ---------------------------------------------------------------- real registry (Windows only)

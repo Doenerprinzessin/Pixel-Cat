@@ -304,7 +304,7 @@ def test_elevation_read_only_checks():
     assert elevation.uac_prompt_open() in (True, False)
 
 
-def test_shortcut_round_trip(tmp_path):
+def test_shortcut_round_trip(real_profile, tmp_path):
     lnk = tmp_path / "Pixel Cat test.lnk"
     assert elevation.make_lnk(lnk, sys.executable, args="-V", workdir=tmp_path, description="test shortcut")
     target, runas = elevation.lnk_target(lnk)

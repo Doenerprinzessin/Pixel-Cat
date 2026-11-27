@@ -6,6 +6,10 @@
   real Win32 / UI Automation / DPAPI / registry code.
 * Every test gets its own ``%APPDATA%``, ``%LOCALAPPDATA%`` and home folder, so
   nothing touches the developer's real settings, saves or notes.
+* On Windows the shell resolves Known Folders (Desktop, Documents, Start menu ...)
+  once per process from the environment and keeps the answer.  So they are resolved
+  with the real profile before the environment is changed, and `windows` tests that
+  use the shell (shortcuts, Known Folders) ask for the ``real_profile`` fixture.
 * Outgoing network connections are refused (localhost is allowed); mock HTTP.
 * Qt runs headless (``QT_QPA_PLATFORM=offscreen``) off Windows.
 """
@@ -27,6 +31,51 @@ os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
 os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.window=false")
 if not IS_WINDOWS:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+_PROFILE_VARS = ("USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA")
+REAL_PROFILE_ENV = {var: os.environ[var] for var in _PROFILE_VARS if var in os.environ}
+
+# Windows Known Folders that are defined relative to the profile (see the module docstring).
+_PROFILE_KNOWN_FOLDERS = (
+    "B4BFCC3A-DB2C-424C-B029-7FE99A87C641",  # Desktop
+    "FDD39AD0-238F-46AF-ADB4-6C85480369C7",  # Documents
+    "374DE290-123F-4565-9164-39C4925E467B",  # Downloads
+    "33E28130-4E1E-4676-835A-98395C3BC3BB",  # Pictures
+    "4BD8D571-6D19-48D3-BE97-422220080E43",  # Music
+    "18989B1D-99B5-455B-841C-AB7C74E4DDFC",  # Videos
+    "5E6C858F-0E22-4760-9AFE-EA3317B67173",  # Profile
+    "3EB685DB-65F9-4CF6-A03A-E3EF65729F3D",  # RoamingAppData
+    "F1B32785-6FBA-4FCF-9D55-7B8E7F157091",  # LocalAppData
+    "5CD7AEE2-2219-4A67-B85D-6C9CE15660CB",  # UserProgramFiles
+    "625B53C3-AB48-4EC1-BA1F-A1EF4146FC19",  # StartMenu
+    "A77F5D77-2E2B-44C3-A6A2-ABA601054A51",  # Programs (Start menu)
+    "B97D20BB-F46A-4C97-BA10-5E3608430854",  # Startup
+)
+
+
+def _resolve_known_folders_with_the_real_profile() -> None:
+    import ctypes
+    import uuid
+    from ctypes import wintypes
+
+    shell32, ole32 = ctypes.WinDLL("shell32"), ctypes.WinDLL("ole32")
+    fn = shell32.SHGetKnownFolderPath
+    fn.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.HANDLE, ctypes.POINTER(ctypes.c_wchar_p)]
+    fn.restype = ctypes.c_long
+    ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+    ole32.CoTaskMemFree.restype = None
+    for guid in _PROFILE_KNOWN_FOLDERS:
+        g = (ctypes.c_ubyte * 16).from_buffer_copy(uuid.UUID(guid).bytes_le)
+        out = ctypes.c_wchar_p()
+        fn(ctypes.byref(g), 0, None, ctypes.byref(out))
+        ole32.CoTaskMemFree(ctypes.cast(out, ctypes.c_void_p))
+
+
+if IS_WINDOWS:
+    try:
+        _resolve_known_folders_with_the_real_profile()
+    except Exception:  # noqa: BLE001 - only an optimisation for test isolation
+        pass
 
 # Point the data folders somewhere harmless before any pixelcat module is imported.
 _SESSION_ROOT = Path(tempfile.mkdtemp(prefix="pixelcat-tests-"))
@@ -97,6 +146,18 @@ def _guarded_connect(self: socket.socket, address, *args, **kwargs):  # type: ig
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket.socket, "connect", _guarded_connect)
+
+
+@pytest.fixture
+def real_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real profile variables again (USERPROFILE, HOME, APPDATA, LOCALAPPDATA), for
+    `windows` tests that use the shell: shortcuts and Known Folders resolve against the
+    environment.  Such tests must only read the profile, or write to their own temp
+    folders - never into these real ones."""
+    for var, value in REAL_PROFILE_ENV.items():
+        monkeypatch.setenv(var, value)
+    from pixelcat import paths
+    monkeypatch.setattr(paths, "_known_cache", {})
 
 
 @pytest.fixture

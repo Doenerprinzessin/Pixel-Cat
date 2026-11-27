@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -168,10 +169,12 @@ def _configured_folder(name: str) -> Path | None:
 @pytest.mark.parametrize("name", ["desktop", "documents", "downloads", "pictures", "music", "videos"])
 def test_real_shell_folder(real_profile, name: str) -> None:  # type: ignore[no-untyped-def]
     """shell_folder asks without KF_FLAG_DONT_VERIFY, so Windows only answers for folders
-    that exist; a missing one (the GitHub Actions runner has no Desktop) gives None and the
-    callers fall back to the usual place under the home folder."""
+    that exist; a missing one gives None and the callers fall back to the usual place
+    under the home folder."""
     configured = _configured_folder(name)
     assert configured is not None and configured.is_absolute()
+    assert not _inside(configured.resolve(), Path(tempfile.gettempdir()).resolve()), \
+        f"the shell resolved {name} against a test's temporary profile: {configured}"
     p = paths.shell_folder(name)
     if configured.is_dir():
         assert p is not None and p.is_dir(), f"{name} exists at {configured} but shell_folder gave {p}"
@@ -182,7 +185,11 @@ def test_real_shell_folder(real_profile, name: str) -> None:  # type: ignore[no-
         assert paths.known_folder(name) == Path.home() / name.capitalize()
 
 
+def _inside(path: Path, folder: Path) -> bool:
+    return os.path.normcase(str(path)).startswith(os.path.normcase(str(folder)))
+
+
 @pytest.mark.windows
 def test_real_documents_folder_exists(real_profile) -> None:  # type: ignore[no-untyped-def]
     p = paths.shell_folder("documents")
-    assert p is not None and p.is_dir()
+    assert p is not None and p.is_dir(), f"Documents: {p}, Windows has it at {_configured_folder('documents')}"

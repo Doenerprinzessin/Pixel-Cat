@@ -973,7 +973,9 @@ def real_src(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def real_lay(tmp_path: Path, test_reg_key: str, monkeypatch: pytest.MonkeyPatch) -> Layout:
+def real_lay(tmp_path: Path, test_reg_key: str, real_profile, monkeypatch: pytest.MonkeyPatch) -> Layout:  # type: ignore[no-untyped-def]
+    """Everything the install writes goes to tmp_path and the test registry key; only the
+    environment is the real profile's, because the shell link code resolves Known Folders."""
     monkeypatch.setattr(persistence, "REG_PATH", test_reg_key + r"\ProtectedSaves")
     return make_layout(tmp_path / "root", test_reg_key)
 
@@ -1003,7 +1005,7 @@ def test_real_install_and_uninstall(real_lay: Layout, real_src: Path, real_reg_r
 
 
 @pytest.mark.windows
-def test_real_start_menu_link_with_the_installers_arguments(real_src: Path, tmp_path: Path) -> None:
+def test_real_start_menu_link_with_the_installers_arguments(real_profile, real_src: Path, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     exe = tmp_path / "Programs" / "PixelCat" / installer.EXE_NAME
     exe.parent.mkdir(parents=True)
     exe.write_bytes(real_src.read_bytes())
@@ -1018,7 +1020,7 @@ def test_real_start_menu_link_with_the_installers_arguments(real_src: Path, tmp_
 def test_real_known_folders_layout(real_profile, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.delenv("PIXELCAT_TEST_ROOT", raising=False)
     start_menu = installer._known(START_MENU)
-    assert start_menu is not None and start_menu.is_dir()
+    assert start_menu is not None and start_menu.is_dir(), f"Start menu folder: {start_menu}"
     lay = installer.layout()
     assert lay.install_dir.name == "PixelCat" and lay.install_dir.parent.name.lower() == "programs"
     assert lay.programs_dir == start_menu and lay.desktop_dir == paths.shell_folder("desktop")
