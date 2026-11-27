@@ -85,6 +85,9 @@ class SavedState:
     watches: list[dict[str, Any]] = field(default_factory=list)   # wait_for watches (long tasks) to resume
     ext_settings: dict[str, Any] = field(default_factory=dict)    # external AI models: sign-in kind, limits, models
     ext_usage: dict[str, Any] = field(default_factory=dict)       # external AI models: tokens used this period
+    cat_name: str = ""                       # Settings -> Name... ("" = no name of its own)
+    chat_size: list[float] = field(default_factory=list)          # the chat window's size in art pixels (w, h)
+    chat_full: bool = False                  # the chat fills its screen
 
 
 # ------------------------------------------------------------------ checking what was read
@@ -118,12 +121,13 @@ def _from_dict(data: Any, only: tuple[str, ...] | None = None) -> SavedState:
     for name in ("game_best", "fish_book", "ext_settings", "ext_usage"):
         if not isinstance(getattr(st, name), dict):
             setattr(st, name, getattr(fresh, name))
-    for name in ("tutorials_seen", "auto_approved_tools", "watches"):
+    for name in ("tutorials_seen", "auto_approved_tools", "watches", "chat_size"):
         if not isinstance(getattr(st, name), list):
             setattr(st, name, [])
-    for name in ("skin", "hat", "ui_style", "ui_accent", "ui_size", "ui_font"):
+    for name in ("skin", "hat", "ui_style", "ui_accent", "ui_size", "ui_font", "cat_name"):
         if not isinstance(getattr(st, name), str):
             setattr(st, name, getattr(fresh, name))
+    st.chat_full = st.chat_full is True
     for name in ("pets", "feeds", "plays", "best_round"):
         setattr(st, name, _int(getattr(st, name)))
     plays = st.game_plays if isinstance(st.game_plays, dict) else {}

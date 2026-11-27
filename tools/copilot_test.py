@@ -75,6 +75,14 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self) -> None:  # noqa: N802
+        if self.path.startswith("/page"):
+            data = b"<html><head><title>Cat page</title></head><body><h1>Cats</h1><p>Cats nap all day.</p></body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path.startswith("/gh/user"):
             ok = self.headers.get("Authorization") == "Bearer gho_fake"
             self._json(200 if ok else 401, {"login": "octocat"} if ok else {"message": "Bad credentials"})
@@ -147,11 +155,15 @@ PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAh
 
 
 def run_worker(chat, history: list, model: str = "fake-model", think: bool = True, effort: str = "medium",
-               timeout: float = 60.0, info: dict | None = None, cancel_after: float | None = None) -> dict:
+               timeout: float = 60.0, info: dict | None = None, cancel_after: float | None = None,
+               web: bool = False, on_perm=None) -> dict:
     out: dict = {"tokens": [], "thinking": 0, "done": None, "failed": None, "used": [], "credits": []}
     w = CC.CopilotWorker(model, chat, history, "You are Pixel, a test cat.", TOOLS, think, effort,
                          X.MemoryCredentials({}), "key", info if info is not None else
                          next((m for m in MODELS if m["id"] == model), {}))
+    w.web = web
+    if on_perm is not None:
+        w.permission.connect(on_perm)
     w.token.connect(lambda t: out["tokens"].append(t))
     w.done.connect(lambda c, calls: out.__setitem__("done", (c, calls)))
     w.failed.connect(lambda k, d: out.__setitem__("failed", (k, d)))
@@ -346,6 +358,45 @@ def main() -> int:  # noqa: C901 - a linear test script
           out["done"] == ("Anna!", []) and "User: my name is Anna" in first and "You: Hi Anna!" in first
           and first.endswith("what's my name?"), first.replace("\n", " | ")[:200])
     chat2.close()
+    # Copilot's own web_fetch (Web search on): every page goes to the app first ----------------------------
+    from pixelcat.llm import webpage as WP
+
+    def tool_texts(body: dict) -> str:
+        msgs = [m.get("content") for m in body.get("messages", []) if m.get("role") == "tool"]
+        return json.dumps(msgs[-1:])                    # (the latest result)
+
+    def ask(answer: bool, asked: list):
+        return lambda url, reply_: (asked.append(url), reply_(answer))
+
+    WP.ALLOW_LOCAL = True                               # (the test's page is on this PC)
+    chat3 = CC.CopilotChat()
+    hist3 = [{"role": "user", "content": "what does the cat page say?"}]
+    asked: list = []
+    S["script"] = [reply("", [("call_f", "web_fetch", {"url": BASE + "/page"})]), reply("It says cats nap.")]
+    n0 = len(S["bodies"])
+    out = run_worker(chat3, hist3, web=True, on_perm=ask(True, asked))
+    tools0 = sorted(t["function"]["name"] for t in S["bodies"][n0].get("tools", [])) if len(S["bodies"]) > n0 else []
+    check("web_fetch (Web search on): offered next to the cat's tools; the page is asked for first - approved, the "
+          "runtime goes ahead (and its own guard refuses this PC's addresses too, so the test page isn't read)",
+          tools0 == ["get_time", "look_at_screen", "web_fetch"] and asked == [BASE + "/page"]
+          and out["done"] == ("It says cats nap.", []) and "blocked address" in tool_texts(S["bodies"][-1]),
+          f"{tools0} {asked} {out['done'] or out['failed']} {tool_texts(S['bodies'][-1])[-300:]}")
+    hist3 += [{"role": "assistant", "content": "It says cats nap."}, {"role": "user", "content": "read it again"}]
+    asked2: list = []
+    S["script"] = [reply("", [("call_g", "web_fetch", {"url": BASE + "/page?again"})]), reply("Okay, I won't.")]
+    out = run_worker(chat3, hist3, web=True, on_perm=ask(False, asked2))
+    check("...the user says no: not fetched, the model hears so", asked2 == [BASE + "/page?again"]
+          and out["done"] == ("Okay, I won't.", []) and "blocked address" not in tool_texts(S["bodies"][-1])
+          and "allow" in tool_texts(S["bodies"][-1]), tool_texts(S["bodies"][-1])[-200:])
+    WP.ALLOW_LOCAL = False
+    hist3 += [{"role": "assistant", "content": "Okay, I won't."}, {"role": "user", "content": "the local one?"}]
+    asked3: list = []
+    S["script"] = [reply("", [("call_h", "web_fetch", {"url": BASE + "/page?local"})]), reply("Can't, sorry.")]
+    out = run_worker(chat3, hist3, web=True, on_perm=ask(True, asked3))
+    check("...an address on this PC / the local network is refused without asking",
+          asked3 == [] and out["done"] == ("Can't, sorry.", []) and "local network" in tool_texts(S["bodies"][-1]),
+          f"{asked3} {tool_texts(S['bodies'][-1])[-200:]}")
+    chat3.close()
     sid = chat.session_id
     chat.close()
     left = CC._LOOP.run(CC._RT.client.list_sessions(), 30) if CC._RT.client is not None else []
@@ -476,6 +527,24 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     sent = any("declined" in json.dumps(b.get("messages", [])) for b in S["bodies"][-1:])
     check("a tool that needs a yes is asked in the chat (as with every model) - declined, the model hears so",
           asked and declined and sent, f"asked={asked} declined={declined} sent={sent}")
+    # Copilot's web_fetch asks through the app (like read_web_page) ------------------------------------------
+    answers: list = []
+    pet._task_active = True
+    pet._copilot_permission("https://example.com/a", answers.append)
+    card1 = chat._confirm_cb is not None and "let Copilot read the web page https://example.com/a" in \
+        chat.confirm_label.text()
+    chat._answer("no")
+    pet._copilot_permission("https://example.com/b", answers.append)
+    chat._answer("always")
+    pet._copilot_permission("https://example.com/c", answers.append)
+    card3 = chat._confirm_cb is not None
+    pet._task_active = False
+    pet._copilot_permission("https://example.com/d", answers.append)
+    check("Copilot wants a page: the confirmation card (no -> not read; ALWAYS -> 'web' is remembered and the next "
+          "page is read without asking - like read_web_page); no running task -> refused",
+          card1 and answers == [False, True, True, False] and not card3 and "web" in saved.auto_approved_tools,
+          str(answers))
+    saved.auto_approved_tools.remove("web")
     # the credit limit ------------------------------------------------------------------------------------------
     pet._on_copilot_credits(1999.0)
     pet._on_copilot_credits(1.0)

@@ -4,18 +4,19 @@ Safety rules enforced here (not by the model):
 * Only the tools below exist; there is no shell or arbitrary command execution.
 * Arguments are validated and normalised (paths must live under allowed roots,
   URLs must be http(s), apps must be whitelisted or Start-menu shortcuts,
-  windows must match something that is actually open).
+  windows must match something that is actually open).  read_web_page reads public
+  pages only - never this PC or the local network (webpage.py).
 * ``confirm`` levels: "none" (read-only or in-app only), "soft" (changes
   something small - the user may choose ALWAYS to stop being asked for that
   tool), "hard" (always asks: closing apps, writing files, locking the PC).
 * Window/app control only happens on an explicit chat request plus the user's
   confirmation.  Closing is graceful (like clicking X); nothing is ever killed.
   The cat's own behaviour never uses these tools except harmless ``cat_action``.
-* Seeing and using the desktop (look_at_screen, read_window, click, type_text,
-  press_keys, scroll): screenshots only go to the local model; typing into
-  command lines / the Run box always needs the user's OK, even in auto mode;
-  closing shortcuts (Alt+F4, Ctrl+W...) are "hard" confirms.  More guard rails
-  live in agent.py.
+* Seeing and using the desktop (look_at_screen, read_window, watch_screen, click, drag,
+  move_mouse, zoom, type_text, press_keys, scroll): real mouse/keyboard input into the app the
+  user means; typing, clicking, dragging or zooming in command lines / the Run box always needs
+  the user's OK, even in auto mode; closing shortcuts (Alt+F4, Ctrl+W...) are "hard" confirms.
+  Screenshots go to the chat's model.  More guard rails live in agent.py.
 * Anything that needs administrator rights ALWAYS asks first - even in auto mode
   and even for tools set to ALWAYS: apps that need admin rights (manifest,
   shortcut flag, compatibility setting), /force open, and /force end when a
@@ -62,7 +63,13 @@ _EVENT_SYN = {"notifications": "notification", "message": "notification", "messa
 CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".css", ".scss", ".html", ".htm", ".java", ".cs", ".cpp",
             ".c", ".h", ".hpp", ".go", ".rs", ".rb", ".php", ".sql", ".yml", ".yaml", ".toml", ".xml", ".sh", ".kt",
             ".swift", ".vue", ".svelte", ".lua", ".r", ".ini", ".cfg"}
-AGENT_TOOLS = {"look_at_screen", "read_window", "click", "type_text", "replace_text", "press_keys", "scroll", "wait"}
+AGENT_TOOLS = {"look_at_screen", "read_window", "click", "type_text", "replace_text", "press_keys", "scroll", "wait",
+               "drag", "move_mouse", "zoom", "watch_screen"}
+# the chat's eyes on the screen: read-only, so auto mode doesn't count them as actions
+SCREEN_EYES = {"look_at_screen", "read_window", "watch_screen"}
+# keys that may be held while using the mouse
+HELD_KEYS = {"ctrl": 0x11, "control": 0x11, "strg": 0x11, "shift": 0x10, "alt": 0x12, "win": 0x5B, "windows": 0x5B,
+             "meta": 0x5B, "cmd": 0x5B}
 # shortcuts that close things / lock the PC: always a real confirmation (no ALWAYS)
 CLOSING_KEYS = {"alt+f4", "ctrl+w", "ctrl+shift+w", "ctrl+q", "ctrl+f4", "shift+delete", "win+l"}
 # shortcuts that open a command line or system menus: ask even in auto mode
@@ -118,6 +125,7 @@ class ToolBox:
 
     def _register(self) -> None:
         from ..desktop import control
+        from ..desktop.inputs import BUTTONS
 
         apps = sorted(self.cfg.apps)
         s = {"type": "string"}
@@ -158,6 +166,12 @@ class ToolBox:
                   self._open_url, lambda a: f"open {a['url']} in your browser")
         self._add("search_web", "Search the web for a query in the default browser.", {"query": s}, ["query"], "soft",
                   self._search_web, lambda a: f"search the web for '{a['query']}'")
+        self._add("read_web_page", "Read the text of a public web page (http/https) without opening the browser: its "
+                  "title, text and links. For looking things up - a link the user gave you, a link from a page you "
+                  "read, or a site's own search page. Long pages come in parts: call again with the start given "
+                  "at the end of a part.",
+                  {"url": s, "start": {"type": "integer"}}, ["url"], "soft", self._read_web_page,
+                  lambda a: f"read the web page {a['url']}", background=True, group="web")
         self._add("open_folder", "Open a folder in File Explorer. Use aliases: desktop, documents, downloads, "
                   "pictures, music, videos, notes, or a path inside them.", {"folder": s}, ["folder"], "soft",
                   self._open_folder, lambda a: f"open the folder {a['_path']}")
@@ -190,6 +204,8 @@ class ToolBox:
         tgt = {"type": "string", "description": "app name or part of the window title; "
                "leave empty for the window you used last"}
         num = {"type": "integer"}
+        pos = {"type": "number"}
+        mods = {"type": "string", "description": "keys held down meanwhile: ctrl, shift, alt, win, or e.g. 'ctrl+shift'"}
         self._add("look_at_screen", "SEE a window (or the whole screen when target is empty): returns a screenshot "
                   "with pink numbered boxes on the clickable elements plus their list. Use it to find buttons and "
                   "to check that an action worked.", {"target": tgt}, [], eyes, self._look,
@@ -197,11 +213,39 @@ class ToolBox:
         self._add("read_window", "READ a window exactly: its text content (documents, editors, web pages) and "
                   "its controls with ids. Faster and more precise than a screenshot for reading text.",
                   {"target": tgt}, [], eyes, self._read, lambda a: f"read {a['_label']}", background=True)
-        self._add("click", "Click a UI element by id (element, from look_at_screen/read_window), or a spot "
-                  "(x, y = pixel position in the last screenshot).",
-                  {"element": num, "x": num, "y": num, "button": {"type": "string", "enum": ["left", "right"]},
-                   "double": {"type": "boolean"}}, [], "soft", self._click,
-                  lambda a: f"{a['_verb']} {a['_what']}", background=True, group="desktop")
+        self._add("click", "Click like a real mouse: a UI element by id (element, from look_at_screen/read_window), or "
+                  "a spot (x, y = pixel position in your latest screenshot). button: left (default), right, middle, "
+                  "back, forward. clicks: 2 = double-click, 3 = triple-click (selects a line or paragraph). keys = "
+                  "held while clicking ('ctrl' opens a link in a new tab / adds to a selection, 'shift' selects a "
+                  "range). hold = seconds to keep the button pressed (a long press).",
+                  {"element": num, "x": pos, "y": pos, "button": {"type": "string", "enum": list(BUTTONS)},
+                   "clicks": num, "double": {"type": "boolean"}, "keys": mods, "hold": {"type": "number"}}, [], "soft",
+                  self._click, lambda a: f"{a['_verb']} {a['_what']}", background=True, group="desktop")
+        self._add("drag", "DRAG like a hand on the mouse: press at one place, move, let go at another. Moves game "
+                  "pieces (chess...), cards, files and icons, sliders, scroll bars, splitters; selects text or an "
+                  "area; draws. From: from_element or from_x/from_y. To: to_element or to_x/to_y. path = points to "
+                  "pass through on the way, [[x, y], ...] (for drawing; without 'to', the last point is the end). All "
+                  "x/y are pixels in your latest screenshot. button (default left), keys held meanwhile ('shift', "
+                  "'ctrl' copies files, 'alt'), seconds = how long the movement takes (default 0.6). Returns a "
+                  "screenshot afterwards.",
+                  {"from_element": num, "from_x": pos, "from_y": pos, "to_element": num, "to_x": pos, "to_y": pos,
+                   "path": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}},
+                   "button": {"type": "string", "enum": ["left", "right", "middle"]}, "keys": mods,
+                   "seconds": {"type": "number"}}, [], "soft", self._drag, lambda a: a["_desc"], background=True,
+                  group="desktop")
+        self._add("move_mouse", "HOVER: move the mouse pointer onto an element or a spot (x, y in your latest "
+                  "screenshot) and leave it there - shows tooltips, opens hover menus and previews. Returns a "
+                  "screenshot after 'seconds' (default 1).",
+                  {"element": num, "x": pos, "y": pos, "seconds": {"type": "number"}}, [], "soft", self._hover,
+                  lambda a: f"move the mouse onto {a['_what']}", background=True, group="desktop")
+        self._add("zoom", "ZOOM in or out (maps, pictures, web pages, documents, design apps) at an element or a spot "
+                  "(x, y in your latest screenshot); without one: the middle of the window (target). steps 1-10 "
+                  "(default 3). how: 'wheel' = ctrl + mouse wheel (default, works in most apps), 'pinch' = two "
+                  "fingers like on a touch screen (maps, photo apps). Returns a screenshot afterwards.",
+                  {"direction": {"type": "string", "enum": ["in", "out"]}, "steps": num, "element": num, "x": pos,
+                   "y": pos, "how": {"type": "string", "enum": ["wheel", "pinch"]}, "target": tgt}, ["direction"],
+                  "soft", self._zoom, lambda a: f"zoom {a['direction']} {a['_where']}", background=True,
+                  group="desktop")
         self._add("type_text", "INSERT exactly this text where the text cursor is. Nothing is added for you: if "
                   "each item should be on its own line, the text must end with a line break. Several lines at once "
                   "are fine (one call). Only for writing new text - to change or fix text that is already there use "
@@ -218,13 +262,33 @@ class ToolBox:
                   self._replace, lambda a: f"replace {a['old'][:50]!r} with {a['new'][:50]!r} in {a['_label']}",
                   background=True, group="desktop")
         self._add("press_keys", "Press keys/shortcuts in a window, one or more separated by spaces: "
-                  "'ctrl+n', 'ctrl+s', 'enter', 'tab', 'esc', 'ctrl+a', 'down down enter', 'f5'.",
-                  {"keys": s, "target": tgt}, ["keys"], "soft", self._keys,
-                  lambda a: f"press {a['_keys']} in {a['_label']}", background=True, group="desktop")
-        self._add("scroll", "Scroll a window (or element id) up/down/left/right by some steps (default 5).",
+                  "'ctrl+n', 'ctrl+s', 'enter', 'tab', 'esc', 'ctrl+a', 'down down enter', 'f5'. hold = seconds to "
+                  "keep each one pressed (games: hold 'w' to walk, 'space' to charge).",
+                  {"keys": s, "target": tgt, "hold": {"type": "number"}}, ["keys"], "soft", self._keys,
+                  lambda a: f"press {a['_keys']}{a['_held']} in {a['_label']}", background=True, group="desktop")
+        self._add("scroll", "Scroll with the mouse wheel up/down/left/right by some steps (default 5, at most 50): "
+                  "over the middle of a window (target), an element id, or a spot (x, y in your latest screenshot). "
+                  "keys = held meanwhile (ctrl usually zooms, shift scrolls sideways).",
                   {"direction": {"type": "string", "enum": ["up", "down", "left", "right"]}, "amount": num,
-                   "target": tgt, "element": num}, ["direction"], "soft", self._scroll,
-                  lambda a: f"scroll {a['direction']} in {a['_label']}", background=True, group="desktop")
+                   "target": tgt, "element": num, "x": pos, "y": pos, "keys": mods}, ["direction"], "soft",
+                  self._scroll, lambda a: f"scroll {a['direction']} in {a['_label']}", background=True,
+                  group="desktop")
+        self._add("watch_screen", "WATCH THE SCREEN and react fast, inside this task: waits until something "
+                  "happens, then returns a fresh screenshot (with element ids) so you can act right away. until: "
+                  "'change' (default - compared with your latest screenshot, so a change that already happened counts "
+                  "at once), 'text' (this text appears), 'gone' (this text disappears), 'still' (it stops changing: "
+                  "an animation or loading ended). target = the window (empty: what your latest screenshot showed; "
+                  "'screen' = the whole screen). area = watch only part of it: [x, y, width, height] in your latest "
+                  "screenshot (the chess board, the question) so clocks and timers don't count. sensitivity: normal "
+                  "(default), high (tiny changes too), low (only big ones like a new page). seconds = how long to "
+                  "wait at most (default 120, max 600). Use it in a loop for quizzes (Kahoot), turn-based games "
+                  "(chess), anything that will appear soon. For minutes or hours, or while the user keeps chatting, "
+                  "use wait_for.",
+                  {"until": {"type": "string", "enum": ["change", "text", "gone", "still"]}, "text": s,
+                   "target": tgt, "area": {"type": "array", "items": {"type": "number"}},
+                   "sensitivity": {"type": "string", "enum": ["normal", "high", "low"]},
+                   "seconds": {"type": "number"}}, [], eyes, self._watch,
+                  lambda a: f"watch {a['_label']} {a['_cond']}", background=True)
         self._add("wait", "Pause 1-10 seconds inside a task (e.g. for a page or app to load). For anything longer, "
                   "or until something happens, use wait_for.", {"seconds": {"type": "number"}},
                   ["seconds"], "none", lambda a: self.agent.wait(a["seconds"]), lambda a: f"wait {a['seconds']} s",
@@ -400,7 +464,7 @@ class ToolBox:
             a["action"] = act
         elif name == "copy_to_clipboard":
             a["text"] = str(a["text"])[:20_000]
-        elif name == "open_url":
+        elif name in ("open_url", "read_web_page"):
             url = str(a["url"]).strip()
             if not re.match(r"^https?://", url, re.I):
                 url = "https://" + url
@@ -408,6 +472,11 @@ class ToolBox:
             if u.scheme not in ("http", "https") or not u.netloc or " " in u.netloc:
                 raise ToolError("only http(s) URLs are allowed")
             a["url"] = url
+            if name == "read_web_page":
+                try:
+                    a["start"] = max(0, int(a.get("start") or 0))
+                except (TypeError, ValueError):
+                    a["start"] = 0
         elif name in ("open_folder", "list_files"):
             a["_path"] = self._resolve_dir(str(a["folder"]), must_exist=True)
         elif name == "create_note":
@@ -551,6 +620,173 @@ class ToolBox:
             raise ToolError(f"{key} must be a number from the last look")
         return int(m.group())
 
+    @staticmethod
+    def _num(a: dict[str, Any], key: str, default: float, lo: float, hi: float) -> float:
+        raw = a.get(key)
+        if raw in (None, ""):
+            return default
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            raise ToolError(f"{key} must be a number") from None
+        return max(lo, min(hi, v)) if v == v else default
+
+    @staticmethod
+    def _held(a: dict[str, Any]) -> list[int]:
+        """Keys held down during a mouse action (ctrl-click, shift-drag...)."""
+        raw = str(a.get("keys") or "").strip().lower()
+        if raw in ("", "none", "no", "nothing"):
+            return []
+        out: list[int] = []
+        for part in re.split(r"[\s+,]+", raw):
+            if not part:
+                continue
+            vk = HELD_KEYS.get(part)
+            if vk is None:
+                raise ToolError("keys: only ctrl, shift, alt and win can be held with the mouse "
+                                "(to hold other keys use press_keys with hold)")
+            if vk not in out:
+                out.append(vk)
+        return out
+
+    @staticmethod
+    def _held_note(keys: list[int]) -> str:
+        names = {0x11: "ctrl", 0x10: "shift", 0x12: "alt", 0x5B: "win"}
+        return " holding " + "+".join(names[k] for k in keys) if keys else ""
+
+    def _spot_arg(self, a: dict[str, Any], prefix: str, verb: str,
+                  required: bool = True) -> tuple[tuple, int, str] | None:
+        """``{prefix}element`` or ``{prefix}x``/``{prefix}y`` -> (ref for the agent, the window there, a
+        description).  The window is the one at that spot now when the screenshot was of the whole screen."""
+        from ..desktop import inputs, win32
+
+        ag = self.agent
+        eid = self._element_arg(a, prefix + "element")
+        if eid is not None:
+            el, hwnd = ag.element(eid)
+            name_part = f" '{el.name[:40]}'" if el.name else ""
+            return ("el", eid), hwnd, f"[{eid}] {el.kind}{name_part} in {ag.describe_hwnd(hwnd)}"
+        raw_x, raw_y = a.get(prefix + "x"), a.get(prefix + "y")
+        if raw_x in (None, "") and raw_y in (None, ""):
+            if not required:
+                return None
+            raise ToolError(f"{verb} needs {prefix}element=ID, or {prefix}x and {prefix}y from the last screenshot")
+        try:
+            x, y = float(raw_x), float(raw_y)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            raise ToolError(f"{verb} needs {prefix}element=ID, or {prefix}x and {prefix}y from the last "
+                            "screenshot") from None
+        if ag.shot is None:
+            raise ToolError(f"look_at_screen first, so I know where to {verb}")
+        try:
+            px, py = ag.to_screen(x, y)
+        except AgentError as exc:
+            raise ToolError(str(exc).replace("x/y", f"{prefix}x/{prefix}y")) from None
+        hwnd = ag.shot.hwnd
+        if not hwnd:
+            at = inputs.window_at(px, py)
+            window = at if at and win32.window_pid(at) != self.hooks.own_pid else 0
+            return ("xy", x, y), window, f"{int(x)},{int(y)} on the screen"
+        return ("xy", x, y), hwnd, f"{int(x)},{int(y)} in {ag.describe_hwnd(hwnd)}"
+
+    def _path(self, raw: Any) -> list[tuple[float, float]]:
+        """drag's path: [[x, y], ...] (or {"x":..,"y":..} items, or "x1,y1 x2,y2") in the last screenshot."""
+        if raw in (None, "", []):
+            return []
+        pts: list[tuple[float, float]] = []
+        try:
+            if isinstance(raw, str):
+                nums = [float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", raw)]
+                pts = list(zip(nums[0::2], nums[1::2]))
+            elif isinstance(raw, list):
+                for p in raw:
+                    if isinstance(p, dict):
+                        pts.append((float(p["x"]), float(p["y"])))
+                    elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                        pts.append((float(p[0]), float(p[1])))
+                    else:
+                        raise ValueError
+            else:
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            raise ToolError("path must be a list of points like [[120, 80], [160, 95]]") from None
+        if len(pts) > 1000:
+            raise ToolError("path: at most 1000 points")
+        shot = self.agent.shot
+        if pts and shot is None:
+            raise ToolError("look_at_screen first, so I know where the path goes")
+        if shot is not None:
+            sw, sh = shot.size
+            bad = next((p for p in pts if not (0 <= p[0] <= sw and 0 <= p[1] <= sh)), None)
+            if bad is not None:
+                raise ToolError(f"path point {bad[0]:g},{bad[1]:g} is outside the last screenshot ({sw}x{sh})")
+        return pts
+
+    def _prepare_watch(self, a: dict[str, Any]) -> None:
+        from ..desktop import control, win32
+        from .agent import SENSITIVITY, control_monitor
+
+        ag = self.agent
+        until = str(a.get("until") or "change").strip().lower()
+        until = {"changes": "change", "changed": "change", "appear": "text", "appears": "text", "shows": "text",
+                 "visible": "text", "disappear": "gone", "disappears": "gone", "hidden": "gone", "calm": "still",
+                 "stable": "still", "stop": "still", "stops": "still", "idle": "still"}.get(until, until)
+        if until not in ("change", "text", "gone", "still"):
+            raise ToolError("until must be change, text, gone or still")
+        text = str(a.get("text") or "").strip()
+        if until in ("text", "gone") and not text:
+            raise ToolError(f"until='{until}' needs the text to watch for")
+        sens = str(a.get("sensitivity") or "normal").strip().lower()
+        a["_sens"] = sens if sens in SENSITIVITY else "normal"
+        secs = self._num(a, "seconds", 120.0, 1.0, 600.0)
+        target = str(a.get("target") or "").strip()
+        shot = ag.shot
+        hwnd, screen = 0, None
+        if target.lower() in ("screen", "the screen", "whole screen", "desktop", "monitor"):
+            if shot is not None and not shot.hwnd:
+                screen = control_monitor(shot.origin[0] + 4, shot.origin[1] + 4)
+        elif target:
+            self._target(a)
+            hwnd = a["_hwnd"]
+        elif shot is not None and (not shot.hwnd or win32.user32.IsWindow(shot.hwnd)):
+            hwnd = shot.hwnd
+            if not hwnd:
+                screen = control_monitor(shot.origin[0] + 4, shot.origin[1] + 4)
+        else:
+            wins = [w for w in control.list_app_windows(self.hooks.own_pid) if not w.minimized]
+            if wins and (r := win32.frame_bounds(wins[0].hwnd)):
+                screen = control_monitor((r[0] + r[2]) // 2, (r[1] + r[3]) // 2)
+        if not hwnd and screen is None:
+            screen = control_monitor(*win32.cursor_pos())
+        if until in ("text", "gone") and not hwnd:
+            raise ToolError(f"until='{until}' needs a window to read (target)")
+        area = None
+        raw = a.get("area")
+        if raw not in (None, "", []):
+            try:
+                if isinstance(raw, dict):
+                    vals = [float(raw[k]) for k in ("x", "y", "width", "height")]
+                elif isinstance(raw, str):
+                    vals = [float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", raw)]
+                else:
+                    vals = [float(v) for v in raw]
+            except (KeyError, TypeError, ValueError):
+                vals = []
+            if len(vals) != 4 or vals[2] <= 0 or vals[3] <= 0:
+                raise ToolError("area must be [x, y, width, height] in your latest screenshot")
+            if shot is None or shot.hwnd != hwnd:
+                raise ToolError("area is measured in your latest screenshot of that same window - look_at_screen "
+                                "at it first")
+            x, y, w, h = vals
+            ox, oy, s = shot.origin[0], shot.origin[1], shot.scale
+            area = (int(ox + x / s), int(oy + y / s), int(ox + (x + w) / s), int(oy + (y + h) / s))
+        a["_hwnd"], a["_screen"], a["_area"] = hwnd, screen, area
+        a["_until"], a["_text"], a["_seconds"] = until, text, secs
+        a["_label"] = ag.describe_hwnd(hwnd) if hwnd else "the screen"
+        cond = {"change": "until something changes", "text": f"until {text!r} appears",
+                "gone": f"until {text!r} is gone", "still": "until it stops changing"}[until]
+        a["_cond"] = cond + (" in a part of it" if area else "") + f" (up to {secs:g} s)"
+
     def _prepare_agent(self, name: str, a: dict[str, Any]) -> None:  # noqa: C901 - one branch per tool
         ag = self.agent
         if name in ("look_at_screen", "read_window"):
@@ -559,31 +795,78 @@ class ToolBox:
             else:
                 a["_hwnd"], a["_label"] = 0, "your screen"
         elif name == "click":
+            from ..desktop.inputs import BUTTONS
+
+            button = str(a.get("button") or "left").strip().lower()
+            button = {"primary": "left", "secondary": "right", "wheel": "middle", "x1": "back", "x2": "forward",
+                      "mouse4": "back", "mouse5": "forward"}.get(button, button)
+            if button not in BUTTONS:
+                raise ToolError("button must be left, right, middle, back or forward")
+            count = int(self._num(a, "clicks", 1, 1, 3))
+            if str(a.get("double")).lower() in ("true", "1", "yes"):
+                count = max(count, 2)
+            hold = self._num(a, "hold", 0.0, 0.0, 10.0)
+            keys = self._held(a)
+            ref, window, what = self._spot_arg(a, "", "click")
+            a["_eid"], a["_hwnd"] = (ref[1], window) if ref[0] == "el" else (None, ag.shot.hwnd if ag.shot else 0)
+            a["_x"], a["_y"] = (None, None) if ref[0] == "el" else (ref[1], ref[2])
+            a["_what"] = what if ref[0] == "el" else "at " + what
+            a["_button"], a["_double"], a["_count"], a["_hold"], a["_keys"] = button, count == 2, count, hold, keys
+            verb = {1: "click", 2: "double-click", 3: "triple-click"}[count]
+            if button != "left":
+                verb = f"{button}-{verb}" if button in ("right", "middle") else f"{verb} the mouse's {button} button on"
+            if hold >= 0.3:
+                verb = f"press and hold ({hold:g} s)" if button == "left" else verb + f" (held {hold:g} s)"
+            a["_verb"] = verb + self._held_note(keys)
+            a["_label"] = a["_what"]
+            if window and ag.is_command_line(window):
+                a["_force_confirm"] = True
+        elif name == "drag":
+            src = self._spot_arg(a, "from_", "drag")
+            dst = self._spot_arg(a, "to_", "drag", required=False)
+            path = self._path(a.get("path"))
+            if dst is None and not path:
+                raise ToolError("drag needs where to: to_element, or to_x and to_y (or a path of points)")
             button = str(a.get("button") or "left").strip().lower()
             if button not in ("left", "right", "middle"):
-                raise ToolError("button must be left or right")
-            double = str(a.get("double")).lower() in ("true", "1", "yes")
-            eid = self._element_arg(a)
-            if eid is not None:
-                el, hwnd = ag.element(eid)
-                name_part = f" '{el.name[:40]}'" if el.name else ""
-                a["_what"] = f"[{eid}] {el.kind}{name_part} in {ag.describe_hwnd(hwnd)}"
-                a["_eid"], a["_hwnd"], a["_x"], a["_y"] = eid, hwnd, None, None
+                raise ToolError("button must be left, right or middle")
+            keys = self._held(a)
+            default = 0.6 if not path else min(8.0, 0.6 + 0.02 * len(path))
+            a["_src"], a["_dst"], a["_path"] = src[0], dst[0] if dst else None, path
+            a["_button"], a["_keys"] = button, keys
+            a["_seconds"] = self._num(a, "seconds", default, 0.1, 10.0)
+            a["_hwnd"], a["_label"] = src[1], src[2]
+            to = dst[2] if dst else f"{path[-1][0]:.0f},{path[-1][1]:.0f}"
+            via = f" along {len(path)} point{'s' if len(path) != 1 else ''}" if path else ""
+            btn = "" if button == "left" else f" with the {button} button"
+            a["_desc"] = f"drag from {src[2]} to {to}{via}{btn}{self._held_note(keys)}"
+            if any(h and ag.is_command_line(h) for h in (src[1], dst[1] if dst else 0)):
+                a["_force_confirm"] = True
+        elif name == "move_mouse":
+            ref, window, what = self._spot_arg(a, "", "move the mouse")
+            a["_ref"], a["_what"], a["_label"], a["_hwnd"] = ref, what, what, window
+            a["_seconds"] = self._num(a, "seconds", 1.0, 0.0, 5.0)
+        elif name == "zoom":
+            d = str(a["direction"]).strip().lower().replace("zoom", "").strip()
+            d = {"+": "in", "closer": "in", "bigger": "in", "larger": "in", "-": "out", "smaller": "out",
+                 "away": "out"}.get(d, d)
+            if d not in ("in", "out"):
+                raise ToolError("direction must be in or out")
+            a["direction"] = d
+            a["_steps"] = int(self._num(a, "steps", 3, 1, 10))
+            how = str(a.get("how") or "wheel").strip().lower()
+            a["_how"] = "pinch" if "pinch" in how or "touch" in how or "finger" in how else "wheel"
+            spot = self._spot_arg(a, "", "zoom", required=False)
+            if spot is not None:
+                a["_ref"], a["_hwnd"], a["_label"] = spot[0], spot[1], spot[2]
+                a["_where"] = f"at {spot[2]}"
             else:
-                try:
-                    x, y = float(a["x"]), float(a["y"])
-                except (KeyError, TypeError, ValueError):
-                    raise ToolError("click needs element=ID, or x and y from the last screenshot") from None
-                if ag.shot is None:
-                    raise ToolError("look_at_screen first, so I know where to click")
-                hwnd = ag.shot.hwnd
-                a["_what"] = f"at {int(x)},{int(y)} in " + (ag.describe_hwnd(hwnd) if hwnd else "the screen")
-                a["_eid"], a["_hwnd"], a["_x"], a["_y"] = None, hwnd, x, y
-            a["_button"], a["_double"] = button, double
-            a["_verb"] = "double-click" if double else ("right-click" if button == "right" else "click")
-            a["_label"] = a["_what"]
+                self._target(a)
+                a["_ref"], a["_where"] = ("mid", a["_hwnd"]), f"in {a['_label']}"
             if a["_hwnd"] and ag.is_command_line(a["_hwnd"]):
                 a["_force_confirm"] = True
+        elif name == "watch_screen":
+            self._prepare_watch(a)
         elif name == "replace_text":
             old_t, new_t = str(a["old"]), str(a.get("new") if a.get("new") is not None else "")
             if not old_t.strip():
@@ -627,6 +910,9 @@ class ToolBox:
                 except ValueError as exc:
                     raise ToolError(str(exc)) from None
             a["_combos"], a["_keys"] = combos, " ".join(c[0] for c in combos)
+            hold = self._num(a, "hold", 0.0, 0.0, 10.0)
+            a["_hold"] = min(hold, 60.0 / len(combos))
+            a["_held"] = f" (held {a['_hold']:g} s)" if a["_hold"] >= 0.1 else ""
             self._target(a)
             names = {c[0].replace("control", "ctrl").replace("windows", "win") for c in combos}
             if names & CLOSING_KEYS:
@@ -639,16 +925,18 @@ class ToolBox:
                 raise ToolError("direction must be up, down, left or right")
             a["direction"] = d
             try:
-                a["amount"] = max(1, min(30, int(float(a.get("amount") or 5))))
+                a["amount"] = max(1, min(50, int(float(a.get("amount") or 5))))
             except (TypeError, ValueError):
                 a["amount"] = 5
-            eid = self._element_arg(a)
-            if eid is not None:
-                _el, hwnd = ag.element(eid)
-                a["_eid"], a["_hwnd"], a["_label"] = eid, hwnd, ag.describe_hwnd(hwnd)
-            else:
-                a["_eid"] = None
+            a["_keys"] = self._held(a)
+            a["_eid"], a["_xy"] = None, None
+            spot = self._spot_arg(a, "", "scroll", required=False)
+            if spot is None:
                 self._target(a)
+            elif spot[0][0] == "el":
+                a["_eid"], a["_hwnd"], a["_label"] = spot[0][1], spot[1], ag.describe_hwnd(spot[1])
+            else:
+                a["_xy"], a["_hwnd"], a["_label"] = (spot[0][1], spot[0][2]), spot[1], spot[2]
         elif name == "wait":
             try:
                 secs = float(a["seconds"])
@@ -808,7 +1096,21 @@ class ToolBox:
         return ToolOutput(text, display=f"📖 Read {a['_label']}")
 
     def _click(self, a: dict[str, Any]) -> str:
-        return self.agent.click(a["_eid"], a["_x"], a["_y"], a["_hwnd"] or None, a["_button"], a["_double"])
+        return self.agent.click(a["_eid"], a["_x"], a["_y"], a["_hwnd"] or None, a["_button"], a["_double"],
+                                count=a.get("_count", 1), hold=a.get("_hold", 0.0), keys=a.get("_keys"))
+
+    def _drag(self, a: dict[str, Any]) -> ToolOutput:
+        return self.agent.drag(a["_src"], a["_dst"], a["_path"], a["_button"], a["_keys"], a["_seconds"])
+
+    def _hover(self, a: dict[str, Any]) -> ToolOutput:
+        return self.agent.hover(a["_ref"], a["_seconds"])
+
+    def _zoom(self, a: dict[str, Any]) -> ToolOutput:
+        return self.agent.zoom(a["_ref"], a["direction"], a["_steps"], a["_how"])
+
+    def _watch(self, a: dict[str, Any]) -> ToolOutput:
+        return self.agent.watch(a["_hwnd"], a["_screen"], a["_until"], a["_text"], a["_area"], a["_seconds"],
+                                a["_sens"])
 
     def _type(self, a: dict[str, Any]) -> str:
         return self.agent.type(a["text"], a["_hwnd"], a["_eid"])
@@ -941,10 +1243,10 @@ class ToolBox:
         return self.agent.replace(a["_hwnd"], a["old"], a["new"], a["replace_all"])
 
     def _keys(self, a: dict[str, Any]) -> str:
-        return self.agent.keys(a["_combos"], a["_hwnd"])
+        return self.agent.keys(a["_combos"], a["_hwnd"], a.get("_hold", 0.0))
 
     def _scroll(self, a: dict[str, Any]) -> str:
-        return self.agent.scroll(a["direction"], a["amount"], a["_hwnd"], a["_eid"])
+        return self.agent.scroll(a["direction"], a["amount"], a["_hwnd"], a["_eid"], a.get("_xy"), a.get("_keys"))
 
     @staticmethod
     def _get_time(_a: dict[str, Any]) -> str:
@@ -1041,6 +1343,17 @@ class ToolBox:
         url = self.cfg.search_url.replace("{q}", quote_plus(a["query"]))
         webbrowser.open(url, new=2)
         return f"Searched the web for '{a['query']}'."
+
+    @staticmethod
+    def _read_web_page(a: dict[str, Any]) -> ToolOutput:
+        from . import webpage
+
+        try:
+            text = webpage.read(a["url"], a.get("start", 0))
+        except webpage.WebError as e:
+            raise ToolError(str(e)) from e
+        first = text.split("\n", 1)[0].removeprefix("Web page:").strip()
+        return ToolOutput(text, display=f"🌐 Read {first or a['url']}")
 
     @staticmethod
     def _open_settings(a: dict[str, Any]) -> str:

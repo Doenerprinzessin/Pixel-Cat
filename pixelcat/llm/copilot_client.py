@@ -10,10 +10,13 @@
   its process only.  The runtime runs in the SDK's "empty" mode, so it never uses the Copilot
   CLI's or the GitHub CLI's logins, the system keychain or GH_TOKEN & co., and keeps its state
   in %APPDATA%\\PixelCat\\copilot (not ~/.copilot).  Sessions are deleted when a chat ends.
-* No Copilot tools: only the cat's own tools are offered, and every call goes back to the app
-  as ``done(text, calls)`` - the confirmation cards, admin rules and auto mode work exactly as
-  for the other models.  The runtime keeps the conversation (``CopilotChat``: one session per
-  chat); a tool call waits inside the runtime until the app hands over its result.
+* No Copilot tools of its own - except ``web_fetch`` (reading a public web page) when Web search
+  is on, and every page it wants goes to the app first (``permission``: the confirmation card,
+  or ALWAYS / auto mode as for the cat's read_web_page).  The cat's own tools are offered, and
+  every call goes back to the app as ``done(text, calls)`` - the confirmation cards, admin rules
+  and auto mode work exactly as for the other models.  The runtime keeps the conversation
+  (``CopilotChat``: one session per chat); a tool call waits inside the runtime until the app
+  hands over its result.
 * Usage: tokens (the token limit) and AI credits (the credit limit) of every model call, and
   ``quota()`` - the Copilot plan's own monthly allowance.
 """
@@ -491,6 +494,9 @@ class CopilotChat:
         self.order: list[str] = []                   # the waiting calls, in the order the app runs them
         self.queue: asyncio.Queue | None = None
         self.turn = False                            # a turn is running in the runtime
+        self.web = False                             # the runtime's own web_fetch may be used (Settings: Web search)
+        self.web_tool = False                        # ...the session was opened with it
+        self.perms: list[asyncio.Future] = []        # web pages waiting for the user's OK
 
     # -- the session --------------------------------------------------------------------------
     def _effort(self, w: "CopilotWorker") -> str | None:
@@ -510,12 +516,13 @@ class CopilotChat:
                              parameters=fn.get("parameters") or {"type": "object", "properties": {}},
                              skip_permission=True))
         self.tool_names = {d.name for d in defs}
+        self.web = self.web_tool = bool(w.web)
         effort = self._effort(w)
         kw: dict[str, Any] = dict(
             model=self._model_name(w.model), client_name="Pixel Cat",
             system_message={"mode": "replace", "content": w.system},
-            tools={"definitions": defs, "available_tools": sorted(self.tool_names)},
-            events={"streaming": True}, permissions={"on_request": _refuse},
+            tools={"definitions": defs, "available_tools": sorted(self.tool_names | ({"web_fetch"} if self.web else set()))},
+            events={"streaming": True}, permissions={"on_request": self._permission},
             github={"telemetry_enabled": False}, working_directory=str(_work_dir()),
             agents={"included_builtin_agents": []}, skills={"enabled": False},
             instructions={"skip_custom_instructions": True}, state={"enable_cross_session_store": False},
@@ -553,6 +560,41 @@ class CopilotChat:
                 self.pending.pop(cid, None)
         return handle
 
+    async def _permission(self, request: Any, invocation: Any) -> Any:
+        """The runtime asks before its own tools act.  Only web_fetch (reading a public web page,
+        when Web search is on) may - and only once the app said yes (the confirmation card, or
+        ALWAYS / auto mode, as for read_web_page).  Everything else is refused."""
+        from copilot._generated.rpc import PermissionDecisionApproveOnce, PermissionDecisionReject
+
+        if getattr(request, "kind", None) != "url" or not self.web or self.queue is None:
+            return _refuse(request, invocation)
+        url = str(getattr(request, "url", "") or "")
+        from . import webpage
+
+        try:
+            await asyncio.to_thread(webpage.check_address, url)
+        except webpage.WebError as e:
+            log.info("Copilot's web_fetch refused: %s", e)
+            return PermissionDecisionReject(feedback=str(e))
+        fut = asyncio.get_running_loop().create_future()
+        self.perms.append(fut)
+        self.queue.put_nowait(("perm", fut, url))
+        try:
+            ok = bool(await fut)
+        except asyncio.CancelledError:
+            ok = False
+        finally:
+            if fut in self.perms:
+                self.perms.remove(fut)
+        return PermissionDecisionApproveOnce() if ok else \
+            PermissionDecisionReject(feedback="The user didn't allow reading this page.")
+
+    def _drop_perms(self) -> None:
+        for f in self.perms:
+            if not f.done():
+                f.cancel()
+        self.perms.clear()
+
     async def _close(self) -> None:
         session, self.session = self.session, None
         sid, self.session_id = self.session_id, ""
@@ -560,6 +602,7 @@ class CopilotChat:
         for f in self.pending.values():
             f.cancel()
         self.pending.clear()
+        self._drop_perms()
         self.order.clear()
         self.consumed, self.expect_reply, self.turn = 0, False, False
         if session is None:
@@ -589,9 +632,10 @@ class CopilotChat:
             log.debug("Copilot chat not closed cleanly", exc_info=True)
 
     async def abort(self) -> None:
-        """Stop the running turn; calls waiting for a result are dropped."""
-        if self.session is None or not (self.turn or self.pending):
+        """Stop the running turn; calls (and web pages) waiting for an answer are dropped."""
+        if self.session is None or not (self.turn or self.pending or self.perms):
             return
+        self._drop_perms()
         try:
             await asyncio.wait_for(self.session.abort(), 5)
         except Exception:  # noqa: BLE001
@@ -622,6 +666,7 @@ class CopilotChat:
             effort = self._effort(w)
             await self.session.set_model(self._model_name(w.model), reasoning_effort=effort)
             self.model, self.effort = w.model, effort
+        self.web = self.web_tool and bool(w.web)     # (Web search switched off: web_fetch is refused)
         while self.queue is not None and not self.queue.empty():
             await self._next(w, 0)                   # (left over: usage after a reply, idle after an error)
         new = list(hist[self.consumed:])
@@ -667,6 +712,8 @@ class CopilotChat:
             item = self.queue.get_nowait() if timeout <= 0 else await asyncio.wait_for(self.queue.get(), timeout)
         except (asyncio.QueueEmpty, asyncio.TimeoutError):
             return None
+        if item[0] == "perm" and (w is None or w._cancel):
+            item[1].cancel()                         # (nobody to ask any more: not read)
         if item[0] == "ev":
             t = _etype(item[1])
             d = item[1].data
@@ -702,6 +749,14 @@ class CopilotChat:
             if item[0] == "tool":
                 _, cid, name, args = item
                 calls[cid] = {"id": cid, "name": name, "arguments": args if isinstance(args, dict) else {}}
+            elif item[0] == "perm":
+                _, fut, url = item
+                if not fut.done():
+                    loop = asyncio.get_running_loop()
+
+                    def reply(ok: bool, f: asyncio.Future = fut) -> None:     # (from the app's thread)
+                        loop.call_soon_threadsafe(lambda: f.done() or f.set_result(bool(ok)))
+                    w.permission.emit(url, reply)
             else:
                 ev = item[1]
                 if getattr(ev, "agent_id", None):
@@ -715,6 +770,8 @@ class CopilotChat:
                 elif t == "assistant.reasoning_delta":
                     thought += len(d.delta_content or "") or 1
                     w.thinking.emit(thought)
+                elif t == "tool.execution_start" and getattr(d, "tool_name", "") == "web_fetch":
+                    w.status.emit("🌐 reading a web page…")
                 elif t == "assistant.message":
                     text = d.content if d.content is not None else "".join(deltas)
                     if text.strip():
@@ -782,6 +839,7 @@ class CopilotWorker(ExternalWorker):
     the conversation and only gets what is new (``CopilotChat.step``)."""
 
     credits = Signal(float)
+    permission = Signal(str, object)     # Copilot's web_fetch wants a page: (url, reply(ok)) - the app asks
 
     def __init__(self, model: str, chat: CopilotChat, history: list[dict[str, Any]], system: str,
                  tools: list[dict[str, Any]] | None, think: bool, effort: str, creds: Credentials,

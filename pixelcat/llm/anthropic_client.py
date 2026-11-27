@@ -22,11 +22,13 @@ from typing import Any
 
 import anthropic
 
-from .external import ANTHROPIC, BASE_URLS, Credentials, ExternalWorker, media_type, tool_call_ids, wait_reset
+from .external import (ANTHROPIC, BASE_URLS, CLAUDE_MAX_OUT, SEARCHING, Credentials, ExternalWorker, is_too_long,
+                       media_type, too_long, tool_call_ids, wait_reset, with_sources)
 
 log = logging.getLogger(__name__)
 
-MAX_OUT = 32_000
+MAX_OUT = CLAUDE_MAX_OUT
+WEB_SEARCHES = 5                 # web searches Claude may run in one request (Anthropic's server tool)
 FALLBACK_MODELS = {"claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
 BETA_BINDING = "thinking-binding-controls-2026-08-01"
 BETA_FALLBACK = "server-side-fallback-2026-07-01"
@@ -72,7 +74,9 @@ def list_models(creds: Credentials, auth: str = "key") -> list[dict[str, Any]]:
                     "enabled": _cap(caps, "thinking", "types", "enabled"),
                     "effort": [e for e in EFFORT_ORDER if _cap(caps, "effort", e)],
                     "vision": _cap(caps, "image_input") if caps else True,
-                    "max_tokens": int(getattr(m, "max_tokens", 0) or 0)})
+                    "max_tokens": int(getattr(m, "max_tokens", 0) or 0),
+                    "context": int(getattr(m, "max_input_tokens", 0) or 0),
+                    "web_search": _cap(caps, "server_tools", "web_search") if caps else True})
     return out
 
 
@@ -196,6 +200,8 @@ class AnthropicWorker(ExternalWorker):
         super().__init__("anthropic", model, messages, tools, think, effort, creds)
         self.info = info or {}               # the model's capabilities (from the model list)
         self.auth = auth
+        self._cont: list[dict[str, Any]] = []   # a reply paused by the server (long web searches), continued
+        self._pauses = 0
 
     # what to send ---------------------------------------------------------------
     def _effort(self, opts: dict[str, Any]) -> str | None:
@@ -212,12 +218,17 @@ class AnthropicWorker(ExternalWorker):
 
     def _params(self, opts: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         system, msgs = to_claude(self.messages, opts.get("strip_thinking", False))
+        if self._cont:
+            msgs = msgs + [{"role": "assistant", "content": self._cont}]
         p: dict[str, Any] = {"model": self.model, "max_tokens": min(MAX_OUT, self.info.get("max_tokens") or MAX_OUT),
                              "messages": msgs}
         if system:
             p["system"] = [{"type": "text", "text": system}]
-        if self.tools:
-            p["tools"] = tools_for_claude(self.tools, not opts.get("no_eager"))
+        tools = tools_for_claude(self.tools, not opts.get("no_eager")) if self.tools else []
+        if self.web and not opts.get("no_search") and self.info.get("web_search", True):
+            tools.append({"type": "web_search_20250305", "name": "web_search", "max_uses": WEB_SEARCHES})
+        if tools:
+            p["tools"] = tools
         if not opts.get("no_cache"):
             p["cache_control"] = {"type": "ephemeral"}
         betas: list[str] = []
@@ -258,7 +269,12 @@ class AnthropicWorker(ExternalWorker):
         remember it).  False: nothing left to change."""
         low = msg.lower()
         learn = _learned.setdefault(self.model, {})
-        if "fallback" in low and not opts.get("no_fallback"):
+        if ("web_search" in low or "web search" in low) and not opts.get("no_search"):
+            opts["no_search"] = learn["no_search"] = True
+            if "not enabled" in low or "disabled" in low:
+                self.note = ("Web search is turned off for your Anthropic organization (Claude Console > Settings > "
+                             "Capabilities), so I answer without it.")
+        elif "fallback" in low and not opts.get("no_fallback"):
             opts["no_fallback"] = learn["no_fallback"] = True
         elif ("block_binding" in low or "thinking-binding" in low) and not opts.get("no_binding"):
             opts["no_binding"] = learn["no_binding"] = True
@@ -318,12 +334,18 @@ class AnthropicWorker(ExternalWorker):
                                 self.thinking.emit(thought)
                         elif event.type == "content_block_start" and getattr(event.content_block, "type", "") == "thinking":
                             self.thinking.emit(max(1, thought))
+                        elif event.type == "content_block_start" and \
+                                getattr(event.content_block, "type", "") == "server_tool_use":
+                            self.status.emit(SEARCHING)
                     final = stream.get_final_message()
             except ValueError as exc:            # a tool call's JSON the SDK couldn't read: ask again
                 log.warning("Claude's tool call couldn't be read (%s) - asking again", exc)
                 continue
             except anthropic.BadRequestError as exc:
                 msg = _message(exc)
+                if is_too_long(msg):
+                    self.failed.emit("too_long", too_long(msg))
+                    return
                 if "credit balance" in msg.lower():
                     self.limit("credits", None, msg)
                     return
@@ -369,21 +391,36 @@ class AnthropicWorker(ExternalWorker):
                     log.exception("Claude request failed")
                     self.failed.emit("error", str(exc))
                 return
+            if getattr(final, "stop_reason", None) == "pause_turn" and self._pauses < 4:
+                self._pauses += 1                    # (a long search paused the reply: send it back to go on)
+                tries -= 1
+                self._usage(final)
+                self._cont += [b.to_dict() if hasattr(b, "to_dict") else dict(b) for b in final.content]
+                continue
             self._finish(final)
             return
 
-    def _finish(self, final: Any) -> None:
+    def _usage(self, final: Any) -> None:
         u = final.usage
         total = sum(int(getattr(u, k, 0) or 0) for k in
                     ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
         self.used.emit("anthropic", total)
-        blocks = [b.to_dict() if hasattr(b, "to_dict") else dict(b) for b in final.content]
+        searches = int(getattr(getattr(u, "server_tool_use", None), "web_search_requests", 0) or 0)
+        if searches:
+            log.info("%s: %d web search(es)", self.model, searches)
+
+    def _finish(self, final: Any) -> None:
+        self._usage(final)
+        blocks = self._cont + [b.to_dict() if hasattr(b, "to_dict") else dict(b) for b in final.content]
         # after a server-side fallback: what came before the last fallback block was the
         # declined attempt - its thinking and tool calls are neither run nor replayed
         cut = max((i for i, b in enumerate(blocks) if b.get("type") == "fallback"), default=-1)
         keep = [b for i, b in enumerate(blocks)
                 if i > cut or b.get("type") not in ("thinking", "redacted_thinking", "tool_use", "server_tool_use")]
         text = "".join(b.get("text", "") for b in keep if b.get("type") == "text")
+        sources = [(str(c.get("title") or ""), str(c.get("url") or "")) for b in keep if b.get("type") == "text"
+                   for c in b.get("citations") or [] if isinstance(c, dict) and c.get("url")]
+        text = with_sources(text, sources)
         stop = getattr(final, "stop_reason", None)
         if stop == "refusal":
             det = getattr(final, "stop_details", None)

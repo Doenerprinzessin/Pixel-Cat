@@ -1,14 +1,19 @@
 """The chat's eyes and hands on the desktop.
 
-* Eyes: ``look`` takes a screenshot (sent only to the local model) with numbered
+* Eyes: ``look`` takes a screenshot (sent to the chat's model) with numbered
   boxes on the clickable elements; ``read`` lists a window's controls and its
-  document text through UI Automation (exact text, no OCR guessing).
-* Hands: ``click``, ``type``, ``keys``, ``scroll`` via SendInput.
+  document text through UI Automation (exact text, no OCR guessing); ``watch``
+  waits inside a task until the screen changes (or a text appears / goes, or it
+  stops moving) and then looks - for quizzes, games, things that appear.
+* Hands: ``click`` (any button, double/triple, held keys, long press), ``drag``,
+  ``hover``, ``zoom`` (ctrl + wheel or a touch pinch), ``type``, ``keys``,
+  ``scroll`` via SendInput / touch injection, moving like a hand would.
 
 Guard rails (enforced here, not by the model):
 * Every action targets one app window, which is brought to the front first.
   Typing and key presses stop at once if another window comes to the front
-  (e.g. because the user clicked somewhere else) or the user presses Esc.
+  (e.g. because the user clicked somewhere else) or the user presses Esc.  A
+  drag or hover stops (button let go) when the user moves the mouse.
 * Clicks must land on the target app itself - never on another app that
   happens to cover the spot.  The cat and its chat let clicks pass through.
 * Password fields are never typed into; apps running as administrator are left
@@ -63,6 +68,60 @@ class Shot:
     size: tuple[int, int]
 
 
+@dataclass
+class Seen:
+    """The latest picture the model got (without the pink marks) - watch_screen compares with it."""
+    hwnd: int
+    rect: tuple[int, int, int, int]  # the screen area it shows
+    how: str                         # "window" (the window drew itself) or "screen"
+    img: object                      # QImage
+    t: float
+
+
+@dataclass
+class Spot:
+    """Where a mouse action happens (screen pixels) and what is there."""
+    x: int
+    y: int
+    hwnd: int                        # the window it belongs to (0: unknown - a whole-screen picture)
+    what: str
+    el: "uia.Element | None" = None
+
+
+# how much of a picture must change for watch_screen (share of its pixels)
+SENSITIVITY = {"high": 0.0002, "normal": 0.001, "low": 0.03}
+FP_W = 160                           # watch_screen compares pictures this wide (smoothed)
+_KEY_NAMES = {0x11: "ctrl", 0x10: "shift", 0x12: "alt", 0x5B: "win"}
+
+
+def _fp(img, crop: tuple[int, int, int, int] | None, size: tuple[int, int]) -> bytes:  # type: ignore[no-untyped-def]
+    """A small copy of (part of) a picture (RGB), to compare."""
+    from PySide6.QtCore import QRect
+    from PySide6.QtCore import Qt as _Qt
+    from PySide6.QtGui import QImage as _QImage
+
+    if crop is not None:
+        img = img.copy(QRect(crop[0], crop[1], max(1, crop[2] - crop[0]), max(1, crop[3] - crop[1])))
+    w, h = size
+    small = img.scaled(w, h, _Qt.AspectRatioMode.IgnoreAspectRatio,
+                       _Qt.TransformationMode.SmoothTransformation).convertToFormat(_QImage.Format.Format_RGB888)
+    bpl = small.bytesPerLine()
+    raw = bytes(small.constBits())[: bpl * h]
+    return b"".join(raw[i * bpl: i * bpl + w * 3] for i in range(h))
+
+
+def _diff(a: bytes, b: bytes) -> float:
+    """Share of the pixels that clearly changed in any colour (1.0 if they can't be compared).
+    Colour, not grey: a red and a blue answer box can be equally bright."""
+    if not a or len(a) != len(b):
+        return 1.0
+    changed = 0
+    for i in range(0, len(a) - 2, 3):
+        if abs(a[i] - b[i]) > 28 or abs(a[i + 1] - b[i + 1]) > 28 or abs(a[i + 2] - b[i + 2]) > 28:
+            changed += 1
+    return changed / (len(a) // 3)
+
+
 def _virtual_screen() -> tuple[int, int, int, int]:
     gm = win32.user32.GetSystemMetrics
     x, y = gm(76), gm(77)
@@ -95,6 +154,8 @@ class DesktopAgent:
         self.last_hwnd = 0
         self.snap: uia.Snapshot | None = None
         self.shot: Shot | None = None
+        self._seen: Seen | None = None
+        self._quick = False              # inside capture.excluding(): grab the screen directly
         self._uia_busy: dict[int, threading.Thread] = {}
 
     # ================================================================ helpers
@@ -124,12 +185,27 @@ class DesktopAgent:
 
     def _window_image(self, hwnd: int):  # type: ignore[no-untyped-def]
         """The window's pixels (drawn by the window itself if possible)."""
-        frame = window_rect(hwnd)
-        rect = _clip(frame, _virtual_screen())
-        img = capture.grab_window(hwnd, frame) if rect == frame else None
-        if img is None and rect[2] - rect[0] > 4 and rect[3] - rect[1] > 4:
-            img = capture.grab_without(rect, self.own_pid)
+        img, rect, _how = self._capture(hwnd)
         return img, rect
+
+    def _capture(self, hwnd: int, screen: tuple[int, int, int, int] | None = None):  # type: ignore[no-untyped-def]
+        """(picture, screen rect, how) of a window - drawn by the window itself if it can - or of a
+        screen area (``hwnd`` 0).  The cat's own windows are never in it."""
+        if hwnd:
+            frame = window_rect(hwnd)
+            rect = _clip(frame, _virtual_screen())
+            img = capture.grab_window(hwnd, frame) if rect == frame else None
+            if img is not None:
+                return img, rect, "window"
+            if rect[2] - rect[0] <= 4 or rect[3] - rect[1] <= 4:
+                return None, rect, ""
+        else:
+            rect = screen or control_monitor(*win32.cursor_pos())
+        img = capture.grab(rect) if self._quick else capture.grab_without(rect, self.own_pid)
+        return img, rect, "screen"
+
+    def _remember(self, hwnd: int, rect: tuple[int, int, int, int], img, how: str) -> None:  # type: ignore[no-untyped-def]
+        self._seen = Seen(hwnd, rect, how, img.copy(), time.monotonic())
 
     def _fingerprint(self, hwnd: int) -> bytes | None:
         """Small grayscale picture of the window, to notice whether anything changed."""
@@ -157,11 +233,30 @@ class DesktopAgent:
 
     def _shot_output(self, hwnd: int, text: str, display: str) -> ToolOutput:
         """A tool result with a fresh screenshot of the window, so the model can check it."""
-        img, rect = self._window_image(hwnd)
+        img, rect, how = self._capture(hwnd)
         if img is None:
             return ToolOutput(text, display=display)
         img, scale = capture.fit(img, self.cfg.vision_max_px)
         self.shot = Shot(hwnd, (rect[0], rect[1]), scale, (img.width(), img.height()))
+        self._remember(hwnd, rect, img, how)
+        return ToolOutput(text, [capture.to_base64_png(img)], display=display)
+
+    def _after_output(self, sp: Spot, text: str, display: str, popups: bool = False) -> ToolOutput:
+        """After a drag / zoom / hover: the result with a picture of where it happened.  ``popups``:
+        a picture of the screen around the window, so tooltips and hover menus are in it."""
+        hwnd = sp.hwnd if sp.hwnd and win32.user32.IsWindow(sp.hwnd) else 0
+        if hwnd and not popups:
+            return self._shot_output(inputs.active_popup(hwnd), text, display)
+        mon = control_monitor(sp.x, sp.y)
+        if hwnd:
+            r = window_rect(hwnd)
+            rect = _clip((r[0] - 150, r[1] - 150, r[2] + 150, r[3] + 150), mon)
+        else:
+            rect = mon
+        img = capture.grab_without(rect, self.own_pid)
+        img, scale = capture.fit(img, self.cfg.vision_max_px)
+        self.shot = Shot(hwnd, (rect[0], rect[1]), scale, (img.width(), img.height()))
+        self._remember(hwnd, rect, img, "screen")
         return ToolOutput(text, [capture.to_base64_png(img)], display=display)
 
     def wait_until_drawn(self, hwnd: int, max_s: float = 15.0) -> float:
@@ -258,7 +353,9 @@ class DesktopAgent:
         return text
 
     # ================================================================ eyes
-    def look(self, hwnd: int | None) -> ToolOutput:
+    def look(self, hwnd: int | None, screen: tuple[int, int, int, int] | None = None) -> ToolOutput:
+        """``screen``: the screen area to show when there is no window (default: the monitor of
+        the frontmost app)."""
         # Looking is read-only: the window is NOT brought to the front (that would be an action).
         snap: uia.Snapshot | None = None
         img = None
@@ -287,16 +384,18 @@ class DesktopAgent:
                 r = window_rect(top.hwnd)
                 cx, cy = (r[0] + r[2]) // 2, (r[1] + r[3]) // 2
             mon = control_monitor(cx, cy)
-            rect = mon
+            rect = screen or mon
             label = "the whole screen"
             if top is not None:
                 snap = self._uia_snapshot(top.hwnd, limit=self.cfg.vision_max_elements)
             shot_hwnd = 0
         if rect[2] - rect[0] < 4 or rect[3] - rect[1] < 4:
             raise AgentError("that window is not visible on any screen")
+        how = "window" if img is not None else "screen"
         if img is None:
-            img = capture.grab_without(rect, self.own_pid)
+            img = capture.grab(rect) if self._quick else capture.grab_without(rect, self.own_pid)
         img, scale = capture.fit(img, self.cfg.vision_max_px)
+        self._remember(shot_hwnd, rect, img, how)
         ox, oy = rect[0], rect[1]
         lines: list[str] = []
         marks: list[tuple[int, int, int, int, int]] = []
@@ -378,10 +477,10 @@ class DesktopAgent:
         return min(same, key=lambda e: abs(e.center[0] - ox) + abs(e.center[1] - oy))
 
     @contextmanager
-    def _passthrough(self) -> Iterator[None]:
-        """Let clicks fall through the cat and its chat while we click."""
+    def _passthrough(self, seconds: float = 3.0) -> Iterator[None]:
+        """Let clicks fall through the cat and its chat while we use the mouse (``seconds``: at most)."""
         changed: list[int] = []
-        inputs.passthrough_until = time.monotonic() + 3.0
+        inputs.passthrough_until = time.monotonic() + seconds
         own: list[int] = []
 
         def _cb(h, _lp):  # type: ignore[no-untyped-def]
@@ -404,50 +503,91 @@ class DesktopAgent:
                     win32.set_exstyle(h, win32.get_exstyle(h) & ~win32.WS_EX_TRANSPARENT)
             inputs.passthrough_until = 0.0
 
-    def click(self, eid: int | None, x: float | None, y: float | None, hwnd: int | None,
-              button: str = "left", double: bool = False, quiet: bool = False) -> str:
-        what = ""
-        if eid is not None:
-            old, hwnd = self.element(eid)
-            self._check_input_allowed(hwnd)
-            self._focus(hwnd)
-            el = self._relocate(old, hwnd)
-            px, py = el.center
-            what = f"[{eid}] {el.kind}{(' ' + repr(el.name[:50])) if el.name else ''}"
-        else:
-            if self.shot is None or x is None or y is None:
-                raise AgentError("give an element id, or x and y from a screenshot (look_at_screen first)")
-            sw, sh = self.shot.size
-            if not (0 <= x <= sw and 0 <= y <= sh):
-                raise AgentError(f"x/y must be inside the last screenshot ({sw}x{sh})")
-            px = int(self.shot.origin[0] + x / self.shot.scale)
-            py = int(self.shot.origin[1] + y / self.shot.scale)
-            hwnd = hwnd or self.shot.hwnd or None
-            if hwnd:
-                self._check_input_allowed(hwnd)
-                self._focus(hwnd)
-            what = f"the spot {int(x)},{int(y)}"
+    def to_screen(self, x: float, y: float) -> tuple[int, int]:
+        """x/y in the latest screenshot -> screen pixels."""
+        if self.shot is None:
+            raise AgentError("give an element id, or x and y from a screenshot (look_at_screen first)")
+        sw, sh = self.shot.size
+        if not (0 <= x <= sw and 0 <= y <= sh):
+            raise AgentError(f"x/y must be inside the last screenshot ({sw}x{sh})")
+        px, py = int(self.shot.origin[0] + x / self.shot.scale), int(self.shot.origin[1] + y / self.shot.scale)
         vs = _virtual_screen()
         if not (vs[0] <= px < vs[2] and vs[1] <= py < vs[3]):
             raise AgentError("that spot is off-screen")
-        with self._passthrough():
-            at = inputs.window_at(px, py)
-            if at and win32.window_pid(at) == self.own_pid:
-                raise AgentError("my own chat window covers that spot - move the chat aside and ask again")
-            if hwnd and at and not inputs.same_app(at, hwnd):
-                raise AgentError(f"{self.describe_hwnd(at)} covers that spot, so I didn't click")
-            if not hwnd and at:
-                self._check_input_allowed(at)
+        return px, py
+
+    def spot(self, ref: tuple, focus: bool = True) -> Spot:
+        """Where a mouse action goes: ("el", id) an element from the latest look, ("xy", x, y) a spot
+        in the latest screenshot, ("mid", hwnd) the middle of a window.  ``focus``: bring its window
+        to the front first (the start of an action; not the end of a drag)."""
+        kind = ref[0]
+        if kind == "el":
+            old, hwnd = self.element(int(ref[1]))
+            if focus:
+                self._check_input_allowed(hwnd)
+                self._focus(hwnd)
+            el = self._relocate(old, hwnd)
+            return Spot(el.center[0], el.center[1], hwnd,
+                        f"[{ref[1]}] {el.kind}{(' ' + repr(el.name[:50])) if el.name else ''}", el)
+        if kind == "xy":
+            px, py = self.to_screen(float(ref[1]), float(ref[2]))
+            hwnd = self.shot.hwnd if self.shot is not None else 0
+            if hwnd and not win32.user32.IsWindow(hwnd):
+                raise AgentError("that window is gone (it was closed)")
+            if hwnd and focus:
+                self._check_input_allowed(hwnd)
+                self._focus(hwnd)
+            return Spot(px, py, hwnd, f"the spot {int(ref[1])},{int(ref[2])}")
+        hwnd = int(ref[1])
+        if focus:
+            self._check_input_allowed(hwnd)
+            self._focus(hwnd)
+        r = window_rect(inputs.active_popup(hwnd))
+        return Spot((r[0] + r[2]) // 2, (r[1] + r[3]) // 2, hwnd, "the middle of the window")
+
+    def _clear_spot(self, sp: Spot, verb: str) -> int:
+        """Inside _passthrough: the window at the spot - our own chat or another app on top of
+        the target means no action there.  Returns that window."""
+        at = inputs.window_at(sp.x, sp.y)
+        vs = _virtual_screen()
+        if not (vs[0] <= sp.x < vs[2] and vs[1] <= sp.y < vs[3]):
+            raise AgentError("that spot is off-screen")
+        if at and win32.window_pid(at) == self.own_pid:
+            raise AgentError("my own chat window covers that spot - move the chat aside and ask again")
+        if sp.hwnd and at and not inputs.same_app(at, sp.hwnd):
+            raise AgentError(f"{self.describe_hwnd(at)} covers that spot, so I didn't {verb}")
+        if not sp.hwnd and at:
+            self._check_input_allowed(at)
+        return at
+
+    def click(self, eid: int | None, x: float | None, y: float | None, hwnd: int | None,
+              button: str = "left", double: bool = False, quiet: bool = False, count: int = 1,
+              hold: float = 0.0, keys: list[int] | None = None) -> str:
+        if eid is None and (self.shot is None or x is None or y is None):
+            raise AgentError("give an element id, or x and y from a screenshot (look_at_screen first)")
+        sp = self.spot(("el", eid) if eid is not None else ("xy", x, y))
+        hwnd, px, py, el, what = sp.hwnd or None, sp.x, sp.y, sp.el, sp.what
+        count = 2 if double and count < 2 else max(1, count)
+        with self._passthrough(2.0 + (hold + 0.1) * count):
+            at = self._clear_spot(sp, "click")
             old_pos = win32.cursor_pos()
-            inputs.click(px, py, button, double)
+            with inputs.holding(keys or []):
+                inputs.click(px, py, button, count=count, hold=hold, cancel=self.cancel)
             time.sleep(0.05)
         if win32.cursor_pos() == (px, py) and button == "left":
             inputs.move_cursor(*old_pos)  # put the pointer back where the user left it
-        verb = {"left": "Clicked", "right": "Right-clicked", "middle": "Middle-clicked"}[button]
-        if double:
-            verb = "Double-clicked"
+        verb = {"left": "Clicked", "right": "Right-clicked", "middle": "Middle-clicked",
+                "back": "Clicked the mouse's back button on", "forward": "Clicked the mouse's forward button on"}[button]
+        if count == 2:
+            verb = "Double-clicked" if button == "left" else verb + " twice:"
+        elif count >= 3:
+            verb = "Triple-clicked" if button == "left" else verb + f" {count} times:"
+        if hold >= 0.3:
+            verb = f"Pressed and held ({hold:g} s)" if button == "left" else verb + f" (held {hold:g} s)"
+        if keys:
+            verb += " (holding " + "+".join(_KEY_NAMES.get(k, "?") for k in keys) + ")"
         state = ""
-        if eid is not None and el.checked is not None and hwnd:
+        if eid is not None and el is not None and el.checked is not None and hwnd:
             time.sleep(0.25)
             now = self._relocate(el, hwnd)
             if now.checked is not None:
@@ -689,7 +829,7 @@ class DesktopAgent:
         return (f"Replaced {old[:60]!r} with {new[:60]!r} in {label} ({what}). Checked: the whole text is exactly "
                 "as intended. (ctrl+z would undo it.)" + self.after(0.05))
 
-    def keys(self, combos: list[tuple[str, list[int]]], hwnd: int) -> str:
+    def keys(self, combos: list[tuple[str, list[int]]], hwnd: int, hold: float = 0.0) -> str:
         self._check_input_allowed(hwnd)
         target = self._focus(hwnd)
         done: list[str] = []
@@ -699,35 +839,268 @@ class DesktopAgent:
             if not inputs.is_foreground(target):
                 # Only the same app may have come to the front (e.g. its "Save as" dialog opened by a key).
                 break
-            inputs.press_combo(vks)
+            inputs.press_combo(vks, hold, self.cancel)
             done.append(name)
             time.sleep(0.12)
         if len(done) < len(combos):
             why = "you pressed Esc / Stop" if self.cancel.is_set() else "another app came to the front"
             return f"Pressed {', '.join(done) or 'nothing'}; stopped before {combos[len(done)][0]} because {why}."
-        return f"Pressed {', '.join(done)} in {self.describe_hwnd(target)}." + self.after()
+        held = f" (held {hold:g} s{' each' if len(done) > 1 else ''})" if hold >= 0.1 else ""
+        return f"Pressed {', '.join(done)}{held} in {self.describe_hwnd(target)}." + self.after()
 
-    def scroll(self, direction: str, amount: int, hwnd: int, eid: int | None = None) -> str:
-        if eid is not None:
-            old, hwnd = self.element(eid)
-            self._check_input_allowed(hwnd)
-            self._focus(hwnd)
-            px, py = self._relocate(old, hwnd).center
-        else:
-            self._check_input_allowed(hwnd)
-            self._focus(hwnd)
-            r = window_rect(inputs.active_popup(hwnd))
-            px, py = (r[0] + r[2]) // 2, (r[1] + r[3]) // 2
-        clicks = max(1, min(30, int(amount)))
+    def scroll(self, direction: str, amount: int, hwnd: int, eid: int | None = None,
+               xy: tuple[float, float] | None = None, keys: list[int] | None = None) -> str:
+        """Over an element, a spot (x, y in the latest screenshot) or the middle of the window;
+        ``keys`` are held meanwhile (ctrl: zoom, shift: sideways)."""
+        ref = ("el", eid) if eid is not None else ("xy", *xy) if xy is not None else ("mid", hwnd)
+        sp = self.spot(ref)
+        clicks = max(1, min(50, int(amount)))
         sign = 1 if direction in ("up", "left") else -1
-        with self._passthrough():
-            at = inputs.window_at(px, py)
-            if at and not inputs.same_app(at, hwnd):
-                raise AgentError(f"{self.describe_hwnd(at)} covers that spot, so I didn't scroll")
+        with self._passthrough(3.0 + clicks * 0.05):
+            at = self._clear_spot(sp, "scroll")
             old_pos = win32.cursor_pos()
-            inputs.scroll(px, py, sign * clicks, horizontal=direction in ("left", "right"))
+            with inputs.holding(keys or []):
+                inputs.scroll(sp.x, sp.y, sign * clicks, horizontal=direction in ("left", "right"))
         inputs.move_cursor(*old_pos)
-        return f"Scrolled {direction} {clicks}x in {self.describe_hwnd(hwnd)}." + self.after(0.25)
+        where = "" if ref[0] == "mid" else f" over {sp.what}"
+        held = " (holding " + "+".join(_KEY_NAMES.get(k, "?") for k in keys) + ")" if keys else ""
+        return (f"Scrolled {direction} {clicks}x{where}{held} in {self.describe_hwnd(sp.hwnd or at)}."
+                + self.after(0.25))
+
+    def _label(self, *hwnds: int) -> str:
+        h = next((h for h in hwnds if h and win32.user32.IsWindow(h)), 0)
+        return self.describe_hwnd(h) if h else "the screen"
+
+    def drag(self, src: tuple, dst: tuple | None, path: list[tuple[float, float]], button: str = "left",
+             keys: list[int] | None = None, seconds: float = 0.6) -> ToolOutput:
+        """Press at ``src``, move through ``path`` (x/y in the latest screenshot) to ``dst``, let go."""
+        a = self.spot(src)
+        pts = [(a.x, a.y)] + [self.to_screen(x, y) for x, y in path]
+        b = self.spot(dst, focus=False) if dst is not None else None
+        if b is not None:
+            pts.append((b.x, b.y))
+        if len(pts) < 2:
+            raise AgentError("say where to drag to (to_element or to_x/to_y, or a path)")
+        with self._passthrough(seconds + 3.0):
+            self._clear_spot(a, "drag")
+            end_at = inputs.window_at(*pts[-1])
+            if end_at and win32.window_pid(end_at) == self.own_pid:
+                raise AgentError("my own chat window covers the spot to drop on - move the chat aside and ask again")
+            if end_at and not (a.hwnd and inputs.same_app(end_at, a.hwnd)):
+                self._check_input_allowed(end_at)
+            old_pos = win32.cursor_pos()
+            with inputs.holding(keys or []):
+                why = inputs.drag(pts, button, seconds, self.cancel)
+        if not why:
+            inputs.move_cursor(*old_pos)
+        label = self._label(a.hwnd, end_at)
+        if why == "cancel":
+            text = "Stopped the drag because you pressed Esc / Stop - I let go of the button where the pointer was."
+        elif why == "user":
+            text = "Stopped the drag because you moved the mouse - I let go of the button and left it to you."
+        else:
+            to = b.what if b is not None else f"the spot {path[-1][0]:.0f},{path[-1][1]:.0f}"
+            via = f" along {len(path)} point{'s' if len(path) != 1 else ''}" if path else ""
+            held = " holding " + "+".join(_KEY_NAMES.get(k, "?") for k in keys) if keys else ""
+            btn = "" if button == "left" else f" with the {button} button"
+            onto = (f" onto {self.describe_hwnd(end_at)}" if end_at and a.hwnd and not inputs.same_app(end_at, a.hwnd)
+                    else "")
+            text = f"Dragged from {a.what} to {to}{via}{btn}{held} in {label}{onto}."
+        return self._after_output(a, text + self.after(0.25), f"🖱️ {text}")
+
+    def zoom(self, ref: tuple, direction: str, steps: int, how: str = "wheel") -> ToolOutput:
+        """Zoom at a spot: ctrl + mouse wheel, or a two-finger touch pinch (falls back to the wheel)."""
+        sp = self.spot(ref)
+        used, note, why = how, "", ""
+        with self._passthrough(4.0 + steps * 0.15):
+            self._clear_spot(sp, "zoom")
+            old_pos = win32.cursor_pos()
+            if how == "pinch":
+                r = window_rect(sp.hwnd) if sp.hwnd else control_monitor(sp.x, sp.y)
+                room = max(60, 2 * (min(sp.x - r[0], r[2] - sp.x) - 15))
+                near, far = min(100.0, room * 0.3), min(float(room), 100.0 + 90 * steps)
+                start, end = (near, far) if direction == "in" else (far, near)
+                why = inputs.pinch(sp.x, sp.y, start, end, 0.3 + 0.08 * steps, self.cancel)
+                if why == "failed":
+                    used, why = "wheel", ""
+                    note = " (Windows didn't take a touch pinch here, so I used ctrl + mouse wheel instead.)"
+            if used == "wheel" and not why:
+                with inputs.holding([0x11]):
+                    inputs.scroll(sp.x, sp.y, steps if direction == "in" else -steps)
+            inputs.move_cursor(*old_pos)
+        if why == "cancel":
+            text = "Stopped zooming because you pressed Esc / Stop."
+        else:
+            way = "two-finger pinch" if used == "pinch" else "ctrl + mouse wheel"
+            where = "" if ref[0] == "mid" else f" at {sp.what}"
+            text = (f"Zoomed {direction} ({steps} step{'s' if steps != 1 else ''}, {way}){where} in "
+                    f"{self._label(sp.hwnd)}.{note}")
+        return self._after_output(sp, text + self.after(0.3), f"🔍 {text}")
+
+    def hover(self, ref: tuple, seconds: float = 1.0) -> ToolOutput:
+        """Move the pointer onto something and leave it there (tooltips, hover menus)."""
+        sp = self.spot(ref)
+        with self._passthrough(seconds + 4.0):
+            self._clear_spot(sp, "move the mouse there")
+            why = inputs.glide(sp.x, sp.y, 0.3, self.cancel)
+            if not why:
+                inputs._wait(seconds, self.cancel)
+            if why == "user":
+                text = "Stopped because you moved the mouse."
+            elif why or self.cancel.is_set():
+                text = "Stopped because you pressed Esc / Stop."
+            else:
+                text = f"The mouse pointer is on {sp.what} in {self._label(sp.hwnd)} and stays there."
+            return self._after_output(sp, text, f"🖱️ {text}", popups=True)
+
+    # ================================================================ watching the screen
+    def watch(self, hwnd: int, screen: tuple[int, int, int, int] | None, until: str = "change", text: str = "",
+              area: tuple[int, int, int, int] | None = None, seconds: float = 120.0,
+              sensitivity: str = "normal") -> ToolOutput:
+        """Wait inside the task until something happens on a window (or a screen area), then show it
+        with a fresh look - so the model can react at once.  ``area``: screen rect to watch only."""
+        if hwnd:
+            if not win32.user32.IsWindow(hwnd):
+                raise AgentError("that window is gone (it was closed)")
+            if win32.user32.IsIconic(hwnd):
+                raise AgentError(f"{self.describe_hwnd(hwnd)} is minimized - restore it first "
+                                 "(window_action restore), then watch it")
+        label = self.describe_hwnd(hwnd) if hwnd else "the screen"
+        t0 = time.monotonic()
+        end = t0 + seconds
+        if until in ("text", "gone"):
+            happened = self._watch_text(hwnd, label, text, until == "gone", t0, end)
+        else:
+            with capture.excluding(self.own_pid):
+                self._quick = True
+                try:
+                    happened = self._watch_pixels(hwnd, screen, until, area,
+                                                  SENSITIVITY.get(sensitivity, SENSITIVITY["normal"]), t0, end)
+                finally:
+                    self._quick = False
+        if self.cancel.is_set():
+            return ToolOutput("Stopped watching because you pressed Esc / Stop.", display=f"👀 Stopped watching {label}")
+        if happened is None:
+            what = {"change": "Nothing changed", "still": "It kept changing", "text": f"{text!r} didn't appear",
+                    "gone": f"{text!r} was still there"}[until]
+            msg = (f"{what} on {label} within {seconds:g} s. If it is still going (a game, a quiz, a lobby), "
+                   "call watch_screen again to keep waiting.")
+            return ToolOutput(msg, display=f"👀 {what} on {label} ({seconds:g} s)")
+        out = self.look(hwnd or None, screen=screen)
+        out.text = f"{happened} {out.text}"
+        out.display = f"👀 {happened[:-1] if happened.endswith('.') else happened} - {label}"
+        return out
+
+    def _watch_pixels(self, hwnd: int, screen: tuple[int, int, int, int] | None, until: str,
+                      area: tuple[int, int, int, int] | None, thr: float, t0: float, end: float) -> str | None:
+        def grab():  # type: ignore[no-untyped-def]
+            img, r, how = self._capture(hwnd, screen)
+            if img is None:
+                raise AgentError("that window is not visible on any screen")
+            return img, r, how
+
+        img, rect, how = grab()
+        part = _clip(area or rect, rect)
+        if part[2] - part[0] < 2 or part[3] - part[1] < 2:
+            raise AgentError("that area is not on the window")
+        off = (part[0] - rect[0], part[1] - rect[1], part[2] - part[0], part[3] - part[1])   # area in the window
+        w = min(FP_W, off[2])
+        size = (w, max(1, round(w * off[3] / off[2])))
+
+        def fp(im, r) -> bytes:  # type: ignore[no-untyped-def]
+            s = im.width() / max(1, r[2] - r[0])
+            return _fp(im, (round((part[0] - r[0]) * s), round((part[1] - r[1]) * s),
+                            round((part[2] - r[0]) * s), round((part[3] - r[1]) * s)), size)
+
+        def moved(r: tuple[int, int, int, int]) -> None:      # the window moved: the area moves along
+            nonlocal rect, part
+            rect = r
+            part = _clip((r[0] + off[0], r[1] + off[1], r[0] + off[0] + off[2], r[1] + off[1] + off[3]), r)
+
+        cur = fp(img, rect)
+        seen = self._seen
+        base = cur
+        if (seen is not None and seen.hwnd == hwnd and seen.how == how and seen.rect == rect
+                and time.monotonic() - seen.t < 120):
+            base = fp(seen.img, seen.rect)                    # what the model saw last
+        pop0 = inputs.active_popup(hwnd) if hwnd else 0
+
+        def frame() -> bytes | None:
+            im, r, _how = grab()
+            if r != rect:
+                moved(r)
+                return None
+            return fp(im, rect)
+
+        if until == "still":
+            prev, calm = cur, time.monotonic()
+            while not self.cancel.is_set():
+                now = time.monotonic()
+                if now - calm >= 1.0:
+                    return f"The screen stopped changing after {now - t0:.1f} s."
+                if now >= end:
+                    return None
+                time.sleep(0.2)
+                c = frame()
+                if c is None or _diff(prev, c) > thr:
+                    calm = time.monotonic()
+                prev = c if c is not None else fp(grab()[0], rect)
+            return None
+        if _diff(base, cur) > thr:
+            happened = "It had already changed since your latest screenshot."
+        else:
+            happened = ""
+            while not happened:
+                if self.cancel.is_set() or time.monotonic() >= end:
+                    return None
+                time.sleep(0.25)
+                if hwnd and inputs.active_popup(hwnd) != pop0:
+                    happened = f"A dialog window opened or closed after {time.monotonic() - t0:.1f} s."
+                    break
+                c = frame()
+                if c is None:
+                    base = cur = fp(grab()[0], rect)
+                    continue
+                cur = c
+                if _diff(base, cur) > thr:
+                    happened = f"The screen changed after {time.monotonic() - t0:.1f} s."
+        prev, calm, stop = cur, None, time.monotonic() + 2.5   # let animations finish (up to 2.5 s)
+        while time.monotonic() < stop and not self.cancel.is_set():
+            time.sleep(0.15)
+            c = frame()
+            if c is None:
+                break
+            if _diff(prev, c) <= thr:
+                calm = calm or time.monotonic()
+                if time.monotonic() - calm >= 0.35:
+                    break
+            else:
+                calm = None
+            prev = c
+        return happened
+
+    def _watch_text(self, hwnd: int, label: str, text: str, gone: bool, t0: float, end: float) -> str | None:
+        from .watch import _norm, _window_text
+
+        if not hwnd:
+            raise AgentError("until='text' or 'gone' needs a window to read - give target")
+        need = _norm(text)
+        if not need:
+            raise AgentError("say which text to watch for")
+        first = True
+        while not self.cancel.is_set():
+            got = _window_text(inputs.active_popup(hwnd), timeout=6.0)
+            if got is None:
+                if first:
+                    raise AgentError(f"I can't read the text of {label} - use until='change' instead")
+            elif (need in _norm(got)) != gone:
+                when = "now" if first else f"after {time.monotonic() - t0:.1f} s"
+                return f"{text!r} is {'gone' if gone else 'there'} ({when})."
+            first = False
+            if time.monotonic() >= end:
+                return None
+            inputs._wait(0.6, self.cancel)
+        return None
 
     def wait(self, seconds: float) -> str:
         end = time.time() + seconds

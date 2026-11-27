@@ -158,6 +158,26 @@ def msg_start(usage: dict | None = None) -> dict:
 
 def claude_events(mode: str) -> list[dict]:
     ev = [msg_start()]
+    if mode in ("search", "pause"):                      # Anthropic's web search: the search, results, a cited answer
+        ev += [{"type": "content_block_start", "index": 0, "content_block": {
+                    "type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}}},
+               {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta",
+                                                                     "partial_json": '{"query": "cat news"}'}},
+               {"type": "content_block_stop", "index": 0}]
+        if mode == "search":
+            ev += [{"type": "content_block_start", "index": 1, "content_block": {
+                        "type": "web_search_tool_result", "tool_use_id": "srvtoolu_1", "content": [
+                            {"type": "web_search_result", "url": "https://news.example.org/cats", "title": "Cat News",
+                             "encrypted_content": "E1", "page_age": None}]}},
+                   {"type": "content_block_stop", "index": 1},
+                   {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": "",
+                                                                                "citations": []}},
+                   {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta",
+                                                                         "text": "Cats are napping."}},
+                   {"type": "content_block_delta", "index": 2, "delta": {"type": "citations_delta", "citation": {
+                       "type": "web_search_result_location", "url": "https://news.example.org/cats",
+                       "title": "Cat News", "encrypted_index": "I1", "cited_text": "Cats nap"}}},
+                   {"type": "content_block_stop", "index": 2}]
     if mode in ("text", "tool"):
         ev += [{"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "",
                                                                             "signature": ""}},
@@ -175,7 +195,7 @@ def claude_events(mode: str) -> list[dict]:
                                                                      "partial_json": '{"name": "Note'}},
                {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": 'pad"}'}},
                {"type": "content_block_stop", "index": 2}]
-    stop = {"tool": "tool_use", "refusal": "refusal"}.get(mode, "end_turn")
+    stop = {"tool": "tool_use", "refusal": "refusal", "pause": "pause_turn"}.get(mode, "end_turn")
     if mode == "refusal":
         ev += [{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
                {"type": "content_block_stop", "index": 0}]
@@ -187,17 +207,31 @@ def claude_events(mode: str) -> list[dict]:
 
 def oa_events(mode: str) -> list[dict]:
     ev = [{"type": "response.created", "response": {"id": "resp_1"}},
-          {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}},
-          {"type": "response.output_text.delta", "delta": "Hi "},
-          {"type": "response.output_text.delta", "delta": "from GPT"}]
+          {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}}]
+    output: list[dict] = []
+    if mode == "search":                                 # OpenAI's web search: the call, a cited answer
+        ev += [{"type": "response.output_item.added", "item": {"type": "web_search_call", "id": "ws_1",
+                                                               "status": "in_progress"}},
+               {"type": "response.output_text.delta", "delta": "Cats rule ([Cat Daily](https://daily.example.com/x))."}]
+        output = [{"type": "message", "content": [{"type": "output_text", "text": "Cats rule.", "annotations": [
+            {"type": "url_citation", "url": "https://daily.example.com/x", "title": "Cat Daily"},
+            {"type": "url_citation", "url": "https://wiki.example.org/Cat", "title": "Cat - Wiki"}]}]}]
+    else:
+        ev += [{"type": "response.output_text.delta", "delta": "Hi "},
+               {"type": "response.output_text.delta", "delta": "from GPT"}]
     if mode == "tool":
         ev.append({"type": "response.output_item.done", "item": {"type": "function_call", "id": "fc_1",
                                                                   "call_id": "call_9", "name": "open_app",
                                                                   "arguments": '{"name": "Paint"}'}})
-    ev.append({"type": "response.completed", "response": {"id": "resp_1", "output": [],
+    ev.append({"type": "response.completed", "response": {"id": "resp_1", "output": output,
                                                           "usage": {"input_tokens": 300, "output_tokens": 40,
                                                                     "total_tokens": 340}}})
     return ev
+
+
+PAGE = ("<html><head><title>Cat Facts</title><script>alert('x')</script><style>p{}</style></head><body>"
+        "<nav><a href='/'>Home</a></nav><h1>Cats</h1><p>Cats sleep a lot &amp; purr.</p>"
+        "<ul><li>naps</li><li>zoomies</li></ul><p>Read <a href='/web/more'>more</a>.</p></body></html>")
 
 
 class H(BaseHTTPRequestHandler):
@@ -210,6 +244,21 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         url = urlparse(self.path)
+        if url.path.startswith("/web/"):                 # web pages for read_web_page
+            if url.path == "/web/redirect":
+                self.send_response(302)
+                self.send_header("Location", "/web/page")
+                self.end_headers()
+                return
+            kind, body = {"/web/page": ("text/html; charset=utf-8", PAGE.encode()),
+                          "/web/long": ("text/plain", ("purr " * 6000).encode()),
+                          "/web/img": ("image/png", b"\x89PNG....")}.get(url.path, ("text/plain", b""))
+            self.send_response(200 if body else 404)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if url.path == "/v1/models":
             S["headers"].append(dict(self.headers))
             if key_of(self.headers) == "sk-ant-bad":
@@ -229,7 +278,8 @@ class H(BaseHTTPRequestHandler):
         if url.path == "/oa/models":
             if "chatgpt" in self.headers.get("Authorization", ""):
                 return jsend(self, 200, {"models": [{"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol",
-                                                     "visibility": "list"},
+                                                     "visibility": "list", "context_window": 272000,
+                                                     "max_context_window": 1050000},
                                                     {"slug": "hidden", "display_name": "x", "visibility": "hide"}]})
             return jsend(self, 200, {"data": [{"id": "gpt-6.1", "created": 2}, {"id": "gpt-6.1-tts", "created": 3},
                                               {"id": "text-embedding-4", "created": 4}, {"id": "o5-mini", "created": 1}]})
@@ -274,7 +324,18 @@ class H(BaseHTTPRequestHandler):
                 return jsend(self, 400, {"type": "error", "error": {
                     "type": "invalid_request_error",
                     "message": "Your credit balance is too low to access the Anthropic API."}})
-            return sse(self, claude_events({"off_once": "text"}.get(mode, mode)))
+            if mode in ("too_long", "too_long_once"):
+                if mode == "too_long_once":
+                    S["mode"] = "text"
+                return jsend(self, 400, {"type": "error", "error": {
+                    "type": "invalid_request_error", "message": "prompt is too long: 250000 tokens > 200000 maximum"}})
+            if mode == "search_off" and any(str(t.get("type", "")).startswith("web_search") for t in body.get("tools", [])):
+                return jsend(self, 400, {"type": "error", "error": {
+                    "type": "invalid_request_error", "message": "Web search is not enabled for this organization."}})
+            if mode == "pause_once":
+                S["mode"] = "search"
+                return sse(self, claude_events("pause"))
+            return sse(self, claude_events({"off_once": "text", "search_off": "text"}.get(mode, mode)))
         if url.path == "/oa/responses":
             body = json.loads(raw)
             S["bodies"].append(body)
@@ -286,9 +347,18 @@ class H(BaseHTTPRequestHandler):
                                                    "code": "unsupported_parameter"}})
             if mode == "plan":
                 return jsend(self, 429, {"error": {"message": "limit", "code": "subscription_sharing_usage_limit_exceeded"}})
+            if mode == "too_long":
+                return jsend(self, 400, {"error": {"message": "Your input exceeds the context window of this model. "
+                                                              "Please adjust your input and try again.",
+                                                   "type": "invalid_request_error", "param": "input",
+                                                   "code": "context_length_exceeded"}})
+            if mode == "no_search" and {"type": "web_search"} in body.get("tools", []):
+                return jsend(self, 400, {"error": {"message": "Tool 'web_search' is not supported with this model.",
+                                                   "type": "invalid_request_error", "param": "tools",
+                                                   "code": "invalid_value"}})
             if mode == "expired" and self.headers.get("Authorization") == "Bearer chatgpt-old":
                 return jsend(self, 401, {"detail": "expired"})
-            return sse(self, oa_events("tool" if mode == "tool" else "text"), named=False)
+            return sse(self, oa_events(mode if mode in ("tool", "search") else "text"), named=False)
         if url.path == "/auth/token":
             form = {k: v[0] for k, v in parse_qs(raw.decode()).items()}
             S["token"].append(form)
@@ -325,8 +395,10 @@ CS.URLS.update(issuer=BASE + "/auth", authorize=BASE + "/auth/authorize", token=
 CS.PORT = 0
 
 
-def run_worker(w, timeout: float = 20.0) -> dict:
-    out: dict = {"tokens": [], "thinking": 0, "done": None, "failed": None, "used": []}
+def run_worker(w, timeout: float = 20.0, web: bool = False) -> dict:
+    out: dict = {"tokens": [], "thinking": 0, "done": None, "failed": None, "used": [], "status": []}
+    w.web = web
+    w.status.connect(lambda s: out["status"].append(s))
     w.token.connect(lambda t: out["tokens"].append(t))
     w.thinking.connect(lambda n: out.__setitem__("thinking", n))
     w.done.connect(lambda c, calls: out.__setitem__("done", (c, calls)))
@@ -401,6 +473,24 @@ def main() -> int:  # noqa: C901 - a linear test script
           [X.fmt_tokens(n) for n in (100_000_000, 3_500_000, 1_234_567, 999_999, 1700)] ==
           ["100M", "3.5M", "1.23M", "1M", "1.7k"], str([X.fmt_tokens(n) for n in (100_000_000, 3_500_000, 1_234_567,
                                                                                   999_999, 1700)]))
+    # context windows ----------------------------------------------------------------------------
+    mi = [X.max_input("anthropic", "claude-opus-5-5", {"context": 1_000_000, "max_tokens": 128_000}),
+          X.max_input("anthropic", "claude-old", {}),
+          X.max_input("openai", "gpt-6.2-sol-2026-06-01", {}), X.max_input("openai", "gpt-5.4-mini", {}),
+          X.max_input("openai", "gpt-5.1-chat-latest", {}), X.max_input("openai", "o3-mini", {}),
+          X.max_input("openai", "gpt-6.1-sol", {"context": 1_050_000}), X.max_input("openai", "gpt-9-nova", {}),
+          X.max_input("openai", "gpt-9-nova", {"context": 272_000})]
+    check("context windows: Claude = its reported window minus the reply (1M -> 968k; unknown: 200k); OpenAI = the "
+          "documented maximum input (snapshots too), ChatGPT's own list caps it; unknown models 272k",
+          mi == [968_000, 168_000, 922_000, 272_000, 111_616, 100_000, 922_000, 272_000, 204_000], str(mi))
+    errs = ["prompt is too long: 250,000 tokens > 200,000 maximum",
+            "input length and `max_tokens` exceed context limit: 990000 + 32000 > 1000000, decrease input length",
+            "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens.",
+            "Your input exceeds the context window of this model. Please adjust your input and try again."]
+    tl = [(lambda d: (d["limit"], d["actual"]))(json.loads(X.too_long(e))) for e in errs]
+    check("'too long' answers are recognized, with what they say about the limit",
+          all(X.is_too_long(e) for e in errs) and not X.is_too_long("slow down")
+          and tl == [(200_000, 250_000), (968_000, 990_000), (128_000, 130_000), (None, None)], str(tl))
 
     # keys --------------------------------------------------------------------------------------
     cr = X.Credentials()
@@ -510,8 +600,46 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("signed in with Anthropic: Pixel Cat's own sign-in is used - not the saved key, not the environment",
           key_of(S["headers"][-1]) == "tok-signin", key_of(S["headers"][-1])[:12])
     ms = AC.list_models(creds)
-    check("model list with capabilities", [m["id"] for m in ms] == ["claude-opus-5-5", "claude-haiku-5-5"]
-          and ms[0]["adaptive"] and ms[0]["effort"][-1] == "max" and ms[1]["effort"] == [])
+    check("model list with capabilities and the context window", [m["id"] for m in ms] == ["claude-opus-5-5", "claude-haiku-5-5"]
+          and ms[0]["adaptive"] and ms[0]["effort"][-1] == "max" and ms[1]["effort"] == []
+          and ms[0]["context"] == 1_000_000)
+    S["mode"] = "too_long"
+    out = run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info))
+    S["mode"] = "text"
+    check("Claude: a request that is too long is reported as such (with the numbers)",
+          out["failed"] is not None and out["failed"][0] == "too_long"
+          and json.loads(out["failed"][1])["limit"] == 200_000, str(out["failed"]))
+    # Claude's web search -------------------------------------------------------------------------
+    S["mode"] = "search"
+    out = run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], tools, True, "medium", creds, info), web=True)
+    body = S["bodies"][-1]
+    ws = [t for t in body.get("tools", []) if t.get("name") == "web_search"]
+    text = out["done"][0] if out["done"] else ""
+    check("Claude web search (on): Anthropic's web_search tool next to the cat's tools; 'searching' shown; the "
+          "answer comes with its sources as links",
+          ws == [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}] and len(body["tools"]) == 2
+          and "Cats are napping." in text and "**Sources:** [Cat News](https://news.example.org/cats)" in text
+          and X.SEARCHING in out["status"], f"{ws} {text!r} {out['status']}")
+    run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], tools, True, "medium", creds, info), web=False)
+    run_worker(AC.AnthropicWorker("claude-old", HISTORY[:2], tools, True, "medium", creds,
+                                  dict(info, web_search=False)), web=True)
+    check("...off (Settings) or a model without it: no web search tool",
+          all(t.get("name") != "web_search" for b_ in S["bodies"][-2:] for t in b_.get("tools", [])))
+    S["mode"] = "pause_once"
+    n0 = len(S["bodies"])
+    out = run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info), web=True)
+    cont = S["bodies"][-1]["messages"][-1] if len(S["bodies"]) > n0 else {}
+    check("a reply paused during long searches (pause_turn) is sent back and continued; tokens of both counted",
+          len(S["bodies"]) == n0 + 2 and cont.get("role") == "assistant"
+          and cont["content"][0].get("type") == "server_tool_use" and out["done"] is not None
+          and "Cats are napping." in out["done"][0] and len(out["used"]) == 2, str(cont)[:200])
+    S["mode"] = "search_off"
+    n0 = len(S["bodies"])
+    w_ = AC.AnthropicWorker("claude-sonnet-5-5", HISTORY[:2], None, True, "medium", creds, info)
+    out = run_worker(w_, web=True)
+    check("web search turned off for the organization: asked again without it, and the chat is told once",
+          out["done"] is not None and len(S["bodies"]) == n0 + 2 and "turned off" in w_.note, w_.note)
+    S["mode"] = "text"
 
     # OpenAI --------------------------------------------------------------------------------------
     creds.set("openai_key", "sk-oa-1")
@@ -535,6 +663,55 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("the ChatGPT plan's limit: the provider's limit (no reset time made up)",
           out["failed"] and json.loads(out["failed"][1]) == {"provider": "openai", "why": "plan", "detail": "limit",
                                                              "reset": None}, str(out["failed"]))
+    S["oa_mode"] = "too_long"
+    out = run_worker(OC.OpenAIWorker("gpt-6.1", HISTORY[:2], None, True, "medium", creds, "key"))
+    check("OpenAI: context_length_exceeded is reported as 'too long'", out["failed"] is not None
+          and out["failed"][0] == "too_long", str(out["failed"]))
+    S["oa_mode"] = "search"
+    out = run_worker(OC.OpenAIWorker("gpt-6.1", HISTORY[:2], tools, True, "medium", creds, "key"), web=True)
+    body = S["bodies"][-1]
+    text = out["done"][0] if out["done"] else ""
+    check("OpenAI web search (on): {type: web_search} next to the cat's tools; 'searching' shown; the inline "
+          "source stays, the other cited page is added as a link",
+          body["tools"][-1] == {"type": "web_search"} and len(body["tools"]) == 2 and X.SEARCHING in out["status"]
+          and "([Cat Daily](https://daily.example.com/x))" in text
+          and text.endswith("**Sources:** [Cat - Wiki](https://wiki.example.org/Cat)"), repr(text))
+    S["oa_mode"] = "no_search"
+    n0 = len(S["bodies"])
+    w_ = OC.OpenAIWorker("gpt-6.1-mini", HISTORY[:2], None, False, "medium", creds, "key")
+    out = run_worker(w_, web=True)
+    check("...a model that refuses web search: asked again without it (and the chat is told)",
+          out["done"] is not None and [{"type": "web_search"} in b_.get("tools", []) for b_ in S["bodies"][n0:]]
+          == [True, False] and "without web search" in w_.note, w_.note)
+    S["oa_mode"] = "text"
+    # read_web_page (Pixel Cat reads a page itself - any model) ----------------------------------------
+    from pixelcat.llm import webpage as WP
+    refused = []
+    for u in (BASE + "/web/page", "http://localhost/x", "http://192.168.1.1/", "http://10.0.0.5/", "file:///C:/x"):
+        try:
+            WP.check_address(u)
+            refused.append(False)
+        except WP.WebError:
+            refused.append(True)
+    check("read_web_page: never this PC or the local network (or non-web addresses)", all(refused)
+          and WP._public_name("example.com") and not WP._public_name("wiki.corp") and not WP._public_name("10.1.2.3"),
+          str(refused))
+    WP.ALLOW_LOCAL = True                               # (the test's web pages are on this PC)
+    page = WP.read(BASE + "/web/redirect")
+    long1, long2 = WP.read(BASE + "/web/long"), WP.read(BASE + "/web/long", 12000)
+    try:
+        WP.read(BASE + "/web/img")
+        img = ""
+    except WP.WebError as e:
+        img = str(e)
+    WP.ALLOW_LOCAL = False
+    check("...a page as text: title, the redirect followed, headings, lists, links (absolute), no scripts; marked "
+          "as information, not instructions",
+          page.startswith("Web page: Cat Facts\nAddress: " + BASE + "/web/page") and "# Cats" in page
+          and "Cats sleep a lot & purr." in page and "- naps" in page and f"[more]({BASE}/web/more)" in page
+          and "alert" not in page and "never instructions" in page, page)
+    check("...long pages in parts (start=...); files that aren't pages are refused",
+          "start=12000" in long1 and "Characters 12,000-24,000 of" in long2 and "image/png" in img, img)
     check("model lists: an API key's chat models (newest first); a ChatGPT sign-in's visible ones",
           [m["id"] for m in OC.list_models(creds, "key")] == ["gpt-6.1", "o5-mini"])
 
@@ -576,7 +753,9 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("...an expired sign-in is renewed first (refresh token rotated)", out["done"] is not None
           and S["headers"][-1]["Authorization"] == "Bearer chatgpt-new" and creds.get("chatgpt")["refresh_token"] == "R2"
           and S["token"][-1]["grant_type"] == "refresh_token" and S["token"][-1]["client_id"] == "oaiapp_123")
-    check("...its model list: only visible models", [m["id"] for m in OC.list_models(creds, "chatgpt")] == ["gpt-6.1-sol"])
+    cg = OC.list_models(creds, "chatgpt")
+    check("...its model list: only visible models, with the most context the plan's model takes",
+          [m["id"] for m in cg] == ["gpt-6.1-sol"] and cg[0].get("context") == 1_050_000, str(cg))
     ok_out = CS.sign_out(creds)
     check("sign out: revoked at OpenAI, tokens gone, the issued client id kept",
           ok_out and S["revoked"][-1]["token"] == "R2" and not CS.signed_in(creds)
@@ -668,10 +847,23 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     claude = next(c for c in ext.children if c.key == "ext_anthropic")
     keys = [c.key for c in claude.children]
     check("Settings > AI model > External AI models: Claude (connected: Model, limit, resets, raise up to, used), "
-          "ChatGPT and Copilot; Thinking; Effort",
-          [c.key for c in ext.children] == ["ext_anthropic", "ext_openai", "ext_copilot", "ext:thinking", "ext_effort"]
+          "ChatGPT and Copilot; Thinking; Effort; Web search",
+          [c.key for c in ext.children] == ["ext_anthropic", "ext_openai", "ext_copilot", "ext:thinking", "ext_effort",
+                                            "ext:websearch"]
           and {"ext_models_anthropic", "ext_limit_anthropic", "ext_period_anthropic", "ext_max_anthropic",
                "ext:used:anthropic", "ext:out:anthropic"} <= set(keys), str(keys))
+    on = next(c for c in ext.children if c.key == "ext:websearch").checked
+    pet._on_menu("ext:websearch")
+    check("Web search is on by default and can be switched off (and on)", on is True
+          and saved.ext_settings["web_search"] is False)
+    pet._on_menu("ext:websearch")
+    from pixelcat.ui.chat import md_to_html
+    linked = md_to_html("See [Cat News](https://news.example.org/a?b=1&c=2) or [x](javascript:alert(1)).")
+    spec, a = pet.toolbox.prepare("read_web_page", {"url": "example.com/cats", "start": "12"})
+    check("links in the chat are clickable (web addresses only); read_web_page asks first (ALWAYS: group 'web')",
+          '<a href="https://news.example.org/a?b=1&amp;c=2"' in linked and "javascript" not in linked.split("<a")[-1][:40]
+          and linked.count("<a ") == 1 and a["url"] == "https://example.com/cats" and a["start"] == 12
+          and spec.confirm == "soft" and spec.group == "web" and spec.background, linked)
     m = pet.menu
     m.items = pet._menu_items()
     m.expanded = {"settings", "set_model", "ext", "ext_anthropic"}
@@ -776,6 +968,34 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
           and "lifts" in text and "today at" in text, text[:160])
     if pop is not None:
         pop._finish(False)
+    wait(lambda: not pet._task_active)
+    # context windows in the app -----------------------------------------------------------------------------
+    local, default = pet.chat_model, pet.cfg.model
+    pet.chat_model, pet.cfg.model = None, "qwen3.5:9b"
+    b_local = pet._ctx_budget()
+    pet.chat_model, pet.cfg.model = "anthropic:claude-haiku-5-5", default
+    b_claude = pet._ctx_budget()
+    pet._ext_p("anthropic")["limit"] = 0
+    S["mode"] = "too_long_once"
+    n0 = len(S["bodies"])
+    say("summarize everything we did")
+    reply = next((mm.text for mm in reversed(chat.msgs) if mm.role == "cat"), "")
+    learned = (pet._ext_p("anthropic").get("ctx_learned") or {}).get("claude-haiku-5-5", 0)
+    noted = any("shortened the older parts" in mm.text for mm in chat.msgs)
+    check("Claude uses its own window (968k), local models keep num_ctx; 'too long' -> a smaller budget is kept for "
+          "that model and the request is sent again, shortened",
+          b_local == pet.cfg.num_ctx and b_claude == 968_000 and len(S["bodies"]) == n0 + 2 and "Hello" in reply
+          and X.MIN_BUDGET <= learned < 968_000 and pet._ctx_budget() == learned and noted,
+          f"{b_local} {b_claude} bodies+{len(S['bodies']) - n0} learned={learned} reply={reply[:40]!r}")
+    S["mode"] = "too_long"
+    n0 = len(S["bodies"])
+    say("and again")
+    err = next((mm.text for mm in reversed(chat.msgs) if mm.role == "error"), "")
+    check("...still too long after two shorter tries: the chat says so (new chat)",
+          len(S["bodies"]) == n0 + 3 and "longer than" in err and not pet._task_active, err[:120])
+    S["mode"] = "text"
+    pet._ext_p("anthropic").pop("ctx_learned", None)
+    pet.chat_model = local
     # Sign in with ChatGPT from the menu (the browser is faked) ------------------------------------------------
     import webbrowser
     webbrowser.open = lambda url, *a, **k: threading.Thread(target=lambda: requests.get(url, timeout=10),

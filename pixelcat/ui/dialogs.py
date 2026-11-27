@@ -173,3 +173,14 @@ class AmountDialog(KeyDialog):
         self.field.selectAll()
         self.get.hide()
         self.save.setText("SET")
+
+
+class NameDialog(AmountDialog):
+    """Type the cat's name; empty gives back the default (the owner checks it like a key)."""
+
+    def __init__(self, title: str, text: str, current: str, max_len: int) -> None:
+        super().__init__(title, text, "e.g. Mochi", current)
+        self.field.setMaxLength(max_len)
+
+    def _save(self) -> None:
+        self.submitted.emit(self.field.text().strip())

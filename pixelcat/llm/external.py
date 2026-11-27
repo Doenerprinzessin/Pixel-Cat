@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from PySide6.QtCore import QThread, Signal
 
@@ -74,6 +75,24 @@ CREDIT_LIMITS = [0, 500, 1000, 2000, 5000, 10_000, 20_000]
 CREDIT_DEFAULT = 5000
 BASE_URLS: dict[str, str | None] = {"anthropic": None, "openai": "https://api.openai.com/v1"}   # (tests)
 
+# How much a request may hold (local models: num_ctx; Claude and ChatGPT: the model's own maximum).
+CLAUDE_MAX_OUT = 32_000              # the longest Claude reply asked for (max_tokens) - its window holds it too
+CLAUDE_WINDOW = 200_000              # a Claude model whose window the list doesn't say (Anthropic: "other models: 200k")
+# OpenAI models' maximum input in tokens, from developers.openai.com/api/docs/models/<id> ("Maximum input tokens",
+# else the context window minus the max output) - the API's model list doesn't say.  The longest matching name wins
+# (dated snapshots like gpt-6.2-sol-2026-06-01 too).
+OPENAI_INPUT = {
+    "gpt-6.2": 922_000, "gpt-6.1": 922_000, "gpt-6": 922_000, "gpt-5.6": 922_000, "gpt-5.6-cyber": 272_000,
+    "gpt-5.5": 922_000, "gpt-5.4": 922_000, "gpt-5.4-mini": 272_000, "gpt-5.4-nano": 272_000,
+    "gpt-5.3": 272_000, "gpt-5.2": 272_000, "gpt-5.1": 272_000, "gpt-5": 272_000, "gpt-5-pro": 128_000,
+    "gpt-5-chat": 111_616, "gpt-5.1-chat": 111_616, "gpt-5.2-chat": 111_616, "gpt-5.3-chat": 111_616,
+    "chat-latest": 272_000, "gpt-4.1": 1_014_808, "gpt-4o": 111_616, "chatgpt-4o": 111_616, "gpt-4.5": 111_616,
+    "gpt-4-turbo": 123_904, "o4-mini": 100_000, "o3": 100_000, "o1": 100_000, "o1-mini": 62_464,
+    "o1-preview": 95_232,
+}
+OPENAI_UNKNOWN = 272_000             # a model that isn't listed above (a "too long" answer makes it smaller)
+MIN_BUDGET = 16_000
+
 
 def parse(tag: str | None) -> tuple[str, str] | None:
     """``anthropic:claude-opus-5-5`` -> ("anthropic", "claude-opus-5-5"); a local tag -> None."""
@@ -81,6 +100,57 @@ def parse(tag: str | None) -> tuple[str, str] | None:
         return None
     prov, sep, rest = tag.partition(":")
     return (prov, rest) if sep and prov in PROVIDERS and rest else None
+
+
+# ------------------------------------------------------------------ context windows
+def openai_input(model: str) -> int | None:
+    """An OpenAI model's documented maximum input (None: not listed)."""
+    best: tuple[str, int] | None = None
+    for key, n in OPENAI_INPUT.items():
+        if (model == key or model.startswith(key + "-")) and (best is None or len(key) > len(best[0])):
+            best = (key, n)
+    return best[1] if best else None
+
+
+def max_input(provider: str, model: str, info: dict[str, Any]) -> int:
+    """The most one request to this model may hold, in tokens: its own context window without the
+    room for the reply.  ``info`` is the model list's entry (``context``: the window it reported)."""
+    reported = int(info.get("context") or 0)
+    if provider == "anthropic":
+        out = min(CLAUDE_MAX_OUT, int(info.get("max_tokens") or CLAUDE_MAX_OUT))
+        return max(MIN_BUDGET, (reported or CLAUDE_WINDOW) - out)
+    known = openai_input(model)
+    if reported:                             # (ChatGPT's own list: what the plan's model takes, reply included)
+        cap = reported - min(128_000, reported // 4)
+        return max(MIN_BUDGET, min(known, cap) if known else cap)
+    return known or OPENAI_UNKNOWN
+
+
+_TOO_LONG = ("prompt is too long", "exceed context limit", "context_length_exceeded", "exceeds the context window",
+             "maximum context length", "context window of this model")
+
+
+def is_too_long(message: str) -> bool:
+    low = message.lower()
+    return any(w in low for w in _TOO_LONG)
+
+
+def too_long(message: str) -> str:
+    """A 'request too long' error for the app: JSON with ``limit`` and ``actual`` input tokens
+    (None where the provider didn't say)."""
+    def num(s: str) -> int:
+        return int(s.replace(",", ""))
+    limit = actual = None
+    if m := re.search(r"(\d[\d,]*)\s*\+\s*(\d[\d,]*)\s*>\s*(\d[\d,]*)", message):      # input + max_tokens > window
+        actual, limit = num(m[1]), num(m[3]) - num(m[2])
+    elif m := re.search(r"(\d[\d,]*)\s*tokens?\s*>\s*(\d[\d,]*)", message):            # 1012345 tokens > 1000000
+        actual, limit = num(m[1]), num(m[2])
+    else:
+        if m := re.search(r"maximum context length is (\d[\d,]*)", message, re.I):
+            limit = num(m[1])
+        if m := re.search(r"(?:resulted in|requested|you sent) (\d[\d,]*)", message, re.I):
+            actual = num(m[1])
+    return json.dumps({"limit": limit, "actual": actual, "detail": message[:200]})
 
 
 def fmt_tokens(n: int) -> str:
@@ -250,6 +320,10 @@ def friendly(kind: str, detail: str, provider: str, model: str) -> str:
         return f"{prov.name} is very busy right now. Try again in a moment."
     if kind == "install":
         return f"Mew... {detail[:200]} Connect {prov.brand} again in {where}."
+    if kind == "too_long":
+        name = NAMES.get(f"{provider}:{model}") or model
+        return (f"Our chat got longer than **{name}** can take, even shortened. Press ＋ (or Ctrl+N) for a fresh "
+                "chat 🐾")
     return f"Hiss... {prov.name} said:\n```text\n{detail[:300]}\n```"
 
 
@@ -391,14 +465,17 @@ class CreditBudget:
 class ExternalWorker(QThread):
     """Like ollama_client.ChatWorker (same signals, same messages in), for an external model.
     ``failed`` kinds: auth, ext_offline, timeout, limit (detail: JSON with why/reset/url),
-    refused, truncated, model_gone, denied, busy, error.  ``used``: tokens this request used.
-    ``raw``: the model's reply as the provider's own blocks (replayed unchanged next time)."""
+    refused, truncated, model_gone, denied, busy, too_long, error.  ``used``: tokens this request
+    used.  ``status``: what the model is doing meanwhile ("searching the web").
+    ``raw``: the model's reply as the provider's own blocks (replayed unchanged next time).
+    ``web``: the provider's own web search may be used (Settings: Web search)."""
 
     token = Signal(str)
     thinking = Signal(int)
     done = Signal(str, list)
     failed = Signal(str, str)
     used = Signal(str, int)
+    status = Signal(str)
 
     def __init__(self, provider: str, model: str, messages: list[dict[str, Any]],
                  tools: list[dict[str, Any]] | None, think: bool, effort: str, creds: Credentials) -> None:
@@ -407,6 +484,7 @@ class ExternalWorker(QThread):
         self.messages, self.tools = messages, tools
         self.think, self.effort = think, effort
         self.creds = creds
+        self.web = False
         self.raw: list[dict[str, Any]] | None = None
         self.note = ""                       # something to tell the user once (e.g. "this model always thinks")
         self._cancel = False
@@ -417,6 +495,25 @@ class ExternalWorker(QThread):
     def limit(self, why: str, reset: datetime | None = None, detail: str = "") -> None:
         self.failed.emit("limit", json.dumps({"provider": self.provider, "why": why, "detail": detail[:300],
                                               "reset": reset.timestamp() if reset else None}))
+
+
+SEARCHING = "🔎 searching the web…"
+
+
+def with_sources(text: str, sources: list[tuple[str, str]], limit: int = 8) -> str:
+    """The reply with the web pages it used as clickable links (the providers ask apps to show
+    them) - the ones the text doesn't already link to."""
+    seen: set[str] = set()
+    links = []
+    for title, url in sources:
+        if not url.startswith(("http://", "https://")) or url in seen or url in text:
+            continue
+        seen.add(url)
+        name = (title or urlparse(url).netloc or url).replace("[", "(").replace("]", ")").strip()[:80]
+        links.append(f"[{name}]({url})")
+    if not links:
+        return text
+    return f"{text.rstrip()}\n\n**Sources:** " + " · ".join(links[:limit])
 
 
 def tool_call_ids(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:

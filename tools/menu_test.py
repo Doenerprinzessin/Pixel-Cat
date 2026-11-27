@@ -5,6 +5,8 @@ sections that fold open, one at a time), that a click on a game or action closes
 and does it, that a click on a setting toggles it and keeps the menu open with the new
 state, the Cat Pass locks (games, skins, hats), the first-time game explanation, and
 keyboard use.  No game is started on screen (that's games_ui_test.py).
+Also Settings -> Name... (the cat's name in the chat, the menu, the tray and the AI's prompt)
+and the chat window's edges and fullscreen (the chat is never shown either).
 Doesn't touch real settings ("Start with Windows" is only checked, not toggled).
 Saves build/preview/menu_closed.png, menu_open.png, menu_cosmetics.png.
 Usage:  python tools/menu_test.py
@@ -32,6 +34,152 @@ results: list[tuple[str, bool, str]] = []
 def check(name: str, ok: bool, info: str = "") -> None:
     results.append((name, ok, info))
     print(("PASS " if ok else "FAIL ") + name + (f"  ({info})" if info else ""), flush=True)
+
+
+def name_and_chat_checks(pet, m, row) -> None:  # type: ignore[no-untyped-def]  # noqa: C901
+    """Settings -> Name... and the chat's size / fullscreen (nothing is shown on screen)."""
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    from pixelcat import naming, persistence
+    from pixelcat.llm.prompt import build_system_prompt
+    from pixelcat.sprites import pixelfont
+    from pixelcat.ui import theme
+    from pixelcat.ui.chat import ChatWindow
+
+    chat = pet._ensure_chat()
+    dialogs: list = []
+    pet._show_amount_dialog = dialogs.append                  # type: ignore[method-assign]   (not shown)
+    m.close = lambda: None                                     # type: ignore[method-assign]
+    m.expanded = {"settings"}
+    m.items = pet._menu_items()
+    m._layout()
+    m._activate(row("set_name"))
+    dlg = dialogs[-1] if dialogs else None
+    check("Settings -> Name... asks for the name", dlg is not None and dlg.field.text() == "")
+    for bad in ("<b>Mochi</b>", "--- ..."):
+        dlg.field.setText(bad)
+        dlg._save()
+        check(f"a name like {bad!r} is refused with a reason (the old name stays)",
+              naming.custom() == "" and dlg.status.text() != "" and pet.saved.cat_name == "", dlg.status.text())
+    check("at most 20 characters (the field stops there, too)", naming.check("A" * 21)[1] != ""
+          and dlg.field.maxLength() == 20 and naming.check("Müsli Ü")[0] == "Müsli Ü")
+    dlg.field.setText("  Mochi  ")
+    dlg._save()
+    m.items = pet._menu_items()
+    item = next(c for it in m.items for c in it.children if c.key == "set_name")
+    tray = {a.text() for a in pet.tray.menu.actions()}
+    check("'Mochi': saved, and the menu title, the Name item and the tray say so",
+          pet.saved.cat_name == "Mochi" and m.title == "MOCHI" and item.note == "MOCHI"
+          and {"Find Mochi", "Quit Mochi"} <= tray, f"{m.title} {item.note} {sorted(tray)}")
+    chat._flush()
+    shown = chat.view.toPlainText()
+    check("the chat: 'MOCHI CHAT' on top, 'Mochi' above its messages, 'Talk to Mochi…'",
+          chat._title_text() == "MOCHI CHAT" and "🐱 Mochi" in shown and "🐱 cat" not in shown
+          and chat.input.placeholderText().startswith("Talk to Mochi…"), f"{chat._title_text()!r} {shown[:40]!r}")
+    check("the AI is told its name (and is 'Pixel' without one)",
+          build_system_prompt([], naming.ai()).startswith("You are Mochi, a tiny")
+          and build_system_prompt([]).startswith("You are Pixel, a tiny"))
+    check("a renamed cat gets a fresh Copilot session with the next message", pet._copilot_stale is True)
+    pet._copilot_stale = False
+    check("the name stays on this PC: not part of an exported progress file",
+          "cat_name" not in persistence.progress_of(pet.saved))
+    st = persistence._from_dict({"cat_name": 5, "chat_size": "big", "chat_full": "yes"})
+    check("a damaged save gives no name, the usual chat size and no fullscreen",
+          st.cat_name == "" and st.chat_size == [] and st.chat_full is False)
+    check("the pixel font draws accented letters as the plain letter (a cat called Müsli)",
+          pixelfont.glyph("ü") == pixelfont.glyph("U") and pixelfont.glyph("é") == pixelfont.glyph("E"))
+    u = chat.u
+    for auto in (False, True):
+        chat.auto_mode = auto
+        pet.set_cat_name("Sir Fluffington III")
+        title = chat._title_text()
+        room = chat._auto_rect().x() - 17 * u - ((theme.text_size("AUTO", u)[0] + 2 * u) if auto else 0)
+        check(f"a long name fits the title bar ({'auto mode' if auto else 'normal'}): {title!r}",
+              theme.text_size(title, u)[0] <= room and title.startswith("SIR"), f"{theme.text_size(title, u)[0]} <= {room}")
+    chat.auto_mode = False
+    pet.set_cat_name("")
+    tray = {a.text() for a in pet.tray.menu.actions()}
+    chat._flush()
+    check("an empty name: back to Pixel Cat everywhere", m.title == "PIXEL CAT" and chat._title_text() == "MEOW CHAT"
+          and {"Find my cat", "Quit Pixel Cat"} <= tray and "🐱 cat" in chat.view.toPlainText()
+          and pet.saved.cat_name == "")
+
+    # ---- the chat's edges and fullscreen (the window is never shown; its geometry still works)
+    chat.apply_scale(2)
+    area = chat._screen_area(QPoint(200, 200))
+    chat.setGeometry(area.left() + 100, area.top() + 100, *chat._want_size())
+    check("the chat starts at its usual size (175 x 225 art pixels)", (chat.width(), chat.height()) == (350, 450),
+          f"{chat.width()}x{chat.height()}")
+
+    def drag(side: str, local: QPoint, dx: int, dy: int) -> None:
+        g = chat._grips[side]
+        start = g.mapToGlobal(local)
+        btn, none = Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton
+        mods = Qt.KeyboardModifier.NoModifier
+        g.mousePressEvent(QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(local), QPointF(start), btn, btn, mods))
+        for i in (1, 2):
+            to = QPointF(start.x() + dx * i / 2, start.y() + dy * i / 2)
+            g.mouseMoveEvent(QMouseEvent(QEvent.Type.MouseMove, QPointF(local), to, none, btn, mods))
+        g.mouseReleaseEvent(QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(local), QPointF(start.x() + dx,
+                                        start.y() + dy), btn, none, mods))
+
+    x0 = chat.x()
+    drag("r", QPoint(2, 200), 100, 0)
+    check("dragging the right edge makes it wider (saved in art pixels)", chat.width() == 450 and chat.x() == x0
+          and pet.saved.chat_size == [225.0, 225.0], f"{chat.width()} {pet.saved.chat_size}")
+    drag("l", QPoint(2, chat.height() - 4), -40, 30)
+    check("near a corner both ways: the bottom-left corner", (chat.x(), chat.width(), chat.height()) ==
+          (x0 - 40, 490, 480), f"{chat.x() - x0} {chat.width()}x{chat.height()}")
+    g = chat._grips["r"]
+    g.mouseMoveEvent(QMouseEvent(QEvent.Type.MouseMove, QPointF(2, 3), g.mapToGlobal(QPointF(2, 3)),
+                                 Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier))
+    check("the edges show resize arrows (diagonal at a corner)", g.cursor().shape() == Qt.CursorShape.SizeBDiagCursor
+          and chat._grips["b"].cursor().shape() == Qt.CursorShape.SizeVerCursor and chat.cursor().shape() ==
+          Qt.CursorShape.ArrowCursor)
+    drag("b", QPoint(200, 2), 0, -2000)
+    drag("r", QPoint(2, 200), -2000, 0)
+    check("never smaller than 150 x 160 art pixels", (chat.width(), chat.height()) ==
+          (max(300, chat.minimumWidth()), max(320, chat.minimumHeight())), f"{chat.width()}x{chat.height()}")
+    drag("r", QPoint(2, 200), 60, 0)
+    size = chat.size_u
+    chat.apply_scale(3)
+    check("its size follows the scale (another DPI, Settings -> Size)", (chat.width(), chat.height()) ==
+          chat._want_size() and abs(chat.width() - min(round(size[0] * 3), chat._screen_area().width())) <= 1,
+          f"{chat.width()}x{chat.height()} for {size}")
+    chat.apply_scale(2)
+    before = chat.geometry()
+    chat.mousePressEvent(QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(chat._full_rect().center()),
+                                     QPointF(chat.mapToGlobal(chat._full_rect().center())), Qt.MouseButton.LeftButton,
+                                     Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+    full_area = chat._screen_area()
+    check("the fullscreen button fills the screen's work area (the taskbar stays visible; saved)",
+          chat.is_full and chat.geometry() == full_area and pet.saved.chat_full is True
+          and not any(gr.isVisibleTo(chat) for gr in chat._grips.values()), f"{chat.geometry()} vs {full_area}")
+    chat.mousePressEvent(QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(60, 8), QPointF(chat.mapToGlobal(
+        QPoint(60, 8))), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+    check("fullscreen can't be dragged around", chat._drag is None)
+    chat.mouseDoubleClickEvent(QMouseEvent(QEvent.Type.MouseButtonDblClick, QPointF(60, 8), QPointF(chat.mapToGlobal(
+        QPoint(60, 8))), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+    check("a double click on the title goes back: same size and place as before", not chat.is_full
+          and chat.geometry() == before and pet.saved.chat_full is False and all(gr.isVisibleTo(chat) for gr in
+                                                                                chat._grips.values()),
+          f"{chat.geometry()} vs {before}")
+    chat.mouseDoubleClickEvent(QMouseEvent(QEvent.Type.MouseButtonDblClick, QPointF(60, 8), QPointF(chat.mapToGlobal(
+        QPoint(60, 8))), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+    check("...and a double click on the title goes fullscreen", chat.is_full)
+    chat.set_fullscreen(False)
+    other = ChatWindow(pet.sprites)
+    other.set_layout([200, 250], False)
+    odd = ChatWindow(pet.sprites)
+    odd.set_layout("nonsense", False)
+    small = ChatWindow(pet.sprites)
+    small.set_layout([10, 10], True)
+    check("a saved size opens like that; nonsense gives the usual size; fullscreen is remembered",
+          (other.width(), other.height()) == (400, 500) and (odd.width(), odd.height()) == (350, 450)
+          and small.size_u == ChatWindow.MIN_U and small.is_full)
+    for w in (other, odd, small):
+        w.deleteLater()
 
 
 def main() -> int:
@@ -83,17 +231,17 @@ def main() -> int:
           and cos[2].children[0].key == "hat:" and len(cos[2].children) == 11 and len(hat_rows) == 115
           and not any(not h.locked for h in hat_rows) and cos[2].children[1].note == "0/10",
           f"{len(cos[2].children) - 1} groups, {len(hat_rows)} hats, {cos[2].children[1].note}")
-    check("Settings: Style, Accent color, Size, Font, AI model, Your progress, then the on/off settings",
-          [c.key for c in sets] == ["set_style", "set_accent", "set_size", "set_font", "set_model", "progress",
-                                    "quiet", "autostart", "automode", "preload_ai", "explore"],
+    check("Settings: Name, Style, Accent color, Size, Font, AI model, Your progress, then the on/off settings",
+          [c.key for c in sets] == ["set_name", "set_style", "set_accent", "set_size", "set_font", "set_model",
+                                    "progress", "quiet", "autostart", "automode", "preload_ai", "explore"],
           str([c.label for c in sets]))
-    styles = sets[0].children
+    styles = sets[1].children
     check("10 styles to choose from, the current one marked", len(styles) == 10
           and sum(1 for c in styles if c.checked) == 1 and styles[0].label == "Cat Chat", str([c.label for c in styles]))
-    local = [c for c in sets[4].children if c.key != "ext"]
+    local = [c for c in sets[5].children if c.key != "ext"]
     check("AI models from tiny to huge, with sizes and which are downloaded - then External AI models",
           [c.label for c in local][0] == "Tiny 0.8B" and [c.label for c in local][-1] == "Huge 122B"
-          and any("READY" in c.note for c in local) and sets[4].children[-1].label == "External AI models",
+          and any("READY" in c.note for c in local) and sets[5].children[-1].label == "External AI models",
           str([c.note for c in local]))
     render("menu_closed.png")
     check("the sections start folded: 6 rows", len(m._rows) == 6)
@@ -339,6 +487,7 @@ def main() -> int:
 
     check("'Start with Windows' shows the real setting (not changed by this test)",
           next(c for c in sets if c.key == "autostart").checked is system.autostart_enabled())
+    name_and_chat_checks(pet, m, row)
     failed = [r for r in results if not r[1]]
     print(f"\n{len(results) - len(failed)}/{len(results)} checks passed", flush=True)
     return 0 if not failed else 1

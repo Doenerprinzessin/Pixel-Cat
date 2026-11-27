@@ -3,14 +3,16 @@
 While a screenshot is taken, the cat's own windows (the cat, its chat, menus)
 are marked "exclude from capture", so the model sees the apps underneath.  The
 mark is removed right after - the user's own screenshots still show the cat.
-Images never leave the PC unless the user points ``ollama_url`` elsewhere.
+Images go to the chat's model (the local one, or the online one the user picked).
 """
 from __future__ import annotations
 
 import base64
 import ctypes
 import time
+from contextlib import contextmanager
 from ctypes import wintypes
+from typing import Iterator
 
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRect, Qt
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
@@ -71,11 +73,18 @@ def own_windows(pid: int) -> list[int]:
 
 def grab_without(rect: tuple[int, int, int, int], pid: int) -> QImage:
     """Like grab(), but with process ``pid``'s windows (the cat) left out."""
+    with excluding(pid):
+        return grab(rect)
+
+
+@contextmanager
+def excluding(pid: int) -> Iterator[None]:
+    """While inside: process ``pid``'s windows (the cat, its chat) don't show up in grab()."""
     hidden = [h for h in own_windows(pid) if win32.user32.SetWindowDisplayAffinity(h, WDA_EXCLUDEFROMCAPTURE)]
     try:
         if hidden:
             time.sleep(0.12)  # let the compositor drop them from the next frame
-        return grab(rect)
+        yield
     finally:
         for h in hidden:
             win32.user32.SetWindowDisplayAffinity(h, WDA_NONE)

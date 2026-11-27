@@ -1,4 +1,5 @@
-"""Cute pixel-styled chat window (draggable, closable, scrolling history).
+"""Cute pixel-styled chat window (draggable, resizable at its edges, fullscreen, closable,
+scrolling history).
 
 Networking happens elsewhere (worker thread); this widget only renders text,
 collects input and shows confirmation cards for tool calls that change things.
@@ -10,12 +11,13 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
-from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import (QCloseEvent, QColor, QKeyEvent, QKeySequence, QMouseEvent, QPainter, QPaintEvent,
-                           QShortcut, QTextCursor)
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import (QCloseEvent, QColor, QGuiApplication, QKeyEvent, QKeySequence, QMouseEvent, QPainter,
+                           QPaintEvent, QShortcut, QTextCursor)
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextBrowser,
                                QVBoxLayout, QWidget)
 
+from .. import naming
 from ..desktop import win32
 from ..sprites.library import SpriteLibrary, render_text
 from . import theme
@@ -58,14 +60,51 @@ def md_to_html(text: str, small_px: int = 11) -> str:
 
 def _inline(t: str) -> str:
     t = html.escape(t)
-    bg = theme.current().inline_code
-    t = re.sub(r"`([^`\n]+)`", rf'<code style="background:{bg};font-family:Consolas,monospace">\1</code>', t)
+    st = theme.current()
+    t = re.sub(r"`([^`\n]+)`", rf'<code style="background:{st.inline_code};font-family:Consolas,monospace">\1</code>', t)
     t = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", t)
+    t = re.sub(r"\[([^\]\n]{1,200})\]\((https?://[^\s()<>]+)\)",          # [title](https://...): a source
+               rf'<a href="\2" style="color:{st.accent}">\1</a>', t)
     t = re.sub(r"(?m)^\s*[-*] ", "&nbsp;• ", t)
     return t.strip("\n").replace("\n", "<br>")
 
 
 GREETING = "Mrrrow~ hi hooman! (=^･ω･^=) Ask me anything, or tell me to do a trick! ✨"
+
+_CURSORS = {"l": Qt.CursorShape.SizeHorCursor, "r": Qt.CursorShape.SizeHorCursor,
+            "t": Qt.CursorShape.SizeVerCursor, "b": Qt.CursorShape.SizeVerCursor,
+            "tl": Qt.CursorShape.SizeFDiagCursor, "br": Qt.CursorShape.SizeFDiagCursor,
+            "tr": Qt.CursorShape.SizeBDiagCursor, "bl": Qt.CursorShape.SizeBDiagCursor}
+
+
+class _Grip(QWidget):
+    """An invisible strip along one edge of the chat: drag it to resize the window (near a
+    corner, both ways).  Its own cursor, so the buttons inside never get a resize arrow."""
+
+    def __init__(self, win: "ChatWindow", side: str) -> None:
+        super().__init__(win)
+        self.win, self.side = win, side
+        self.setMouseTracking(True)
+        self.setCursor(_CURSORS[side])
+        self._start: tuple[str, QPoint, QRect] | None = None
+
+    def _edges(self, e: QMouseEvent) -> str:
+        return self.win._edges_at(self.mapTo(self.win, e.position().toPoint()), self.side)
+
+    def mousePressEvent(self, e: QMouseEvent) -> None:
+        if e.button() == Qt.MouseButton.LeftButton and not self.win.is_full:
+            self._start = (self._edges(e), e.globalPosition().toPoint(), self.win.geometry())
+
+    def mouseMoveEvent(self, e: QMouseEvent) -> None:
+        if self._start is None:
+            self.setCursor(_CURSORS[self._edges(e)])
+        else:
+            self.win._resize_by(*self._start, e.globalPosition().toPoint())
+
+    def mouseReleaseEvent(self, _e: QMouseEvent) -> None:
+        if self._start is not None:
+            self._start = None
+            self.win.layout_changed.emit()
 
 
 class ChatWindow(QWidget):
@@ -75,6 +114,10 @@ class ChatWindow(QWidget):
     new_chat_requested = Signal()
     auto_toggled = Signal()
     watch_cancel_requested = Signal(int)
+    layout_changed = Signal()               # the user resized it or switched fullscreen (to be saved)
+
+    SIZE_U = (175.0, 225.0)                 # the usual size, in art pixels
+    MIN_U = (150.0, 160.0)
 
     def __init__(self, sprites: SpriteLibrary) -> None:
         super().__init__(None)
@@ -94,6 +137,10 @@ class ChatWindow(QWidget):
         self.auto_mode = False
         self.msgs: list[Msg] = [Msg("cat", GREETING)]
         self._drag: QPoint | None = None
+        self._size_u: tuple[float, float] = self.SIZE_U   # the user's size (in art pixels: follows DPI, Size)
+        self._full = False                                # fills its screen's work area (frame kept)
+        self._normal_pos: QPoint | None = None            # where it was before fullscreen
+        self._grips: dict[str, _Grip] = {}
         self._busy = False
         self._confirm_cb: Callable[[bool], None] | None = None
         self._dirty = False
@@ -106,6 +153,7 @@ class ChatWindow(QWidget):
         self.view = QTextBrowser()
         self.view.setOpenExternalLinks(False)
         self.view.setOpenLinks(False)
+        self.view.anchorClicked.connect(self._open_link)
         self.view.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.confirm = QFrame()
         self.confirm_label = QLabel()
@@ -155,7 +203,7 @@ class ChatWindow(QWidget):
         self.model_bar.setOpenExternalLinks(True)
         self.model_bar.hide()
         self.input = QLineEdit()
-        self.input.setPlaceholderText("Talk to the cat… (Ctrl+N: new chat)")
+        self.input.setPlaceholderText(f"Talk to {naming.talk_to()}… (Ctrl+N: new chat)")
         self.input.returnPressed.connect(self._send)
         self.send_btn = QPushButton("SEND")
         self.send_btn.clicked.connect(self._send)
@@ -175,8 +223,10 @@ class ChatWindow(QWidget):
         self.lay.addWidget(self.confirm)
         self.lay.addWidget(self.choice)
         self.lay.addLayout(row)
+        self._grips = {side: _Grip(self, side) for side in "tblr"}     # (on top of everything else)
         self.apply_scale(2)
         QShortcut(QKeySequence("Ctrl+N"), self, activated=self.new_chat_requested.emit)
+        QShortcut(QKeySequence("F11"), self, activated=self.toggle_fullscreen)
         self.setToolTip("")
         self._flush()
 
@@ -201,8 +251,12 @@ class ChatWindow(QWidget):
             self.set_watches(self._watch_items)
         self.lay.setContentsMargins(5 * u, (7 + 8) * u, 6 * u, 6 * u)
         self.lay.setSpacing(3 * u)
-        self.resize(int(175 * u), int(225 * u))
+        if self._full:
+            self.setGeometry(self._screen_area())
+        else:
+            self.resize(*self._want_size())
         self._face_u = None
+        self._place_grips()
         self._reset_view()     # lay the text out again with the new font metrics
 
     def _check_dpi(self) -> None:
@@ -215,8 +269,12 @@ class ChatWindow(QWidget):
             self.apply_scale(theme.unit_for_dpi(dpi), dpi)
             if self._drag is not None and old_u:
                 self._drag = QPoint(int(self._drag.x() * self.u / old_u), int(self._drag.y() * self.u / old_u))
-        elif (self.width(), self.height()) != (int(175 * self.u), int(225 * self.u)):
-            self.resize(int(175 * self.u), int(225 * self.u))   # undo a stretch from the DPI change
+        elif self._full:
+            area = self._screen_area()
+            if self.geometry() != area:
+                self.setGeometry(area)                          # (the taskbar or the resolution changed)
+        elif (self.width(), self.height()) != self._want_size():
+            self.resize(*self._want_size())                     # undo a stretch from the DPI change
 
     def moveEvent(self, e) -> None:  # type: ignore[no-untyped-def]
         super().moveEvent(e)
@@ -224,16 +282,123 @@ class ChatWindow(QWidget):
 
     def resizeEvent(self, e) -> None:  # type: ignore[no-untyped-def]
         super().resizeEvent(e)
+        self._place_grips()
         self._dpi_check.start()
+
+    # ------------------------------------------------------------- size / fullscreen
+    @property
+    def is_full(self) -> bool:
+        return self._full
+
+    @property
+    def size_u(self) -> tuple[float, float]:
+        """The size the user gave it, in art pixels."""
+        return self._size_u
+
+    def set_layout(self, size_u: object, full: bool) -> None:
+        """The saved size (art pixels) and fullscreen, before the chat is shown."""
+        try:
+            w, h = (float(v) for v in size_u)  # type: ignore[attr-defined]
+        except (TypeError, ValueError):
+            w, h = self.SIZE_U
+        if not (w == w and h == h) or max(w, h) > 10_000:     # (NaN, nonsense)
+            w, h = self.SIZE_U
+        self._size_u = (max(self.MIN_U[0], w), max(self.MIN_U[1], h))
+        self._full = bool(full)
+        if not self._full:
+            self.resize(*self._want_size())
+
+    def _screen_area(self, at: QPoint | None = None) -> QRect:
+        """The work area (without the taskbar) of the screen the chat is on."""
+        sc = (QGuiApplication.screenAt(at if at is not None else self.geometry().center()) or self.screen()
+              or QGuiApplication.primaryScreen())
+        return sc.availableGeometry() if sc is not None else QRect(0, 0, 1920, 1080)
+
+    def _want_size(self, area: QRect | None = None) -> tuple[int, int]:
+        """The user's size in device pixels (never bigger than the screen)."""
+        area = area or self._screen_area()
+        return (min(int(round(self._size_u[0] * self.u)), area.width()),
+                min(int(round(self._size_u[1] * self.u)), area.height()))
+
+    def toggle_fullscreen(self) -> None:
+        self.set_fullscreen(not self._full)
+
+    def set_fullscreen(self, on: bool) -> None:
+        """Fill the screen's work area (the frame stays, the taskbar and the cat stay visible) - or
+        go back to the size and place it had."""
+        if on == self._full:
+            return
+        if on:
+            self._normal_pos = self.pos()
+            self._full = True
+            self._drag = None
+            self.setGeometry(self._screen_area())
+        else:
+            area = self._screen_area()
+            self._full = False
+            w, h = self._want_size(area)
+            pos = self._normal_pos
+            if pos is None or not area.contains(QRect(pos, QSize(w, h)).center()):
+                pos = QPoint(area.center().x() - w // 2, area.center().y() - h // 2)
+            x = max(area.left(), min(pos.x(), area.left() + area.width() - w))
+            y = max(area.top(), min(pos.y(), area.top() + area.height() - h))
+            self.setGeometry(x, y, w, h)
+        self._place_grips()
+        self.update()
+        self.layout_changed.emit()
+
+    def _place_grips(self) -> None:
+        if not self._grips:
+            return
+        u = self.u
+        m, top = max(4, 4 * u), max(3, 3 * u)       # (inside the layout's margins: no button is covered)
+        w, h = self.width(), self.height()
+        where = {"t": (0, 0, w, top), "b": (0, h - m, w, m), "l": (0, 0, m, h), "r": (w - m, 0, m, h)}
+        for side, g in self._grips.items():
+            g.setGeometry(*where[side])
+            g.setVisible(not self._full)
+            g.raise_()
+
+    def _edges_at(self, pos: QPoint, side: str) -> str:
+        """Which edges a grip moves from ``pos`` (window coordinates): near a corner, two."""
+        c = 12 * self.u
+        if side in ("t", "b"):
+            return side + ("l" if pos.x() < c else "r" if pos.x() >= self.width() - c else "")
+        return ("t" if pos.y() < c else "b" if pos.y() >= self.height() - c else "") + side
+
+    def _resize_by(self, edges: str, start: QPoint, geo: QRect, now: QPoint) -> None:
+        """A grip is dragged from ``start`` (the window was ``geo``) to ``now``."""
+        u = self.u
+        area = self._screen_area(now)
+        dx, dy = now.x() - start.x(), now.y() - start.y()
+        min_w = max(int(self.MIN_U[0] * u), self.minimumWidth())
+        min_h = max(int(self.MIN_U[1] * u), self.minimumHeight())
+        left, top = geo.x(), geo.y()
+        right, bottom = left + geo.width(), top + geo.height()
+        if "l" in edges:
+            left = max(min(left + dx, right - min_w), right - area.width())
+        if "r" in edges:
+            right = min(max(right + dx, left + min_w), left + area.width())
+        if "t" in edges:                           # (the title bar never goes above the screen)
+            top = max(min(top + dy, bottom - min_h), bottom - area.height(), min(area.top(), geo.y()))
+        if "b" in edges:
+            bottom = min(max(bottom + dy, top + min_h), top + area.height())
+        self._size_u = ((right - left) / u, (bottom - top) / u)
+        self.setGeometry(left, top, right - left, bottom - top)
 
     def show_near(self, avoid: Rect, work: Rect, u: int, activate: bool = True) -> None:
         """``activate=False``: appear without taking the keyboard from the app the user is typing in."""
         if u != self.u:
             self.apply_scale(u)
         if not self.isVisible():
-            x, y = place_near(avoid, (self.width(), self.height()), work, gap=6 * u)
-            q = phys_to_qt(x, y)
-            self.move(q)
+            area = QRect(phys_to_qt(work[0], work[1]), QSize(work[2] - work[0], work[3] - work[1]))
+            if self._full:
+                self.setGeometry(area)              # (on the cat's screen)
+            else:
+                w, h = self._want_size(area)
+                self.resize(w, h)
+                x, y = place_near(avoid, (w, h), work, gap=6 * u)
+                self.move(phys_to_qt(x, y))
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, not activate)
         self.show()
         self._dpi_check.start()
@@ -251,27 +416,52 @@ class ChatWindow(QWidget):
         if getattr(self, "_face_u", None) != (u, self.sprites.skin.key):
             self._face = self.sprites.face_icon(9 * u)
             self._face_u = (u, self.sprites.skin.key)
-        theme.draw_title_bar(p, self.width(), u, "MEOW CHAT", self._face)
+        theme.draw_title_bar(p, self.width(), u, self._title_text(), self._face)
         if self.auto_mode:
             auto = theme.text_pixmap("AUTO", u, QColor(theme.current().on_accent))
             p.drawPixmap(self._auto_rect().x() - auto.width() - 2 * u, (bar_h - auto.height()) // 2 + u // 2, auto)
         p.drawPixmap(self._auto_rect().topLeft(), self.sprites.icon("bolt_on" if self.auto_mode else "bolt_off", u))
         p.drawPixmap(self._new_rect().topLeft(), self.sprites.icon("plus", u))
+        p.drawPixmap(self._full_rect().topLeft(), self.sprites.icon("unfull" if self._full else "full", u))
         p.drawPixmap(self._close_rect().topLeft(), self.sprites.icon("close", u))
         p.end()
 
+    def _title_text(self) -> str:
+        """ "MEOW CHAT" - or the cat's name: as much of it as fits next to the buttons."""
+        u = self.u
+        name = naming.custom().upper()
+        room = self._auto_rect().x() - 2 * u - 15 * u
+        if self.auto_mode:
+            room -= theme.text_size("AUTO", u)[0] + 2 * u
+        for text in ([f"{name} CHAT", name] if name else ["MEOW CHAT", "CHAT"]):
+            if theme.text_size(text, u)[0] <= room:
+                return text
+        t = name or "CHAT"
+        while len(t) > 1 and theme.text_size(t + "..", u)[0] > room:
+            t = t[:-1]
+        return t.rstrip() + ".."
+
     def _close_rect(self):  # type: ignore[no-untyped-def]
-        from PySide6.QtCore import QRect
         u = self.u
         return QRect(self.width() - 15 * u, 3 * u, 9 * u, 9 * u)
 
-    def _auto_rect(self):  # type: ignore[no-untyped-def]
-        from PySide6.QtCore import QRect
+    def _full_rect(self) -> QRect:
         u = self.u
-        return QRect(self.width() - 41 * u, 3 * u, 9 * u, 9 * u)
+        return QRect(self.width() - 28 * u, 3 * u, 9 * u, 9 * u)
+
+    def _auto_rect(self):  # type: ignore[no-untyped-def]
+        u = self.u
+        return QRect(self.width() - 54 * u, 3 * u, 9 * u, 9 * u)
 
     def set_auto_mode(self, on: bool) -> None:
         self.auto_mode = on
+        self.update()
+
+    def rename(self) -> None:
+        """The cat got another name (Settings -> Name...): the title, the input, its messages."""
+        self.input.setPlaceholderText(f"Talk to {naming.talk_to()}… (Ctrl+N: new chat)")
+        self._shown = []                      # every message again (the name above the cat's ones)
+        self._mark()
         self.update()
 
     def restyle(self) -> None:
@@ -329,14 +519,16 @@ class ChatWindow(QWidget):
                 pass
 
     def _new_rect(self):  # type: ignore[no-untyped-def]
-        from PySide6.QtCore import QRect
         u = self.u
-        return QRect(self.width() - 28 * u, 3 * u, 9 * u, 9 * u)
+        return QRect(self.width() - 41 * u, 3 * u, 9 * u, 9 * u)
 
     def mousePressEvent(self, e: QMouseEvent) -> None:
         pos = e.position().toPoint()
         if self._close_rect().contains(pos):
             self.hide()
+            return
+        if self._full_rect().contains(pos):
+            self.toggle_fullscreen()
             return
         if self._new_rect().contains(pos):
             self.new_chat_requested.emit()
@@ -344,8 +536,16 @@ class ChatWindow(QWidget):
         if self._auto_rect().contains(pos):
             self.auto_toggled.emit()
             return
-        if pos.y() <= 14 * self.u:
+        if pos.y() <= 14 * self.u and not self._full:
             self._drag = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def mouseDoubleClickEvent(self, e: QMouseEvent) -> None:
+        """A double click on the title bar: fullscreen and back (like a window's maximize)."""
+        pos = e.position().toPoint()
+        buttons = (self._close_rect(), self._full_rect(), self._new_rect(), self._auto_rect())
+        if pos.y() <= 14 * self.u and not any(r.contains(pos) for r in buttons):
+            self._drag = None
+            self.toggle_fullscreen()
 
     def mouseMoveEvent(self, e: QMouseEvent) -> None:
         if self._drag is not None:
@@ -429,6 +629,14 @@ class ChatWindow(QWidget):
         if not busy and self.isVisible():
             self.input.setFocus()
 
+    @staticmethod
+    def _open_link(url: QUrl) -> None:
+        """A link in a message (e.g. a source the model used): opened in the browser - only web pages."""
+        from PySide6.QtGui import QDesktopServices
+
+        if url.scheme() in ("http", "https"):
+            QDesktopServices.openUrl(url)
+
     def ask_confirm(self, text: str, cb: Callable[[str], None], allow_always: bool = False) -> None:
         """Show a Yes/No card (plus ALWAYS for low-risk actions). ``cb`` gets
         "yes", "always" or "no"."""
@@ -494,7 +702,8 @@ class ChatWindow(QWidget):
         if role == "cat":
             body = md_to_html(text, px) if text else "<i>mrrr… thinking 💭</i>"
             return (f'<table width="100%" cellspacing="0" cellpadding="6"><tr>'
-                    f'<td bgcolor="{st.cat_bubble}"><b>🐱 cat</b><br>{body}</td><td width="10%"></td></tr></table>')
+                    f'<td bgcolor="{st.cat_bubble}"><b>🐱 {html.escape(naming.label())}</b><br>{body}</td>'
+                    f'<td width="10%"></td></tr></table>')
         if role == "error":
             return (f'<table width="100%" cellspacing="0" cellpadding="6"><tr>'
                     f'<td bgcolor="{st.error_bubble}">{md_to_html(text, px)}</td></tr></table>')

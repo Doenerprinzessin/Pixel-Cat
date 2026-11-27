@@ -17,7 +17,7 @@ from PySide6.QtCore import QObject, QPoint, QRect, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
-from . import paths, persistence, progress
+from . import naming, paths, persistence, progress
 from .desktop import system, win32
 from .desktop.monitors import Monitor, enumerate_monitors, monitor_at, primary
 from .desktop.windows import enumerate_windows, foreground_window, is_fullscreen_window
@@ -33,7 +33,7 @@ from .llm.agent import ToolOutput
 from .llm.model_status import ModelStatus
 from .llm.ollama_client import ChatWorker, friendly_error, parse_text_tool_calls, strip_tool_markup
 from .llm.prompt import build_system_prompt
-from .llm.tools import AppHooks, ToolBox, ToolError, ToolSpec
+from .llm.tools import SCREEN_EYES, AppHooks, ToolBox, ToolError, ToolSpec
 from .desktop import notifications
 from .llm.watch import Watch, WatchManager
 from .logsetup import RateLimitedLogger
@@ -154,6 +154,7 @@ class PixelCatApp(QObject):
         self.ball_win = BallOverlay(self.game, self.sprites, self.t)
         theme.configure(saved.ui_style, saved.ui_accent, saved.ui_size, saved.ui_font)   # the user's look
         theme.on_change(self._on_style_changed)
+        naming.set_name(saved.cat_name)                                                  # Settings -> Name...
         # the minigames: their things (mice, shelves, the laser dot...) are small windows of their own
         self.mini: MiniGame | None = None
         self._real_wins: list[Any] = []                  # the last window list (props come on top)
@@ -171,6 +172,7 @@ class PixelCatApp(QObject):
         self.host.ended = self._mini_ended
         self.hud = self.host.hud
         self.menu = PixelMenu(self.sprites)
+        self.menu.title = naming.title().upper()
         self.model_menu = PixelMenu(self.sprites)        # the chat's model button
         self.model_menu.title = "MODEL FOR THIS CHAT"
         self.model_menu.triggered.connect(self._on_model_menu)
@@ -186,6 +188,8 @@ class PixelCatApp(QObject):
         self._gpt_wait_pop: Any = None
         self._key_dialog: Any = None
         self._copilot: Any = None                        # the Copilot runtime's session for this chat
+        self._copilot_stale = False                      # the cat was renamed: a fresh session next message
+        self._ctx_reloaded: set[str] = set()
         self._gh_wait_pop: Any = None
         self._cop_pop: Any = None
         self._quota_t = 0.0
@@ -675,6 +679,7 @@ class PixelCatApp(QObject):
         b = self.brain
         games = self._game_items()
         settings = [
+            MenuItem("set_name", "Name...", "paw", note=naming.custom().upper()),
             MenuItem("set_style", "Style", "paint", children=[
                 MenuItem(f"style:{k}", s.name, radio=True, checked=theme.choice("style") == k)
                 for k, s in theme.STYLES.items()]),
@@ -1009,6 +1014,8 @@ class PixelCatApp(QObject):
         kids.append(MenuItem("ext_effort", "Effort", "bolt_on", children=[
             MenuItem(f"ext:effort:{k}", v, radio=True, checked=st.get("effort", "medium") == k)
             for k, v in external.EFFORTS.items()]))
+        kids.append(MenuItem("ext:websearch", "Web search", checked=bool(st.get("web_search", True)),
+                             note="$10 PER 1K SEARCHES"))
         return MenuItem("ext", "External AI models", "plus", children=kids, separator_before=True,
                         note="BEST" if self._advice().online else "")
 
@@ -1119,6 +1126,8 @@ class PixelCatApp(QObject):
         st = self.saved.ext_settings
         if what == "thinking":
             st["thinking"] = not st.get("thinking", True)
+        elif what == "websearch":
+            st["web_search"] = not st.get("web_search", True)
         elif what == "effort" and p in external.EFFORTS:
             st["effort"] = p
         elif what == "limit":
@@ -1167,6 +1176,37 @@ class PixelCatApp(QObject):
         mon = self._cat_monitor()
         dlg.show_near(self.overlay.cat_rect(), mon.work, self.ui_unit(mon))
         self._key_dialog = dlg
+
+    def _ask_name(self) -> None:
+        """Settings -> Name...: the cat's own name (empty: none, as before)."""
+        from .ui.dialogs import NameDialog
+
+        dlg = NameDialog("Your cat's name", "What should I be called? The chat, the menu, the tray and the "
+                         f"notifications show it - up to {naming.MAX_LEN} letters, numbers or spaces. "
+                         f"Leave it empty and I'm just {naming.APP} again.", naming.custom(), naming.MAX_LEN)
+        dlg.submitted.connect(lambda text, d=dlg: self._check_name(text, d))
+        self._show_amount_dialog(dlg)
+
+    def _check_name(self, text: str, dlg: Any) -> None:
+        name, problem = naming.check(text)
+        try:
+            dlg.checked(not problem, problem)
+        except RuntimeError:
+            return                                       # (the dialog was closed meanwhile)
+        if not problem:
+            self.set_cat_name(name)
+
+    def set_cat_name(self, name: str) -> None:
+        """A new name for the cat: everything that shows it follows at once; the AI hears it with the
+        next message (Copilot's session keeps its instructions, so it gets a fresh one then)."""
+        self.saved.cat_name = naming.set_name(name)
+        self.save()
+        self.menu.title = naming.title().upper()
+        self.tray.rename()
+        if self.chat is not None:
+            self.chat.rename()
+        self._copilot_stale = True
+        log.info("the cat's name: %s", self.saved.cat_name or "(none)")
 
     def _ask_limit(self, p: str) -> None:
         """Token limit -> Custom...: any amount up to 100M tokens."""
@@ -1928,11 +1968,49 @@ class PixelCatApp(QObject):
             w = CopilotWorker(mid, self._copilot_chat(), self.history, str(msgs[0].get("content", "")) if msgs else "",
                               tools, think, effort, self.creds, auth, self._ext_info(p, mid))
             w.credits.connect(self._on_copilot_credits)
+            w.permission.connect(self._copilot_permission)
         else:
             from .llm.openai_client import OpenAIWorker
             w = OpenAIWorker(mid, msgs, tools, think, effort, self.creds, auth)
+        w.web = bool(st.get("web_search", True))
         w.used.connect(self._on_ext_used)
+        w.status.connect(self._on_status)
         return w
+
+    def _on_status(self, text: str) -> None:
+        """What an external model does meanwhile ("searching the web"), until its answer streams."""
+        if self._current() and self.chat is not None and not self._raw:
+            self.chat.set_cat_text(text)
+
+    def _copilot_permission(self, url: str, reply: Any) -> None:
+        """Copilot's own web_fetch wants to read a page: asked like the cat's read_web_page tool -
+        a confirmation card, unless reading pages is set to ALWAYS or auto mode is on."""
+        if self.chat is None or not self._task_active:
+            reply(False)
+            return
+        spec = self.toolbox.specs["read_web_page"]
+        approved = self.saved.auto_approved_tools
+        auto = spec.name in approved or spec.group in approved
+        if not auto and self.saved.auto_mode and self._auto_actions < self.cfg.auto_mode_max_actions:
+            self._auto_actions += 1
+            auto = True
+        if auto:
+            self.chat.add("info", f"🌐 Copilot reads {url}" + (" (auto)" if self.saved.auto_mode else " (auto-approved)"))
+            reply(True)
+            return
+        if not self.chat.isVisible():
+            self._show_chat_quietly()
+
+        def answered(ans: str) -> None:
+            if ans == "always":
+                if spec.group not in self.saved.auto_approved_tools:
+                    self.saved.auto_approved_tools.append(spec.group)
+                    self.save()
+                ans = "yes"
+            assert self.chat is not None
+            self.chat.add("info", f"🌐 Copilot reads {url}" if ans == "yes" else f"Okay, Copilot won't read {url}.")
+            reply(ans == "yes")
+        self.chat.ask_confirm(f"let Copilot read the web page {url}?", answered, allow_always=True)
 
     def _on_ext_used(self, provider: str, tokens: int) -> None:
         b = self._budget(provider)
@@ -2094,6 +2172,9 @@ class PixelCatApp(QObject):
                 b.set_paused(not b.paused)
             elif key == "chat":
                 self.open_chat()
+            elif key == "set_name":
+                self.menu.close()
+                self._ask_name()
             elif key == "feed":
                 b.feed()
             elif key == "play":
@@ -2487,6 +2568,8 @@ class PixelCatApp(QObject):
     def _ensure_chat(self) -> ChatWindow:
         if self.chat is None:
             self.chat = ChatWindow(self.sprites)
+            self.chat.set_layout(self.saved.chat_size or ChatWindow.SIZE_U, self.saved.chat_full)
+            self.chat.layout_changed.connect(self._save_chat_layout)
             self.chat.send_requested.connect(self._on_user_message)
             self.chat.stop_requested.connect(self._cancel_chat)
             self.chat.new_chat_requested.connect(self.new_chat)
@@ -2498,6 +2581,15 @@ class PixelCatApp(QObject):
             self._show_model_banner()
             self._update_model_chip()
         return self.chat
+
+    def _save_chat_layout(self) -> None:
+        """The user resized the chat or switched fullscreen: it opens like that next time."""
+        if self.chat is None:
+            return
+        w, h = self.chat.size_u
+        self.saved.chat_size = [round(w, 2), round(h, 2)]
+        self.saved.chat_full = self.chat.is_full
+        self.save()
 
     def _show_chat_quietly(self) -> None:
         """Show the chat without taking the keyboard from the app the user is typing in."""
@@ -2703,6 +2795,9 @@ class PixelCatApp(QObject):
     def _on_user_message(self, text: str) -> None:
         if self._local_command(text):
             return
+        if self._copilot_stale:                          # (between tasks: nothing of it is running)
+            self._copilot_stale = False
+            self._drop_copilot_chat()
         self._resume_after_switch = False
         if self.chat is not None:
             self.chat.drop_choice()                      # (a token-limit question nobody answered)
@@ -2725,6 +2820,7 @@ class PixelCatApp(QObject):
         self._auto_actions = 0
         self._call_sigs = []
         self._fail_streak = 0
+        self._ctx_retries = 0
         self._task_wake = False
         self._task_watched = False
         self._promise_nudged = False
@@ -2845,6 +2941,51 @@ class PixelCatApp(QObject):
             out.append(c)
         return out
 
+    def _ctx_budget(self) -> int:
+        """How many tokens a request may hold: ``num_ctx`` for local models (and Copilot, which
+        keeps its own context); Claude and ChatGPT: the model's own maximum - smaller if the
+        provider said a request was too long."""
+        ext = external.parse(self._effective_model())
+        if not ext or ext[0] not in ("anthropic", "openai"):
+            return self.cfg.num_ctx
+        p, mid = ext
+        info = self._ext_info(p, mid)
+        if p == "anthropic" and info and "context" not in info and p not in self._ctx_reloaded:
+            self._ctx_reloaded.add(p)                    # (a list saved before windows were kept: get it again)
+            self._ext_load_models(p)
+        budget = external.max_input(p, mid, info)
+        learned = (self._ext_p(p).get("ctx_learned") or {}).get(mid)
+        return min(budget, int(learned)) if learned else budget
+
+    def _ctx_shrink(self, p: str, mid: str, detail: str) -> bool:
+        """A request was longer than the model takes: remember a smaller budget for it (from what
+        the provider said, else three quarters of what was sent) and build the context again.
+        False after two tries in one task (the error is shown then)."""
+        if getattr(self, "_ctx_retries", 0) >= 2:
+            return False
+        self._ctx_retries = getattr(self, "_ctx_retries", 0) + 1
+        try:
+            info = json.loads(detail)
+        except ValueError:
+            info = {}
+        sent = max(1, int(getattr(self, "_sent_est", 0) or self._ctx_budget()))
+        limit, actual = info.get("limit"), info.get("actual")
+        if limit and actual:
+            new = sent * limit / actual * 0.9            # (our estimate, scaled by how far over it was)
+        elif limit:
+            new = min(sent * 0.8, limit * 0.85)
+        else:
+            new = sent * 0.75
+        new = int(max(external.MIN_BUDGET, min(new, self._ctx_budget() * 0.9)))
+        self._ext_p(p).setdefault("ctx_learned", {})[mid] = new
+        self.save()
+        self._sent = None                                # (rebuilt, not just extended)
+        log.info("%s %s: the request was too long (about %d tokens) - its budget is now %d", p, mid, sent, new)
+        if self.chat is not None:
+            self.chat.add("info", f"(Our chat got longer than {external.label(f'{p}:{mid}')} takes - I shortened "
+                                  "the older parts.)")
+        return True
+
     def _context(self) -> list[dict[str, Any]]:
         """Messages for the next request.  During a task the previous context is only *extended*
         with the new steps: Ollama then reuses its cache and reads just the new part (about 0.2 s
@@ -2862,7 +3003,7 @@ class PixelCatApp(QObject):
             candidate = sent + new
             fixed = self._tokens([{"content": build_system_prompt(self.toolbox.names())}]) + \
                 len(json.dumps(self.toolbox.schemas())) // 3
-            if self._tokens(candidate) <= (self.cfg.num_ctx - 2000 - fixed) * 0.9:
+            if self._tokens(candidate) <= (self._ctx_budget() - 2000 - fixed) * 0.9:
                 self._sent, self._sent_upto = candidate, len(self.history)
                 self._sent_last = self.history[-1] if self.history else None
                 return candidate
@@ -2875,7 +3016,7 @@ class PixelCatApp(QObject):
         return ctx
 
     def _build_context(self, fill: float = 0.85) -> list[dict[str, Any]]:
-        """Messages for the model, always within its context (``num_ctx``) - if a request is too
+        """Messages for the model, always within its context (``_ctx_budget``) - if a request is too
         long, Ollama silently drops the *oldest* messages, which would be the user's request.
         * Current task: the user's request always; the newest steps in full; older steps of the
           same task shortened to one line; the oldest dropped only if even that doesn't fit.
@@ -2887,7 +3028,7 @@ class PixelCatApp(QObject):
         task = turns[-1]
         fixed = self._tokens([{"content": build_system_prompt(self.toolbox.names())}]) + \
             len(json.dumps(self.toolbox.schemas())) // 3
-        room = self.cfg.num_ctx - 2000 - fixed
+        room = self._ctx_budget() - 2000 - fixed
         head = self._clean(task[0])
         used = self._tokens([head])
         rounds = self._rounds(task[1:])
@@ -2928,10 +3069,13 @@ class PixelCatApp(QObject):
 
     def _request(self) -> None:
         assert self.chat is not None
-        sys_msg = {"role": "system", "content": build_system_prompt(self.toolbox.names() if self.cfg.enable_tools else [])}
+        sys_msg = {"role": "system", "content": build_system_prompt(self.toolbox.names() if self.cfg.enable_tools else [],
+                                                                    naming.ai())}
         msgs = [sys_msg] + self._context()
         ext = external.parse(self._effective_model())
         if ext:
+            if ext[0] in ("anthropic", "openai"):        # (how big this request is, if it turns out too long)
+                self._sent_est = self._tokens(msgs) + len(json.dumps(self.toolbox.schemas())) // 3
             worker = self._ext_worker(ext[0], ext[1], msgs)
             if worker is None:
                 return
@@ -3032,7 +3176,8 @@ class PixelCatApp(QObject):
                 self.chat.add("info", why + " Tell me what to do differently, or say 'continue' 🐾")
                 log.info("task paused: %s", why)
             elif self._tool_round < self.cfg.agent_max_steps:
-                self._tool_round += 1
+                if not all(str(c.get("name", "")) in self._WAITING for c in calls):
+                    self._tool_round += 1                # (a game or quiz: waiting for the next turn is free)
                 self._pending_calls = list(calls)
                 self._had_results = False
                 self.chat.set_busy(True)
@@ -3063,7 +3208,8 @@ class PixelCatApp(QObject):
         log.info("the reply promised to wait/report later without wait_for - reminding the model")
         self._request()
 
-    _REPEATABLE = {"scroll", "wait", "press_keys"}   # doing these several times in a row is normal
+    _REPEATABLE = {"scroll", "wait", "press_keys", "watch_screen", "zoom"}   # doing these several times in a row is normal
+    _WAITING = {"watch_screen", "wait"}              # rounds that only wait don't count as steps
 
     def _stuck(self, calls: list[dict[str, Any]]) -> str:
         """Instead of a fixed step limit: stop when the model keeps repeating itself or keeps failing."""
@@ -3087,6 +3233,9 @@ class PixelCatApp(QObject):
         log.warning("chat failed: %s %s", kind, detail[:200])
         if isinstance(sender, external.ExternalWorker):
             self.chat.end_cat()
+            if kind == "too_long" and self._ctx_shrink(sender.provider, sender.model, detail):
+                self._request()                          # (the same request, shortened to fit)
+                return
             if kind == "limit":
                 try:
                     info = json.loads(detail)
@@ -3127,14 +3276,15 @@ class PixelCatApp(QObject):
         level = args.get("_confirm", spec.confirm)
         approved = self.saved.auto_approved_tools
         auto = level == "soft" and (spec.name in approved or (spec.group and spec.group in approved))
+        counted = spec.group != "desktop" and spec.name not in SCREEN_EYES   # (input and looking: not "actions")
         if self.saved.auto_mode and level != "none":
-            too_many = self._auto_actions >= self.cfg.auto_mode_max_actions and spec.group != "desktop"
+            too_many = self._auto_actions >= self.cfg.auto_mode_max_actions and counted
             big_close = spec.name == "close_app" and len(args.get("_wins", [])) > self.cfg.auto_mode_max_close
             auto = not (too_many or big_close)
         if args.get("_force_confirm"):
             auto = False  # command lines / Run box: always the user's call
         if level == "none" or auto:
-            if level != "none" and spec.group != "desktop":
+            if level != "none" and counted:
                 self._auto_actions += 1
             self._execute(spec, args, auto=auto)
         else:
@@ -3143,7 +3293,7 @@ class PixelCatApp(QObject):
                 text += " (this can run commands, so I always ask)"
             if not self.chat.isVisible():
                 self._show_chat_quietly()
-                self._tray_message("Pixel Cat 🐾", f"May I {text}? Answer in the chat.",
+                self._tray_message(f"{naming.title()} 🐾", f"May I {text}? Answer in the chat.",
                                       QSystemTrayIcon.MessageIcon.Information, 15000)
             self.chat.ask_confirm(text + "?", lambda ans, sp=spec, a=args: self._confirmed(sp, a, ans),
                                   allow_always=level == "soft" and not args.get("_force_confirm"))
@@ -3168,7 +3318,7 @@ class PixelCatApp(QObject):
     def _execute(self, spec: ToolSpec, args: dict[str, Any], auto: bool = False) -> None:
         assert self.chat is not None
         if spec.background:
-            if spec.group == "desktop" or spec.name in ("look_at_screen", "read_window", "open_app"):
+            if spec.group == "desktop" or spec.name in ("look_at_screen", "read_window", "watch_screen", "open_app"):
                 self.esc_watch.start()
             th = ToolThread(lambda sp=spec, a=args: self.toolbox.run(sp, a))
             tid = self._task_id
@@ -3309,7 +3459,7 @@ class PixelCatApp(QObject):
         reply = next((m.text for m in reversed(chat.msgs) if m.role == "cat" and m.text.strip()), "")
         if reply:
             plain = re.sub(r"```.*?```", "[code]", strip_tool_markup(reply), flags=re.S).strip()
-            self._tray_message("Pixel Cat 🐾", plain[:240] + ("…" if len(plain) > 240 else ""),
+            self._tray_message(f"{naming.title()} 🐾", plain[:240] + ("…" if len(plain) > 240 else ""),
                                   QSystemTrayIcon.MessageIcon.Information, 15000)
 
     def _tray_message(self, title: str, text: str, icon: QSystemTrayIcon.MessageIcon, ms: int) -> None:
@@ -3342,7 +3492,7 @@ class PixelCatApp(QObject):
         self.brain.show_bubble("bubble_exclaim", 8.0)
         if not self.brain.paused:
             self.brain.command("happy")
-        self._tray_message("Pixel Cat ⏰", f"Meow! {label}", QSystemTrayIcon.MessageIcon.Information, 8000)
+        self._tray_message(f"{naming.title()} ⏰", f"Meow! {label}", QSystemTrayIcon.MessageIcon.Information, 8000)
         if self.chat is not None:
             self.chat.add("info", f"⏰ Time's up: {label}")
 

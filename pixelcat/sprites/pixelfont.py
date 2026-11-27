@@ -5,6 +5,8 @@ Lowercase letters are rendered with the uppercase glyphs.
 """
 from __future__ import annotations
 
+import unicodedata
+
 _RAW = {
     "A": "0E 11 11 1F 11 11 11", "B": "1E 11 11 1E 11 11 1E", "C": "0E 11 10 10 10 11 0E",
     "D": "1E 11 11 11 11 11 1E", "E": "1F 10 10 1E 10 10 1F", "F": "1F 10 10 1E 10 10 10",
@@ -32,7 +34,10 @@ GLYPH_W, GLYPH_H, ADVANCE = 5, 7, 6
 
 
 def glyph(ch: str) -> list[int]:
-    return GLYPHS.get(ch.upper(), GLYPHS["?"])
+    g = GLYPHS.get(ch.upper())
+    if g is None:            # accented letters (a cat named Müsli): the plain letter
+        g = GLYPHS.get(unicodedata.normalize("NFKD", ch)[:1].upper(), GLYPHS["?"])
+    return g
 
 
 def text_width(text: str) -> int:

@@ -19,7 +19,8 @@ from typing import Any
 import requests
 
 from . import chatgpt_signin
-from .external import BASE_URLS, Credentials, ExternalWorker, media_type, tool_call_ids, wait_reset
+from .external import (BASE_URLS, SEARCHING, Credentials, ExternalWorker, is_too_long, media_type, too_long,
+                       tool_call_ids, wait_reset, with_sources)
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +67,9 @@ def list_models(creds: Credentials, auth: str) -> list[dict[str, Any]]:
     if r.status_code >= 400:
         raise OpenAIError("auth" if r.status_code == 401 else "error", _err_text(data) or f"HTTP {r.status_code}")
     if isinstance(data.get("models"), list):
-        return [{"id": m.get("slug") or m.get("id"), "name": m.get("display_name") or m.get("slug") or m.get("id")}
+        return [{"id": m.get("slug") or m.get("id"), "name": m.get("display_name") or m.get("slug") or m.get("id"),
+                 **({"context": int(m.get("max_context_window") or m.get("context_window"))}
+                    if m.get("max_context_window") or m.get("context_window") else {})}
                 for m in data["models"] if isinstance(m, dict) and m.get("visibility", "list") == "list"
                 and (m.get("slug") or m.get("id"))]
     rows = [m for m in data.get("data") or [] if isinstance(m, dict) and m.get("id")]
@@ -165,8 +168,11 @@ class OpenAIWorker(ExternalWorker):
         body: dict[str, Any] = {"model": self.model, "input": items, "store": False, "stream": True}
         if instructions:
             body["instructions"] = instructions
-        if self.tools and not opts.get("no_tools"):
-            body["tools"] = tools_for_responses(self.tools)
+        tools = tools_for_responses(self.tools) if self.tools and not opts.get("no_tools") else []
+        if self.web and not opts.get("no_search"):
+            tools.append({"type": "web_search"})       # (OpenAI's own web search - runs on their side)
+        if tools:
+            body["tools"] = tools
         effort = opts.get("effort", "unset")
         if effort == "unset":
             effort = self._efforts()[0]
@@ -177,6 +183,11 @@ class OpenAIWorker(ExternalWorker):
     def _step_down(self, opts: dict[str, Any], param: str, message: str) -> bool:
         p, low = (param or "").lower(), message.lower()
         learn = _learned.setdefault(f"{self.model}|{self.think}|{self.effort}", {})
+        if ("web_search" in low or "web search" in low or "web_search" in p) and self.web \
+                and not opts.get("no_search"):
+            opts["no_search"] = learn["no_search"] = True
+            self.note = "This model can't search the web here, so I answer without web search."
+            return True
         if "reasoning" in p or "effort" in p or "reasoning" in low:
             steps = self._efforts()
             cur = opts.get("effort", steps[0])
@@ -239,14 +250,17 @@ class OpenAIWorker(ExternalWorker):
         code, param = str(err.get("code") or ""), str(err.get("param") or "")
         msg = _err_text(data) or f"HTTP {resp.status_code}"
         st = resp.status_code
-        if code == "subscription_sharing_usage_limit_exceeded":
+        if code == "context_length_exceeded" or is_too_long(msg):
+            self.failed.emit("too_long", too_long(msg))
+        elif code == "subscription_sharing_usage_limit_exceeded":
             self.limit("plan", None, msg)
         elif code == "insufficient_quota":
             self.limit("credits", None, msg)
         elif st == 429:
             self.limit("rate", _openai_reset(resp.headers), msg)
         elif st == 400 and (code in ("unsupported_parameter", "unsupported_value",
-                                     "subscription_sharing_unsupported_capability") or param):
+                                     "subscription_sharing_unsupported_capability") or param
+                            or "web_search" in msg.lower()):
             if self._step_down(opts, param, msg):
                 log.info("%s refused %s - trying again with %s", self.model, param or "a setting", opts)
                 return True
@@ -290,6 +304,8 @@ class OpenAIWorker(ExternalWorker):
                 self.thinking.emit(thought)
             elif kind == "response.output_item.added" and (ev.get("item") or {}).get("type") == "reasoning":
                 self.thinking.emit(max(1, thought))
+            elif kind == "response.output_item.added" and (ev.get("item") or {}).get("type") == "web_search_call":
+                self.status.emit(SEARCHING)
             elif kind == "response.output_item.done":
                 item = ev.get("item") or {}
                 if item.get("type") == "function_call":
@@ -305,7 +321,7 @@ class OpenAIWorker(ExternalWorker):
                 if not text:
                     text = [_output_text(r)]
                 self.raw = None
-                self.done.emit("".join(text), calls)
+                self.done.emit(with_sources("".join(text), _sources(r)), calls)
                 return "done"
             elif kind == "response.incomplete":
                 r = ev.get("response") or {}
@@ -322,7 +338,9 @@ class OpenAIWorker(ExternalWorker):
                 err = (ev.get("response") or {}).get("error") if kind == "response.failed" else ev
                 err = err if isinstance(err, dict) else {}
                 code, msg = str(err.get("code") or ""), str(err.get("message") or "the answer failed")
-                if code == "subscription_sharing_usage_limit_exceeded":
+                if code == "context_length_exceeded" or is_too_long(msg):
+                    self.failed.emit("too_long", too_long(msg))
+                elif code == "subscription_sharing_usage_limit_exceeded":
                     self.limit("plan", None, msg)
                 elif code in ("insufficient_quota",):
                     self.limit("credits", None, msg)
@@ -353,6 +371,18 @@ def _output_text(r: dict[str, Any]) -> str:
                 if isinstance(part, dict) and part.get("type") == "output_text":
                     out.append(str(part.get("text") or ""))
     return "".join(out)
+
+
+def _sources(r: dict[str, Any]) -> list[tuple[str, str]]:
+    """The web pages a reply cites (web search's url_citation annotations)."""
+    out = []
+    for item in r.get("output") or []:
+        if isinstance(item, dict) and item.get("type") == "message":
+            for part in item.get("content") or []:
+                for a in (part.get("annotations") or []) if isinstance(part, dict) else []:
+                    if isinstance(a, dict) and a.get("type") == "url_citation" and a.get("url"):
+                        out.append((str(a.get("title") or ""), str(a["url"])))
+    return out
 
 
 def _json(r: requests.Response) -> dict[str, Any]:

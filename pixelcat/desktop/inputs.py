@@ -14,8 +14,9 @@ import ctypes
 import re
 import threading
 import time
+from contextlib import contextmanager
 from ctypes import wintypes
-from typing import Callable
+from typing import Callable, Iterator
 
 from . import win32
 
@@ -188,11 +189,11 @@ def parse_combo(combo: str) -> list[int]:
     return keys
 
 
-def press_combo(keys: list[int]) -> None:
-    """Press keys in order, release in reverse.  Modifiers are always released."""
+def press_combo(keys: list[int], hold: float = 0.0, cancel: threading.Event | None = None) -> None:
+    """Press keys in order, release in reverse (after ``hold`` seconds).  Keys are always released."""
     try:
         _send([_key_input(k, False) for k in keys])
-        time.sleep(0.03)
+        _wait(max(0.03, hold), cancel)
     finally:
         _send([_key_input(k, True) for k in reversed(keys)])
 
@@ -259,17 +260,51 @@ def _mouse_at(x: int, y: int, flag: int, data: int = 0) -> INPUT:
     return inp
 
 
-def click(x: int, y: int, button: str = "left", double: bool = False) -> None:
-    down, up = {"left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
-                "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
-                "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP)}[button]
+MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP = 0x80, 0x100
+XBUTTON1, XBUTTON2 = 1, 2
+SM_SWAPBUTTON = 23
+BUTTONS = ("left", "right", "middle", "back", "forward")
+
+
+def _button_flags(button: str) -> tuple[int, int, int]:
+    """(down, up, mouseData) for a button as the user sees it.  Windows swaps injected left and
+    right too when the mouse is set up for left-handed use, so swap them back."""
+    if button in ("left", "right") and u32.GetSystemMetrics(SM_SWAPBUTTON):
+        button = "right" if button == "left" else "left"
+    return {"left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, 0),
+            "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, 0),
+            "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, 0),
+            "back": (MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, XBUTTON1),
+            "forward": (MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, XBUTTON2)}[button]
+
+
+def _wait(seconds: float, cancel: threading.Event | None) -> bool:
+    """Sleep; False if cancelled meanwhile."""
+    end = time.perf_counter() + seconds
+    while True:
+        if cancel is not None and cancel.is_set():
+            return False
+        left = end - time.perf_counter()
+        if left <= 0:
+            return True
+        time.sleep(min(0.02, left))
+
+
+def click(x: int, y: int, button: str = "left", double: bool = False, count: int = 1, hold: float = 0.0,
+          cancel: threading.Event | None = None) -> None:
+    """``count`` clicks in a row (2 = double, 3 = triple); ``hold`` keeps the button down (a long press)."""
+    down, up, data = _button_flags(button)
+    count = 2 if double and count < 2 else max(1, count)
     u32.SetCursorPos(int(x), int(y))   # hover first (some apps highlight before they accept a click)
     time.sleep(0.04)
-    for n in range(2 if double else 1):
-        for flag in (down, up):
-            _send([_mouse_at(x, y, flag)])
-            time.sleep(0.02)
-        if double and n == 0:
+    for n in range(count):
+        try:
+            _send([_mouse_at(x, y, down, data)])
+            _wait(max(0.02, hold), cancel)
+        finally:
+            _send([_mouse_at(x, y, up, data)])      # (a button is never left held down)
+        time.sleep(0.02)
+        if n < count - 1:
             time.sleep(0.05)
 
 
@@ -285,6 +320,191 @@ def scroll(x: int, y: int, clicks: int, horizontal: bool = False) -> None:
 
 def move_cursor(x: int, y: int) -> None:
     u32.SetCursorPos(int(x), int(y))
+
+
+@contextmanager
+def holding(keys: list[int]) -> Iterator[None]:
+    """Keep keys pressed (ctrl-click, shift-drag...); they are always let go again."""
+    try:
+        if keys:
+            _send([_key_input(k, False) for k in keys])
+            time.sleep(0.04)
+        yield
+    finally:
+        if keys:
+            time.sleep(0.03)
+            _send([_key_input(k, True) for k in reversed(keys)])
+
+
+def _route(points: list[tuple[int, int]], seconds: float) -> list[tuple[int, int, float]]:
+    """Points every few pixels along the line through ``points``, each with the time to send it at."""
+    lengths = [((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5 for (x1, y1), (x2, y2) in zip(points, points[1:])]
+    if not lengths:
+        return [(points[0][0], points[0][1], 0.0)]
+    total = sum(lengths)
+    n = max(2, min(6000, int(max(seconds * 125, total / 6))))
+    out: list[tuple[int, int, float]] = []
+    seg, done = 0, 0.0
+    for i in range(1, n + 1):
+        t = i / n
+        eased = t * t * (3 - 2 * t) if len(points) == 2 else t      # a hand speeds up and slows down
+        want = eased * total
+        while seg < len(lengths) - 1 and done + lengths[seg] < want:
+            done += lengths[seg]
+            seg += 1
+        (x1, y1), (x2, y2) = points[seg], points[seg + 1]
+        f = 0.0 if lengths[seg] == 0 else min(1.0, max(0.0, (want - done) / lengths[seg]))
+        out.append((int(round(x1 + (x2 - x1) * f)), int(round(y1 + (y2 - y1) * f)), t * seconds))
+    return out
+
+
+def trace(points: list[tuple[int, int]], seconds: float, cancel: threading.Event | None = None) -> str:
+    """Move the pointer through ``points`` like a hand would (many small moves).  Returns "" when
+    it got there, else why it stopped: "cancel" (Esc / Stop) or "user" (the user moved the mouse)."""
+    start = time.perf_counter()
+    last = win32.cursor_pos()
+    for x, y, at in _route(points, seconds):
+        if cancel is not None and cancel.is_set():
+            return "cancel"
+        wait = start + at - time.perf_counter()
+        if wait > 0:
+            time.sleep(wait)
+        cx, cy = win32.cursor_pos()
+        if max(abs(cx - last[0]), abs(cy - last[1])) > 60:
+            return "user"
+        _send([_mouse_at(x, y, 0)])
+        last = (x, y)
+    time.sleep(0.02)
+    return ""
+
+
+def drag(points: list[tuple[int, int]], button: str = "left", seconds: float = 0.6,
+         cancel: threading.Event | None = None) -> str:
+    """Press at the first point, move along the others, let go at the last one.  Returns "" or why
+    it stopped (see ``trace``); the button is always let go - where the pointer is then."""
+    down, up, data = _button_flags(button)
+    x0, y0 = points[0]
+    u32.SetCursorPos(int(x0), int(y0))
+    _send([_mouse_at(x0, y0, 0)])
+    time.sleep(0.06)
+    why = "error"
+    try:
+        _send([_mouse_at(x0, y0, down, data)])
+        time.sleep(0.12)                  # apps start a drag only after a moment or a few pixels
+        why = trace(points, seconds, cancel)
+        if not why:
+            ex, ey = points[-1]           # a little wiggle over the drop target (some only react to movement)
+            _send([_mouse_at(ex + 1, ey, 0)])
+            time.sleep(0.05)
+            _send([_mouse_at(ex, ey, 0)])
+            time.sleep(0.12)
+    finally:
+        cx, cy = points[-1] if not why else win32.cursor_pos()
+        _send([_mouse_at(cx, cy, up, data)])
+        time.sleep(0.05)
+    return why
+
+
+def glide(x: int, y: int, seconds: float = 0.3, cancel: threading.Event | None = None) -> str:
+    """Move the pointer to (x, y) without pressing anything (hover)."""
+    return trace([win32.cursor_pos(), (int(x), int(y))], seconds, cancel)
+
+
+# ------------------------------------------------------------------ touch (a two-finger pinch)
+PT_TOUCH = 2
+POINTER_FLAG_INRANGE, POINTER_FLAG_INCONTACT = 0x2, 0x4
+POINTER_FLAG_DOWN, POINTER_FLAG_UPDATE, POINTER_FLAG_UP = 0x10000, 0x20000, 0x40000
+TOUCH_MASK_CONTACTAREA, TOUCH_MASK_ORIENTATION, TOUCH_MASK_PRESSURE = 0x1, 0x2, 0x4
+TOUCH_FEEDBACK_DEFAULT = 0x1
+
+
+class POINTER_INFO(ctypes.Structure):
+    _fields_ = [("pointerType", ctypes.c_uint32), ("pointerId", ctypes.c_uint32), ("frameId", ctypes.c_uint32),
+                ("pointerFlags", ctypes.c_uint32), ("sourceDevice", wintypes.HANDLE), ("hwndTarget", wintypes.HWND),
+                ("ptPixelLocation", wintypes.POINT), ("ptHimetricLocation", wintypes.POINT),
+                ("ptPixelLocationRaw", wintypes.POINT), ("ptHimetricLocationRaw", wintypes.POINT),
+                ("dwTime", wintypes.DWORD), ("historyCount", ctypes.c_uint32), ("InputData", ctypes.c_int32),
+                ("dwKeyStates", wintypes.DWORD), ("PerformanceCount", ctypes.c_uint64),
+                ("ButtonChangeType", ctypes.c_int)]
+
+
+class POINTER_TOUCH_INFO(ctypes.Structure):
+    _fields_ = [("pointerInfo", POINTER_INFO), ("touchFlags", ctypes.c_uint32), ("touchMask", ctypes.c_uint32),
+                ("rcContact", wintypes.RECT), ("rcContactRaw", wintypes.RECT), ("orientation", ctypes.c_uint32),
+                ("pressure", ctypes.c_uint32)]
+
+
+_touch: bool | None = None
+
+
+def touch_available() -> bool:
+    """Windows' touch injection (any PC since Windows 8, with or without a touch screen)."""
+    global _touch
+    if _touch is None:
+        try:
+            u32.InitializeTouchInjection.argtypes = [ctypes.c_uint32, wintypes.DWORD]
+            u32.InitializeTouchInjection.restype = wintypes.BOOL
+            u32.InjectTouchInput.argtypes = [ctypes.c_uint32, ctypes.POINTER(POINTER_TOUCH_INFO)]
+            u32.InjectTouchInput.restype = wintypes.BOOL
+            _touch = bool(u32.InitializeTouchInjection(10, TOUCH_FEEDBACK_DEFAULT))
+        except (AttributeError, OSError):
+            _touch = False
+    return _touch
+
+
+def _contact(finger: int, x: int, y: int, flags: int) -> POINTER_TOUCH_INFO:
+    c = POINTER_TOUCH_INFO()
+    c.pointerInfo.pointerType = PT_TOUCH
+    c.pointerInfo.pointerId = finger
+    c.pointerInfo.pointerFlags = flags
+    c.pointerInfo.ptPixelLocation = wintypes.POINT(int(x), int(y))
+    c.touchMask = TOUCH_MASK_CONTACTAREA | TOUCH_MASK_ORIENTATION | TOUCH_MASK_PRESSURE
+    c.rcContact = wintypes.RECT(int(x) - 2, int(y) - 2, int(x) + 2, int(y) + 2)
+    c.orientation = 90
+    c.pressure = 32000
+    return c
+
+
+def _inject(frame: list[tuple[int, int]], flags: int) -> bool:
+    arr = (POINTER_TOUCH_INFO * len(frame))(*[_contact(i, x, y, flags) for i, (x, y) in enumerate(frame)])
+    return bool(u32.InjectTouchInput(len(frame), arr))
+
+
+def touch(frames: list[list[tuple[int, int]]], seconds: float, cancel: threading.Event | None = None) -> str:
+    """Fingers on the screen: ``frames[i]`` = where each finger is.  They touch down at the first
+    frame and lift after the last.  Returns "" when done, "cancel", or "failed" (Windows refused)."""
+    if not frames or not touch_available():
+        return "failed"
+    contact = POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT
+    if not _inject(frames[0], POINTER_FLAG_DOWN | contact):
+        return "failed"
+    last, why = frames[0], ""
+    try:
+        step = seconds / max(1, len(frames) - 1)
+        for frame in frames[1:]:
+            if not _wait(step, cancel):
+                why = "cancel"
+                break
+            if not _inject(frame, POINTER_FLAG_UPDATE | contact):
+                why = "failed"
+                break
+            last = frame
+        time.sleep(0.03)
+    finally:
+        _inject(last, POINTER_FLAG_UP)
+    return why
+
+
+def pinch(x: int, y: int, start: float, end: float, seconds: float = 0.5,
+          cancel: threading.Event | None = None) -> str:
+    """Two fingers around (x, y), from ``start`` px apart to ``end`` px apart (wider = zoom in)."""
+    n = max(8, int(seconds * 60))
+    frames = []
+    for i in range(n + 1):
+        t = i / n
+        half = (start + (end - start) * t * t * (3 - 2 * t)) / 2
+        frames.append([(int(x - half), int(y)), (int(x + half), int(y))])
+    return touch(frames, seconds, cancel)
 
 
 # ------------------------------------------------------------------ windows / focus
