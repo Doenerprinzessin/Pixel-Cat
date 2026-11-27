@@ -7,6 +7,7 @@ import pytest
 
 from llm_agent.agent_fakes import OWN_PID, SCREEN, el
 from pixelcat.desktop import inputs, monitors, uia
+from pixelcat.domain import Monitor
 from pixelcat.llm import agent as agent_mod
 from pixelcat.llm import watch as watch_mod
 from pixelcat.llm.agent import AgentError, DesktopAgent, Shot, ToolOutput
@@ -81,8 +82,8 @@ def test_clip_and_window_rect(desk) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_control_monitor(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    mons = [monitors.Monitor(1, (0, 0, 1920, 1080), (0, 0, 1920, 1040), 96, True, "A"),
-            monitors.Monitor(2, (1920, 0, 3840, 1080), (1920, 0, 3840, 1040), 144, False, "B")]
+    mons = [Monitor(1, (0, 0, 1920, 1080), (0, 0, 1920, 1040), 96, True, "A"),
+            Monitor(2, (1920, 0, 3840, 1080), (1920, 0, 3840, 1040), 144, False, "B")]
     monkeypatch.setattr(monitors, "enumerate_monitors", lambda: mons)
     assert ORIGINAL_CONTROL_MONITOR(2000, 10) == (1920, 0, 3840, 1080)
     assert ORIGINAL_CONTROL_MONITOR(5, 5) == (0, 0, 1920, 1080)

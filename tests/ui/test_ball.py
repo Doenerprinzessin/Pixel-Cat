@@ -5,7 +5,7 @@ import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QColor, QMouseEvent
 
-from pixelcat.desktop.monitors import Monitor
+from pixelcat.domain import Monitor
 from pixelcat.engine.ballgame import BallGame, Fx
 from pixelcat.engine.brain import Brain
 from pixelcat.engine.needs import Needs

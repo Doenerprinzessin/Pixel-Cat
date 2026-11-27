@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from pixelcat.desktop.monitors import Monitor
+from pixelcat.domain import Monitor
 
 MONITOR = Monitor(handle=1, rect=(0, 0, 1920, 1080), work=(0, 0, 1920, 1040), dpi=96, primary=True,
                   device="TEST1")

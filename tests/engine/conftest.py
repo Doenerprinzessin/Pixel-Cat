@@ -1,7 +1,7 @@
 """Fixtures for the engine tests: fake monitors / windows and ready-made brains.
 
 ``Monitor`` and ``WinInfo`` are imported (and constructed) only here, so moving them
-to another package only needs the two import lines below to change.
+to another package only needs the import line below to change.
 """
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ from typing import Callable
 
 import pytest
 
-from pixelcat.desktop.monitors import Monitor, monitor_at
-from pixelcat.desktop.windows import WinInfo
+from pixelcat.domain import Monitor, WinInfo, monitor_at
 from pixelcat.engine.brain import Brain, Ctx
 from pixelcat.engine.needs import Needs
 from pixelcat.engine.surfaces import SurfaceMap

@@ -12,8 +12,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from pixelcat.desktop.monitors import Monitor
-from pixelcat.desktop.windows import WinInfo
+from pixelcat.domain import Monitor, WinInfo
 from pixelcat.engine.brain import Brain, Ctx
 from pixelcat.engine.needs import Needs
 from pixelcat.engine.surfaces import SurfaceMap

@@ -6,8 +6,7 @@ import pytest
 
 from pixelcat import naming, progress
 from pixelcat.desktop import win32
-from pixelcat.desktop.monitors import Monitor
-from pixelcat.desktop.windows import WinInfo
+from pixelcat.domain import Monitor, WinInfo
 from pixelcat.engine.states import S
 from pixelcat.persistence import SavedState
 from pixelcat.ui import theme

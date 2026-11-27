@@ -16,7 +16,7 @@ from PySide6.QtGui import QColor, QImage, QPainter
 from desktop.fakes import FakeDLL, raising
 from pixelcat.desktop import ledges
 from pixelcat.desktop.ledges import LedgeFinder, find_tops
-from pixelcat.desktop.windows import WinInfo
+from pixelcat.domain import WinInfo
 
 pytestmark = pytest.mark.qt
 
