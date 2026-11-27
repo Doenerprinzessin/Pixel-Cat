@@ -277,6 +277,11 @@ def launch(path_or_uri: str | Path) -> None:
     os.startfile(str(path_or_uri))  # opens via the shell association, no command line
 
 
+def launch_elevated(file: str, args: list[str]) -> None:
+    """Start a program that asks for admin rights itself (Windows shows its UAC prompt)."""
+    os.startfile(file, arguments=subprocess.list2cmdline(args))
+
+
 # ------------------------------------------------------------------ misc actions
 def media_key(action: str) -> None:
     vk = MEDIA_KEYS[action]

@@ -158,6 +158,11 @@ class FakeWinreg(types.ModuleType):
             raise FileNotFoundError(2, "The system cannot find the file specified")
         return FakeKey(path)
 
+    def CreateKeyEx(self, root: Any, sub: str, reserved: int = 0, access: int = 0) -> FakeKey:
+        path = self._path(root, sub)
+        self.add(path)
+        return FakeKey(path)
+
     def QueryValueEx(self, key: FakeKey, name: str) -> tuple[Any, int]:
         for k, v in self.keys[key.path].items():
             if k.lower() == name.lower():

@@ -258,6 +258,13 @@ def test_launch_uses_the_shell_association(monkeypatch):
     assert opened == [str(Path("C:/x/app.lnk")), "ms-settings:display"]
 
 
+def test_launch_elevated_passes_the_arguments_as_one_command_line(monkeypatch):
+    opened = []
+    monkeypatch.setattr(control.os, "startfile", lambda *a, **k: opened.append((a, k)), raising=False)
+    control.launch_elevated(r"C:\Tools\setup.exe", ["/S", "C:\\My Files"])
+    assert opened == [((r"C:\Tools\setup.exe",), {"arguments": '/S "C:\\My Files"'})]
+
+
 # ---------------------------------------------------------------- misc actions
 def test_media_keys_cover_exactly_the_domain_actions():
     assert tuple(control.MEDIA_KEYS) == domain.MEDIA_ACTIONS

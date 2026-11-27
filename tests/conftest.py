@@ -196,6 +196,14 @@ def real_profile(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
+def fake_platform():  # type: ignore[no-untyped-def]
+    """A :class:`fakes.platform.FakePlatform`: every port does nothing and records its calls."""
+    from fakes.platform import FakePlatform
+
+    return FakePlatform()
+
+
+@pytest.fixture
 def fake_dll():
     """Factory for a fake ctypes DLL: ``dll = fake_dll(); dll.Foo.result = 1``.
 

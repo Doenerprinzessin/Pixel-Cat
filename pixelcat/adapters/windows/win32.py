@@ -129,6 +129,8 @@ def _declare() -> None:
     u.SetWindowPos.restype = wintypes.BOOL
     u.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
     u.MessageBoxW.restype = ctypes.c_int
+    u.GetSystemMetrics.argtypes = [ctypes.c_int]
+    u.GetSystemMetrics.restype = ctypes.c_int
     if hasattr(u, "SetProcessDpiAwarenessContext"):
         u.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
         u.SetProcessDpiAwarenessContext.restype = wintypes.BOOL
@@ -349,3 +351,67 @@ def window_dpi(hwnd: int) -> int:
     fn.argtypes = [wintypes.HWND]
     fn.restype = wintypes.UINT
     return int(fn(hwnd) or 0)
+
+
+def is_window(hwnd: int) -> bool:
+    return bool(user32.IsWindow(hwnd))
+
+
+def is_visible(hwnd: int) -> bool:
+    return bool(user32.IsWindowVisible(hwnd))
+
+
+def is_minimized(hwnd: int) -> bool:
+    return bool(user32.IsIconic(hwnd))
+
+
+def is_hung(hwnd: int) -> bool:
+    return bool(user32.IsHungAppWindow(hwnd))
+
+
+def virtual_screen() -> tuple[int, int, int, int]:
+    """The rect around all monitors."""
+    gm = user32.GetSystemMetrics
+    x, y = gm(76), gm(77)
+    return (x, y, x + gm(78), y + gm(79))
+
+
+def window_rect(hwnd: int) -> tuple[int, int, int, int]:
+    """The visible frame, or GetWindowRect if DWM doesn't know it."""
+    r = frame_bounds(hwnd)
+    if r is None:
+        rc = RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rc))
+        r = (rc.left, rc.top, rc.right, rc.bottom)
+    return r
+
+
+def place_below(hwnd: int, other: int) -> None:
+    """Put our window ``hwnd`` directly below ``other`` in the z-order (no move, no size, no focus)."""
+    user32.SetWindowPos(hwnd, other, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
+
+
+def own_click_through(own_pid: int, keep: int) -> list[int]:
+    """Make our visible layered windows (except ``keep``) click-through; returns the ones that changed."""
+    changed: list[int] = []
+    own: list[int] = []
+
+    def _cb(h, _lp):  # type: ignore[no-untyped-def]
+        if user32.IsWindowVisible(h) and window_pid(h) == own_pid and h != keep:
+            own.append(int(h))
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(_cb), 0)
+    for h in own:
+        ex = get_exstyle(h)
+        if ex & WS_EX_LAYERED and not ex & WS_EX_TRANSPARENT:
+            set_exstyle(h, ex | WS_EX_TRANSPARENT)
+            changed.append(h)
+    return changed
+
+
+def end_own_click_through(changed: list[int]) -> None:
+    """Undo :func:`own_click_through` for the windows that are still there."""
+    for h in changed:
+        if user32.IsWindow(h):
+            set_exstyle(h, get_exstyle(h) & ~WS_EX_TRANSPARENT)

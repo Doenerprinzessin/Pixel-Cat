@@ -80,6 +80,16 @@ def test_core_does_not_import_adapters(path):
     assert not bad, f"pixelcat/{_rel(path)} imports {bad}; use pixelcat.domain (or a port) instead"
 
 
+@pytest.mark.parametrize("path", _files("ports"), ids=_rel)
+def test_ports_import_only_stdlib_and_the_domain(path):
+    # Qt only for type hints (under TYPE_CHECKING: see test_ports_load_without_qt_ctypes_or_adapters)
+    bad = sorted(name for name in _imports(path)
+                 if not (_is(name, "pixelcat.domain") or _is(name, "pixelcat.ports") or _is(name, "PySide6.QtGui")
+                         or name.split(".")[0] in sys.stdlib_module_names)
+                 or name.split(".")[0] in {"ctypes", "winreg", "msvcrt", "_winapi"})
+    assert not bad, f"pixelcat/{_rel(path)} imports {bad}"
+
+
 def test_the_old_desktop_package_is_gone():
     # a stale __pycache__ folder from an old checkout may stay behind; source files may not
     left = sorted(p.relative_to(PKG).as_posix() for p in (PKG / "desktop").rglob("*.py"))
@@ -126,3 +136,9 @@ def test_cat_and_game_logic_load_without_adapters():
     """)
     assert "pixelcat.games.mice" in loaded and "pixelcat.engine.brain" in loaded
     assert not {m for m in loaded if _is(m, "pixelcat.adapters")}
+
+
+def test_ports_load_without_qt_ctypes_or_adapters():
+    loaded = _loaded_after("import pixelcat.ports")
+    assert "pixelcat.ports.storage" in loaded
+    assert not {m for m in loaded if _is(m, "pixelcat.adapters") or _is(m, "PySide6") or _is(m, "ctypes")}
