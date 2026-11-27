@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -262,7 +263,9 @@ def test_create_note_defaults(toolbox: ToolBox, folders) -> None:  # type: ignor
 
 
 @pytest.mark.parametrize(("raw", "safe"), [
-    ("../evil.exe", "evil.exe.txt"), ("a:b?.md", "a_b_.md"), ("  .hidden  ", "hidden.txt"), ("...", "note.txt"),
+    # Windows reads "a:" as a drive and drops it (pathlib), so the name differs there.
+    ("../evil.exe", "evil.exe.txt"), ("a:b?.md", "b_.md" if sys.platform == "win32" else "a_b_.md"),
+    ("x?y:z.md", "x_y_z.md"), ("  .hidden  ", "hidden.txt"), ("...", "note.txt"),
     ("notes.MD", "notes.MD"), ("dir\\sub\\file.txt", "file.txt"), ("ü name.txt", "ü name.txt"),
     ("x" * 200, "x" * 120),
 ])
