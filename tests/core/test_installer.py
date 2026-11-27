@@ -964,16 +964,25 @@ def test_uninstall_window_flow(window_env, qtbot) -> None:  # type: ignore[no-un
 
 # ---------------------------------------------------------------- real Windows (test registry key only)
 @pytest.fixture
+def real_src(tmp_path: Path) -> Path:
+    """A real program (a copy of this Python), like the real installer always installs."""
+    p = tmp_path / "Downloads" / "PixelCat-Setup (1).exe"
+    p.parent.mkdir()
+    p.write_bytes(Path(sys.executable).read_bytes())
+    return p
+
+
+@pytest.fixture
 def real_lay(tmp_path: Path, test_reg_key: str, monkeypatch: pytest.MonkeyPatch) -> Layout:
     monkeypatch.setattr(persistence, "REG_PATH", test_reg_key + r"\ProtectedSaves")
     return make_layout(tmp_path / "root", test_reg_key)
 
 
 @pytest.mark.windows
-def test_real_install_and_uninstall(real_lay: Layout, src: Path, real_reg_read, root_handlers) -> None:  # type: ignore[no-untyped-def]
+def test_real_install_and_uninstall(real_lay: Layout, real_src: Path, real_reg_read, root_handlers) -> None:  # type: ignore[no-untyped-def]
     import winreg
 
-    lay = real_lay
+    lay, src = real_lay, real_src
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, lay.run_key) as k:
         winreg.SetValueEx(k, system.RUN_VALUE, 0, winreg.REG_SZ, r'"C:\Old Place\PixelCat.exe"')
     installer.install(lay, src, desktop_shortcut=True)
@@ -991,6 +1000,18 @@ def test_real_install_and_uninstall(real_lay: Layout, src: Path, real_reg_read, 
     assert real_reg_read(lay.run_key, system.RUN_VALUE) is None
     installer.remove_program_folder(lay)
     assert not lay.install_dir.exists()
+
+
+@pytest.mark.windows
+def test_real_start_menu_link_with_the_installers_arguments(real_src: Path, tmp_path: Path) -> None:
+    exe = tmp_path / "Programs" / "PixelCat" / installer.EXE_NAME
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(real_src.read_bytes())
+    link = tmp_path / "StartMenu" / installer.LINK_NAME
+    link.parent.mkdir()
+    assert elevation.make_lnk(link, exe, workdir=exe.parent, icon=exe,
+                              description="Pixel Cat - a pixel-art desktop pet with a local AI chat")
+    assert os.path.samefile(elevation.lnk_target(link)[0], exe)
 
 
 @pytest.mark.windows

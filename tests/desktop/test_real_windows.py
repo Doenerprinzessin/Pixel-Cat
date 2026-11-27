@@ -15,6 +15,7 @@ import uuid
 from ctypes import wintypes
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
 from pixelcat.desktop import capture, control, elevation, escwatch, hardware, inputs, ledges, system, uia, volume, win32
@@ -143,13 +144,34 @@ def test_click_through_and_styles_on_our_window(own_window, qtbot):
         assert win32.get_exstyle(hwnd) & win32.WS_EX_TRANSPARENT
         win32.set_click_through(hwnd, False)
         assert not win32.get_exstyle(hwnd) & win32.WS_EX_TRANSPARENT
-        win32.keep_topmost(hwnd)
-        assert win32.get_exstyle(hwnd) & win32.WS_EX_TOPMOST
         win32.move_window(hwnd, 180, 190, 500, 360, topmost=False)
         qtbot.wait(50)
         assert ctypes_rect(hwnd) == (180, 190, 680, 550)
     finally:
         win32.set_exstyle(hwnd, before)
+
+
+def test_keep_topmost_keeps_a_stay_on_top_window_topmost(qtbot):
+    """Like every window the app calls keep_topmost on (overlay, ball, game windows), this
+    one is created stay-on-top.  A plain window can't be raised this way from the test:
+    SetWindowPos only brings a visible window to the top for a process with
+    SetForegroundWindow permission, which the CI test process doesn't have."""
+    w = QWidget(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+                | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowDoesNotAcceptFocus)
+    w.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    w.resize(120, 90)
+    w.move(200, 200)
+    qtbot.addWidget(w)
+    w.show()
+    qtbot.waitExposed(w)
+    hwnd = int(w.winId())
+    assert win32.get_exstyle(hwnd) & win32.WS_EX_TOPMOST
+    win32.set_click_through(hwnd, True)
+    win32.keep_topmost(hwnd)
+    ex = win32.get_exstyle(hwnd)
+    assert ex & win32.WS_EX_TOPMOST and ex & win32.WS_EX_TRANSPARENT
+    win32.set_click_through(hwnd, False)
+    assert win32.get_exstyle(hwnd) & win32.WS_EX_TOPMOST
 
 
 def test_focus_helpers_on_our_window(own_window):

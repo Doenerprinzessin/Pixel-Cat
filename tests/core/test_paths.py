@@ -143,16 +143,46 @@ def test_known_folder_unknown_alias_is_none(no_windll, alias: str) -> None:  # t
 
 
 # ---------------------------------------------------------------- real Known Folders
+KF_FLAG_DONT_VERIFY = 0x00004000
+
+
+def _configured_folder(name: str) -> Path | None:
+    """Where Windows says the known folder is, whether or not it exists on disk."""
+    import ctypes
+    import uuid
+    from ctypes import wintypes
+
+    guid = (ctypes.c_ubyte * 16).from_buffer_copy(uuid.UUID(KNOWN[name]).bytes_le)
+    out = ctypes.c_wchar_p()
+    fn = ctypes.WinDLL("shell32").SHGetKnownFolderPath
+    fn.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.HANDLE, ctypes.POINTER(ctypes.c_wchar_p)]
+    fn.restype = ctypes.c_long
+    try:
+        return Path(out.value) if fn(ctypes.byref(guid), KF_FLAG_DONT_VERIFY, None, ctypes.byref(out)) == 0 \
+            and out.value else None
+    finally:
+        ctypes.windll.ole32.CoTaskMemFree(out)
+
+
 @pytest.mark.windows
 @pytest.mark.parametrize("name", ["desktop", "documents", "downloads", "pictures", "music", "videos"])
-def test_real_shell_folder_is_an_absolute_path(real_profile, name: str) -> None:  # type: ignore[no-untyped-def]
+def test_real_shell_folder(real_profile, name: str) -> None:  # type: ignore[no-untyped-def]
+    """shell_folder asks without KF_FLAG_DONT_VERIFY, so Windows only answers for folders
+    that exist; a missing one (the GitHub Actions runner has no Desktop) gives None and the
+    callers fall back to the usual place under the home folder."""
+    configured = _configured_folder(name)
+    assert configured is not None and configured.is_absolute()
     p = paths.shell_folder(name)
-    assert p is not None and p.is_absolute()
-    assert paths.known_folder(name) == p
+    if configured.is_dir():
+        assert p is not None and p.is_dir(), f"{name} exists at {configured} but shell_folder gave {p}"
+        assert os.path.normcase(str(p)) == os.path.normcase(str(configured))
+        assert paths.known_folder(name) == p
+    else:
+        assert p is None
+        assert paths.known_folder(name) == Path.home() / name.capitalize()
 
 
 @pytest.mark.windows
-@pytest.mark.parametrize("name", ["desktop", "documents"])
-def test_real_shell_folder_exists(real_profile, name: str) -> None:  # type: ignore[no-untyped-def]
-    p = paths.shell_folder(name)
+def test_real_documents_folder_exists(real_profile) -> None:  # type: ignore[no-untyped-def]
+    p = paths.shell_folder("documents")
     assert p is not None and p.is_dir()
