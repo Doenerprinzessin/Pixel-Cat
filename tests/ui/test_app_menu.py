@@ -103,7 +103,7 @@ def test_external_ai_models(pet) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_external_is_marked_best_on_a_pc_without_room_for_a_local_ai(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.desktop import hardware
+    from pixelcat.adapters.windows import hardware
 
     monkeypatch.setattr(hardware, "detect", lambda fresh=False: hardware.Hardware(ram_gb=8.0, cores=4, gpus=[],
                                                                                     disk_free_gb=500.0))

@@ -115,7 +115,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         return
     skip = pytest.mark.skip(reason="needs real Windows")
     for item in items:
-        if "windows" in item.keywords:
+        # the marker itself: item.keywords also holds folder names, and tests/adapters/windows is one
+        if item.get_closest_marker("windows"):
             item.add_marker(skip)
 
 

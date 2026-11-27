@@ -82,7 +82,7 @@ class Watch:
 
 def _window_text(hwnd: int, timeout: float = 8.0) -> str | None:
     """All readable text of a window (names, values, document) - None if it can't be read."""
-    from ..desktop import uia
+    from ..adapters.windows import uia
 
     box: list[object] = []
 
@@ -110,14 +110,14 @@ class Checker:
     """The checks themselves (run on the watcher thread, or once on a tool thread at the start)."""
 
     def __init__(self, own_pid: int) -> None:
-        from ..desktop.notifications import Feed
+        from ..adapters.windows.notifications import Feed
 
         self.own_pid = own_pid
         self.feed = Feed()
 
     # ------------------------------------------------------------------ helpers
     def _windows(self, query: str, title_text: str = "") -> list[Any]:
-        from ..desktop import control
+        from ..adapters.windows import control
 
         wins = control.list_app_windows(self.own_pid)
         hits = control.find_windows(query, wins) if query.strip() else wins
@@ -129,7 +129,7 @@ class Checker:
     def baseline(self, w: Watch) -> str:
         """Record how things are now.  Returns a detail text if the awaited thing is ALREADY
         the case (then there is nothing to wait for), else ''."""
-        from ..desktop import win32
+        from ..adapters.windows import win32
 
         if w.kind == "notification":
             try:
@@ -175,7 +175,7 @@ class Checker:
         return ""
 
     def _app_ok(self, app_id: str, w: Watch) -> bool:
-        from ..desktop.notifications import app_matches
+        from ..adapters.windows.notifications import app_matches
 
         return app_matches(app_id, w.app)
 
@@ -194,7 +194,7 @@ class Checker:
         return f"It is {datetime.now():%H:%M} now."
 
     def _check_notification(self, w: Watch) -> str:
-        from ..desktop.notifications import badge_count
+        from ..adapters.windows.notifications import badge_count
 
         new = self.feed.since(int(w.state.get("last", 0)))
         if new:
@@ -218,7 +218,7 @@ class Checker:
             w.state["_badge"] = rising[0]
             return ""                             # give its pop-up a moment to arrive
         if pending:
-            from ..desktop.notifications import friendly
+            from ..adapters.windows.notifications import friendly
 
             app_id, was, now = pending[0], pending[1], pending[2]
             what = f"{now} unread" if str(now).isdigit() else "a new item"
@@ -228,7 +228,7 @@ class Checker:
         return ""
 
     def _check_window_closed(self, w: Watch) -> str:
-        from ..desktop import win32
+        from ..adapters.windows import win32
 
         alive = [h for h in w.state.get("hwnds", []) if win32.user32.IsWindow(h)]
         if alive:

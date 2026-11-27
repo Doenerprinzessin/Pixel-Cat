@@ -1,4 +1,4 @@
-"""pixelcat.desktop.elevation: "does this need admin rights?" checks and .lnk shortcuts (mocked)."""
+"""pixelcat.adapters.windows.elevation: "does this need admin rights?" checks and .lnk shortcuts (mocked)."""
 from __future__ import annotations
 
 import ctypes
@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from desktop.fakes import FakeCom, FakeDLL, FakeWinreg, raising, write_ptr
-from pixelcat.desktop import control, elevation
+from adapters.windows.fakes import FakeCom, FakeDLL, FakeWinreg, raising, write_ptr
+from pixelcat.adapters.windows import control, elevation
 
 P = ctypes.c_void_p
 LAYERS = r"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers"

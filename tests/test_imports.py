@@ -12,7 +12,7 @@ MODULES = sorted(m.name for m in pkgutil.walk_packages(pixelcat.__path__, "pixel
 
 
 def test_found_the_packages():
-    for pkg in ("desktop", "engine", "games", "llm", "sprites", "ui"):
+    for pkg in ("adapters", "adapters.windows", "engine", "games", "llm", "sprites", "ui"):
         assert f"pixelcat.{pkg}" in MODULES
     assert "pixelcat.app" in MODULES
 

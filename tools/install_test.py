@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT))
 import winreg  # noqa: E402
 
 from pixelcat import __version__, installer  # noqa: E402
-from pixelcat.desktop import elevation, system  # noqa: E402
+from pixelcat.adapters.windows import elevation, system  # noqa: E402
 from pixelcat.persistence import load_state  # noqa: E402
 
 TEST_KEY = r"Software\PixelCatInstallTest"
@@ -213,7 +213,7 @@ def screens(lay) -> int:  # type: ignore[no-untyped-def]
     """Render every installer screen to a PNG (offscreen, nothing is shown)."""
     from PySide6.QtWidgets import QApplication
 
-    from pixelcat.desktop import win32
+    from pixelcat.adapters.windows import win32
     from pixelcat.sprites.library import SpriteLibrary
 
     win32.set_dpi_awareness()

@@ -33,8 +33,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Iterator
 
-from ..desktop import capture, control, inputs, uia, win32
-from ..desktop.control import AppWindow
+from ..adapters.windows import capture, control, inputs, uia, win32
+from ..adapters.windows.control import AppWindow
 from ..settings import Config
 
 log = logging.getLogger(__name__)
@@ -338,7 +338,7 @@ class DesktopAgent:
     def after(self, settle: float = 0.2) -> str:
         """Short description of what's in front now (helps the model notice dialogs)."""
         time.sleep(settle)
-        from ..desktop import elevation
+        from ..adapters.windows import elevation
 
         if elevation.uac_prompt_open():
             return (" Windows is now showing its admin-rights prompt (UAC). Only the user can answer it - "
@@ -1132,7 +1132,7 @@ class DesktopAgent:
 
 
 def control_monitor(x: int, y: int) -> tuple[int, int, int, int]:
-    from ..desktop.monitors import enumerate_monitors
+    from ..adapters.windows.monitors import enumerate_monitors
     from ..domain import monitor_at
 
     return tuple(monitor_at(enumerate_monitors(), x, y).rect)  # type: ignore[return-value]

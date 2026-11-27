@@ -1,4 +1,4 @@
-"""pixelcat.desktop.notifications: the Windows notification database, read-only (temp SQLite DB)."""
+"""pixelcat.adapters.windows.notifications: the Windows notification database, read-only (temp SQLite DB)."""
 from __future__ import annotations
 
 import sqlite3
@@ -8,8 +8,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from pixelcat import domain
-from pixelcat.desktop import notifications
-from pixelcat.desktop.notifications import Feed
+from pixelcat.adapters.windows import notifications
+from pixelcat.adapters.windows.notifications import Feed
 
 TEAMS = "MSTeams_8wekyb3d8bbwe!MSTeams"
 OUTLOOK = "Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"

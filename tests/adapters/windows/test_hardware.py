@@ -1,4 +1,4 @@
-"""pixelcat.desktop.hardware: what this PC can do (memory, graphics cards, CPU, disk) - mocked."""
+"""pixelcat.adapters.windows.hardware: what this PC can do (memory, graphics cards, CPU, disk) - mocked."""
 from __future__ import annotations
 
 import ctypes
@@ -9,10 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from desktop.fakes import FakeDLL, raising
+from adapters.windows.fakes import FakeDLL, raising
 from pixelcat import domain
-from pixelcat.desktop import hardware
-from pixelcat.desktop.hardware import Gpu, Hardware
+from pixelcat.adapters.windows import hardware
+from pixelcat.adapters.windows.hardware import Gpu, Hardware
 
 DISPLAY = "HKLM\\" + hardware._DISPLAY_CLASS
 CPU_KEY = r"HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0"

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from llm_agent.agent_fakes import OWN_PID, FakeFeed
-from pixelcat.desktop import control
+from pixelcat.adapters.windows import control
 from pixelcat.llm import tools as tools_mod
 from pixelcat.llm import webpage
 from pixelcat.llm.agent import ToolOutput

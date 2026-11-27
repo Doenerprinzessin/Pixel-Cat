@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pixelcat import naming, progress
-from pixelcat.desktop import win32
+from pixelcat.adapters.windows import win32
 from pixelcat.domain import Monitor, WinInfo
 from pixelcat.engine.states import S
 from pixelcat.persistence import SavedState
@@ -299,7 +299,7 @@ def test_quit_still_quits_when_saving_fails(pet, monkeypatch) -> None:  # type: 
 
 
 def test_quit_from_the_menu_and_the_quit_request(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.desktop import system
+    from pixelcat.adapters.windows import system
 
     pet.qapp = FakeQApp()
     pet._on_menu("quit")

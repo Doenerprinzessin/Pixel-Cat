@@ -23,7 +23,7 @@ from PySide6.QtCore import QPointF, Qt, QTimer  # noqa: E402
 from PySide6.QtGui import QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from pixelcat.desktop import win32  # noqa: E402
+from pixelcat.adapters.windows import win32  # noqa: E402
 from pixelcat.logsetup import setup_logging  # noqa: E402
 
 results: list[tuple[str, bool, str]] = []

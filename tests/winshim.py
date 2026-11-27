@@ -1,6 +1,6 @@
 """Test-only stand-ins for the Windows parts of ``ctypes`` and ``winreg``.
 
-Pixel Cat's ``desktop/*`` modules call ``ctypes.WINFUNCTYPE`` / ``ctypes.windll`` /
+Pixel Cat's ``adapters/windows/*`` modules call ``ctypes.WINFUNCTYPE`` / ``ctypes.windll`` /
 ``ctypes.WinDLL`` at import time, so on macOS and Linux they (and everything that
 imports them: engine, games, ui, app) can't even be imported.  :func:`install`
 adds harmless fakes so the modules import; every fake DLL function returns ``0``
@@ -114,7 +114,7 @@ def install() -> None:
     sys.modules.setdefault("winreg", _make_winreg())
     # win32.py sets its DLL handles to None off Windows, but sibling modules
     # declare argtypes on them at import time - give them fake DLLs instead.
-    from pixelcat.desktop import win32
+    from pixelcat.adapters.windows import win32
     for name in ("user32", "kernel32", "dwmapi", "shell32", "shcore"):
         if getattr(win32, name) is None:
             setattr(win32, name, ctypes.windll.LoadLibrary(name))

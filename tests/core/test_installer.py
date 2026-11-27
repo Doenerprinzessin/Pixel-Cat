@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from pixelcat import __version__, installer, paths, persistence, settings
-from pixelcat.desktop import elevation, hardware, system
+from pixelcat.adapters.windows import elevation, hardware, system
 from pixelcat.installer import AiPlan, InstallError, Layout
 from pixelcat.llm import external, model_status, models
 

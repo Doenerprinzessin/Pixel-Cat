@@ -1,4 +1,4 @@
-"""Fakes shared by the ``pixelcat.desktop`` tests (imported as ``desktop.fakes``)."""
+"""Fakes shared by the ``pixelcat.adapters.windows`` tests (imported as ``adapters.windows.fakes``)."""
 from __future__ import annotations
 
 import ctypes

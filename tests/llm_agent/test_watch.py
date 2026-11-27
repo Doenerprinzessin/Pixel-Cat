@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 from llm_agent.agent_fakes import OWN_PID, FakeFeed
-from pixelcat.desktop import uia
-from pixelcat.desktop.notifications import Notification
+from pixelcat.adapters.windows import uia
+from pixelcat.adapters.windows.notifications import Notification
 from pixelcat.llm import watch as watch_mod
 from pixelcat.llm.watch import MAX_ACTIVE, Checker, Watch, WatchError, WatchManager
 

@@ -17,7 +17,7 @@ import time
 from ctypes import wintypes
 from typing import Any
 
-from ..domain.accessibility import Element, Snapshot  # noqa: F401 - re-exported
+from ...domain.accessibility import Element, Snapshot  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 

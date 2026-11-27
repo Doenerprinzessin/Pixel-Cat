@@ -18,7 +18,7 @@ from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPaintEvent, QPixmap
 from PySide6.QtWidgets import QWidget
 
-from ..desktop import inputs, win32
+from ..adapters.windows import inputs, win32
 from ..engine.ballgame import BallGame
 from ..settings import Tuning
 from ..sprites.library import SpriteLibrary, render_text, scaled_pixmap

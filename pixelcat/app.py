@@ -21,9 +21,9 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from . import naming, paths, persistence, progress
 from .chats import ChatStore, new_id
-from .desktop import system, win32
-from .desktop.monitors import enumerate_monitors
-from .desktop.windows import enumerate_windows, foreground_window, is_fullscreen_window
+from .adapters.windows import system, win32
+from .adapters.windows.monitors import enumerate_monitors
+from .adapters.windows.windows import enumerate_windows, foreground_window, is_fullscreen_window
 from .domain import Monitor, monitor_at, primary
 from .engine.animations import all_poses
 from .engine.ballgame import BallGame
@@ -31,14 +31,14 @@ from .engine.brain import Brain, Ctx
 from .engine.needs import Needs
 from .engine.states import STATES, S
 from .engine.surfaces import WINDOW_KINDS, SurfaceMap
-from .desktop.ledges import LedgeFinder
-from .desktop.escwatch import EscWatcher
+from .adapters.windows.ledges import LedgeFinder
+from .adapters.windows.escwatch import EscWatcher
 from .llm.agent import ToolOutput
 from .llm.model_status import ModelStatus
 from .llm.ollama_client import ChatWorker, friendly_error, parse_text_tool_calls, strip_tool_markup
 from .llm.prompt import build_system_prompt
 from .llm.tools import SCREEN_EYES, AppHooks, ToolBox, ToolError, ToolSpec
-from .desktop import notifications
+from .adapters.windows import notifications
 from .llm.watch import Watch, WatchManager
 from .logsetup import RateLimitedLogger
 from .persistence import SavedState, save_state
@@ -305,7 +305,7 @@ class PixelCatApp(QObject):
         self.overlay.sync(self.scale_for(mon))
         self.agent.overlay_hwnd = self.overlay.hwnd()
         self.tray.show()
-        from .desktop import control
+        from .adapters.windows import control
         control.prefetch_store_apps()  # warm the Start-menu/Store app list in the background
         self.brain.set_state(S.LOAFING if self.quiet else S.SITTING, travel=False)
         for tm in (self.tick_timer, self.win_timer, self.mon_timer, self.fs_timer, self.save_timer,
@@ -810,7 +810,7 @@ class PixelCatApp(QObject):
     def _advice(self) -> Any:
         """What suits this PC (looked at once)."""
         if getattr(self, "_pc_advice", None) is None:
-            from .desktop.hardware import detect
+            from .adapters.windows.hardware import detect
 
             self._hw = detect()
             self._pc_advice = models.advise(self._hw)

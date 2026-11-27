@@ -1,4 +1,4 @@
-"""pixelcat.desktop.ledges: surfaces the cat can stand on inside windows (synthetic screens).
+"""pixelcat.adapters.windows.ledges: surfaces the cat can stand on inside windows (synthetic screens).
 
 The screens are drawn with plain rectangles (no fonts), so the results are exact on any OS.
 """
@@ -13,9 +13,9 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtGui import QColor, QImage, QPainter
 
-from desktop.fakes import FakeDLL, raising
-from pixelcat.desktop import ledges
-from pixelcat.desktop.ledges import LedgeFinder, find_tops
+from adapters.windows.fakes import FakeDLL, raising
+from pixelcat.adapters.windows import ledges
+from pixelcat.adapters.windows.ledges import LedgeFinder, find_tops
 from pixelcat.domain import WinInfo
 
 pytestmark = pytest.mark.qt

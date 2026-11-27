@@ -38,7 +38,7 @@ def main() -> int:
 
     from PySide6.QtWidgets import QApplication
 
-    from pixelcat.desktop import control, win32
+    from pixelcat.adapters.windows import control, win32
     from pixelcat.logsetup import setup_logging
 
     setup_logging(False)
@@ -127,7 +127,7 @@ def main() -> int:
     _, _, info = run("system_info")
     check("system_info", "RAM:" in info and "CPU:" in info, info)
 
-    from pixelcat.desktop import inputs
+    from pixelcat.adapters.windows import inputs
     clip = app.clipboard()
     saved_clip = inputs.backup_clipboard()   # everything (text, images, files), restored right after
     run("copy_to_clipboard", text="meow test 123")

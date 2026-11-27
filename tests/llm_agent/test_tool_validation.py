@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pixelcat.desktop import control
+from pixelcat.adapters.windows import control
 from pixelcat.llm.tools import ToolBox, ToolError
 
 
@@ -383,7 +383,7 @@ def test_open_file_picks_an_editor(toolbox: ToolBox, folders, monkeypatch, app: 
 
 
 def test_vscode_exe_lookup(desk, monkeypatch, isolated_dirs) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.desktop import elevation
+    from pixelcat.adapters.windows import elevation
 
     assert ToolBox._vscode_exe() is None
     exe = isolated_dirs / "Code.exe"

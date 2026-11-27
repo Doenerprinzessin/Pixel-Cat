@@ -175,7 +175,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     from PySide6.QtWidgets import QApplication
 
     from pixelcat.app import PixelCatApp
-    from pixelcat.desktop import win32
+    from pixelcat.adapters.windows import win32
     from pixelcat.logsetup import setup_logging
     from pixelcat.settings import load_config
 

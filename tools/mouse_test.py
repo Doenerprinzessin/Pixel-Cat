@@ -40,7 +40,7 @@ def near(p: dict, xy: tuple[int, int], tol: int = 4) -> bool:
 def main() -> int:  # noqa: C901 - a linear test script
     from PySide6.QtWidgets import QApplication
 
-    from pixelcat.desktop import inputs, system, win32
+    from pixelcat.adapters.windows import inputs, system, win32
     from pixelcat.logsetup import setup_logging
 
     if system.session_locked():

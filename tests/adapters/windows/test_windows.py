@@ -1,4 +1,4 @@
-"""pixelcat.desktop.windows: the window listing the cat walks on (mocked DLLs).
+"""pixelcat.adapters.windows.windows: the window listing the cat walks on (mocked DLLs).
 
 WinInfo itself is plain data and lives in pixelcat.domain.windows.
 """
@@ -8,10 +8,10 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from desktop.fakes import by_hwnd, enum_windows, fill_text, out, raising
+from adapters.windows.fakes import by_hwnd, enum_windows, fill_text, out, raising
 from pixelcat import domain
-from pixelcat.desktop import win32, windows
-from pixelcat.desktop.windows import (MIN_H, MIN_W, ctypes_rect, enumerate_windows, foreground_window,
+from pixelcat.adapters.windows import win32, windows
+from pixelcat.adapters.windows.windows import (MIN_H, MIN_W, ctypes_rect, enumerate_windows, foreground_window,
                                       is_fullscreen_window, window_exists)
 from pixelcat.domain import WinInfo
 

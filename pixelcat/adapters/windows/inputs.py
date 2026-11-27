@@ -19,7 +19,7 @@ from ctypes import wintypes
 from typing import Callable, Iterator
 
 from . import win32
-from ..domain.input import MOUSE_BUTTONS
+from ...domain.input import MOUSE_BUTTONS
 
 u32 = win32.user32
 k32 = win32.kernel32

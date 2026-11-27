@@ -1,4 +1,4 @@
-"""pixelcat.desktop.control: chat desktop actions - windows, apps, processes (mocked DLLs)."""
+"""pixelcat.adapters.windows.control: chat desktop actions - windows, apps, processes (mocked DLLs)."""
 from __future__ import annotations
 
 import ctypes
@@ -10,10 +10,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from desktop.fakes import FakeDLL, enum_windows, fill_text, out, raising
+from adapters.windows.fakes import FakeDLL, enum_windows, fill_text, out, raising
 from pixelcat import domain
-from pixelcat.desktop import control, win32
-from pixelcat.desktop.control import AppWindow, KillPlan, Proc
+from pixelcat.adapters.windows import control, win32
+from pixelcat.adapters.windows.control import AppWindow, KillPlan, Proc
 
 
 @pytest.fixture

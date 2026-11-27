@@ -96,7 +96,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     OUT.mkdir(parents=True, exist_ok=True)
     from PySide6.QtWidgets import QApplication
 
-    from pixelcat.desktop import control, inputs, uia, win32
+    from pixelcat.adapters.windows import control, inputs, uia, win32
     from pixelcat.logsetup import setup_logging
 
     setup_logging(False)
@@ -109,7 +109,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     from pixelcat.persistence import SavedState
     from pixelcat.settings import load_config
 
-    from pixelcat.desktop import inputs as _clip
+    from pixelcat.adapters.windows import inputs as _clip
     users_clipboard = _clip.backup_clipboard()   # put back at the end: the test uses the clipboard
     ed = Editor((260, 160, 900, 640))
     pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0)
@@ -165,7 +165,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     st = ed.state(pump)
     check("type_text into a field by element id", st.get("title") == "Weekend plan", f"{out} | {st.get('title')!r}")
     plan = "1. Pack bags\n2. Check the weather\n- bring snacks: äöü ß € 😺\n\tindented line"
-    from pixelcat.desktop import inputs as _inp
+    from pixelcat.adapters.windows import inputs as _inp
     clip_before = "clipboard content of the user 123"
     _inp.set_clipboard_text(clip_before)
     _, a, out = run("type_text", text=plan, element=ids.get("Editor"))
@@ -367,7 +367,7 @@ def main() -> int:  # noqa: C901 - a linear test script
         check("text that goes nowhere is reported as an error", False, "claimed success")
     except Exception as exc:  # noqa: BLE001
         check("text that goes nowhere is reported as an error", "nothing changed" in str(exc), str(exc)[:120])
-    from pixelcat.desktop import uia as _uia
+    from pixelcat.adapters.windows import uia as _uia
     real_focused_text = _uia.focused_text
     _uia.focused_text = lambda *a, **k: None       # pretend the app hides its text (like VS Code)
     try:
@@ -449,7 +449,7 @@ def main() -> int:  # noqa: C901 - a linear test script
 
 
 def chat_test(pet, chat, app, pump, ed, ag) -> None:  # type: ignore[no-untyped-def]  # noqa: C901
-    from pixelcat.desktop import control, uia, win32
+    from pixelcat.adapters.windows import control, uia, win32
 
     pet.open_chat()
     cards = [0]
@@ -501,7 +501,7 @@ def chat_test(pet, chat, app, pump, ed, ag) -> None:  # type: ignore[no-untyped-
     pump(0.4)
     ag.snap = None
     _, _, _o = (lambda: (None, None, None))()
-    from pixelcat.desktop import uia as _u, inputs as _in
+    from pixelcat.adapters.windows import uia as _u, inputs as _in
     win = next(w for w in control.list_app_windows(pet.own_pid) if w.title == "PixelCat Test Editor")
     snap = _u.snapshot(win.hwnd)
     edit = next(e for e in snap.elements if e.name == "Editor")
@@ -553,7 +553,7 @@ def chat_test(pet, chat, app, pump, ed, ag) -> None:  # type: ignore[no-untyped-
     check("the cat replied briefly afterwards", any(ln.startswith("cat:") and len(ln) < 900 for ln in out[-3:]))
     # clean up: empty our tab and close it (an empty untitled tab closes without asking)
     if target is not None:
-        from pixelcat.desktop import inputs
+        from pixelcat.adapters.windows import inputs
         hw = target.hwnd
         if inputs.bring_to_front(hw):
             inputs.press_combo(inputs.parse_combo("ctrl+a"))

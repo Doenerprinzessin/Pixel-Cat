@@ -58,7 +58,7 @@ def _fake_unprotect(blob: bytes) -> bytes:
 @pytest.fixture
 def desktop(monkeypatch: pytest.MonkeyPatch, fake_dll) -> Desktop:  # type: ignore[no-untyped-def]
     """The Win32 calls the overlay, the ball, the chat, the menu and the minigame windows make."""
-    from pixelcat.desktop import escwatch, inputs, win32
+    from pixelcat.adapters.windows import escwatch, inputs, win32
 
     d = Desktop()
     monkeypatch.setattr(win32, "user32", fake_dll("user32"))
@@ -195,7 +195,7 @@ def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path) -> AppE
 
     import pixelcat.app as app_mod
     from pixelcat import persistence, savecrypt, settings
-    from pixelcat.desktop import control, hardware, monitors, system
+    from pixelcat.adapters.windows import control, hardware, monitors, system
     from pixelcat.llm import model_status
     from pixelcat.sprites.library import SpriteLibrary
     from pixelcat.ui import tray

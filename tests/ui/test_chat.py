@@ -444,7 +444,7 @@ def test_edges_near_corners(chat: ChatWindow, side: str, pos: QPoint, edges: str
 
 @pytest.mark.qt
 def test_moving_to_another_dpi_rescales(chat: ChatWindow, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.desktop import win32
+    from pixelcat.adapters.windows import win32
 
     chat.show_near(CAT, WORK, 2)
     monkeypatch.setattr(win32, "window_dpi", lambda hwnd: 192)

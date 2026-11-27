@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from pixelcat.desktop import control
+from pixelcat.adapters.windows import control
 from pixelcat.llm import tools as tools_mod
 from pixelcat.llm.tools import CAT_ACTIONS, ToolBox, ToolError
 from pixelcat.llm.watch import KINDS

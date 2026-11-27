@@ -34,8 +34,8 @@ sys.path.insert(0, str(ROOT))
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from pixelcat import installer  # noqa: E402
-from pixelcat.desktop import hardware  # noqa: E402
-from pixelcat.desktop.hardware import Gpu, Hardware  # noqa: E402
+from pixelcat.adapters.windows import hardware  # noqa: E402
+from pixelcat.adapters.windows.hardware import Gpu, Hardware  # noqa: E402
 from pixelcat.llm import models  # noqa: E402
 
 app = QApplication(sys.argv[:1])
@@ -160,7 +160,7 @@ def main() -> int:  # noqa: C901 - a linear test script
 def app_checks() -> None:
     from pixelcat import persistence
     from pixelcat.app import PixelCatApp
-    from pixelcat.desktop import win32
+    from pixelcat.adapters.windows import win32
     from pixelcat.llm.model_status import ONLINE_ONLY
     from pixelcat.logsetup import setup_logging
     from pixelcat.settings import load_config

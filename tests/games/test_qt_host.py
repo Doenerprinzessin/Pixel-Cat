@@ -14,7 +14,7 @@ from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QImage, QMouseEvent
 from PySide6.QtWidgets import QApplication, QWidget
 
-from pixelcat.desktop import inputs, win32
+from pixelcat.adapters.windows import inputs, win32
 from pixelcat.games import GAMES, art
 from pixelcat.games import qt_host as qh
 from pixelcat.games.base import Host

@@ -15,7 +15,7 @@ import os
 import shutil
 from pathlib import Path
 
-from ..domain.hardware import Gpu, Hardware  # noqa: F401 - re-exported
+from ...domain.hardware import Gpu, Hardware  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 

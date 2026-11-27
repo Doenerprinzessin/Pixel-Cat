@@ -139,7 +139,7 @@ def test_poll_makes_the_ball_clickable_under_the_pointer(desktop, ballwin: BallO
 
 
 def test_a_lost_release_drops_the_ball(desktop, ballwin: BallOverlay, game, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.desktop import win32
+    from pixelcat.adapters.windows import win32
 
     game.start()
     ballwin.sync(2)

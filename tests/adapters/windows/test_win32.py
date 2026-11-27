@@ -1,12 +1,12 @@
-"""pixelcat.desktop.win32: the thin Win32 helpers (mocked DLLs)."""
+"""pixelcat.adapters.windows.win32: the thin Win32 helpers (mocked DLLs)."""
 from __future__ import annotations
 
 import pytest
 
 from ctypes import wintypes
 
-from desktop.fakes import FakeDLL, by_hwnd, fill_text, out
-from pixelcat.desktop import win32
+from adapters.windows.fakes import FakeDLL, by_hwnd, fill_text, out
+from pixelcat.adapters.windows import win32
 
 T = win32.WS_EX_TRANSPARENT
 

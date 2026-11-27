@@ -26,7 +26,7 @@ from PySide6.QtCore import QEvent, Qt  # noqa: E402
 from PySide6.QtGui import QKeyEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from pixelcat.desktop import win32  # noqa: E402
+from pixelcat.adapters.windows import win32  # noqa: E402
 from pixelcat.logsetup import setup_logging  # noqa: E402
 
 results: list[tuple[str, bool, str]] = []
@@ -669,7 +669,7 @@ def main() -> int:
     m._activate(row("games"))
     check("...and stays where you put it when a section folds open", (m.pos().x(), m.pos().y()) ==
           (moved.x(), moved.y()), f"{(m.pos().x(), m.pos().y())}")
-    from pixelcat.desktop import system
+    from pixelcat.adapters.windows import system
 
     check("'Start with Windows' shows the real setting (not changed by this test)",
           next(c for c in sets if c.key == "autostart").checked is system.autostart_enabled())

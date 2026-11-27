@@ -1,4 +1,4 @@
-"""pixelcat.desktop.capture: screen/window capture to QImage and PNG/base64 (mocked GDI)."""
+"""pixelcat.adapters.windows.capture: screen/window capture to QImage and PNG/base64 (mocked GDI)."""
 from __future__ import annotations
 
 import base64
@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtGui import QColor, QImage
 
-from desktop.fakes import FakeDLL, by_hwnd, enum_windows, out, raising
-from pixelcat.desktop import capture
+from adapters.windows.fakes import FakeDLL, by_hwnd, enum_windows, out, raising
+from pixelcat.adapters.windows import capture
 
 pytestmark = pytest.mark.qt
 

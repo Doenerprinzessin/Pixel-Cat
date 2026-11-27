@@ -27,8 +27,8 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 app = QApplication(sys.argv[:1])
-from pixelcat.desktop import ledges as L  # noqa: E402
-from pixelcat.desktop.ledges import LedgeFinder, find_tops  # noqa: E402
+from pixelcat.adapters.windows import ledges as L  # noqa: E402
+from pixelcat.adapters.windows.ledges import LedgeFinder, find_tops  # noqa: E402
 from pixelcat.domain import WinInfo  # noqa: E402
 
 results: list[tuple[str, bool, str]] = []
@@ -166,9 +166,9 @@ def main() -> int:  # noqa: C901 - a linear test script
           60 <= len(found) <= 140 and ms < 600, f"{ms:.0f} ms, {len(found)} surfaces")
 
     if "--live" in sys.argv:                  # the real screen, in memory; prints counts only
-        from pixelcat.desktop import win32
-        from pixelcat.desktop.monitors import enumerate_monitors, primary
-        from pixelcat.desktop.windows import enumerate_windows
+        from pixelcat.adapters.windows import win32
+        from pixelcat.adapters.windows.monitors import enumerate_monitors, primary
+        from pixelcat.adapters.windows.windows import enumerate_windows
 
         win32.set_dpi_awareness()
         mon = primary(enumerate_monitors())

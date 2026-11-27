@@ -7,7 +7,7 @@ import types
 import pytest
 
 from pixelcat import installer, logsetup
-from pixelcat.desktop import system, win32
+from pixelcat.adapters.windows import system, win32
 
 
 @pytest.fixture

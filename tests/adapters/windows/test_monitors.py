@@ -1,13 +1,13 @@
-"""pixelcat.desktop.monitors: monitor enumeration (mocked DLLs).
+"""pixelcat.adapters.windows.monitors: monitor enumeration (mocked DLLs).
 
 Monitor geometry, monitor_at and primary are plain data: tests/domain/test_monitors.py.
 """
 from __future__ import annotations
 
-from desktop.fakes import out
+from adapters.windows.fakes import out
 from pixelcat import domain
-from pixelcat.desktop import monitors, win32
-from pixelcat.desktop.monitors import enumerate_monitors
+from pixelcat.adapters.windows import monitors, win32
+from pixelcat.adapters.windows.monitors import enumerate_monitors
 from pixelcat.domain import Monitor
 
 

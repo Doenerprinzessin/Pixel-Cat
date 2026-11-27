@@ -57,7 +57,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     from PySide6.QtCore import QObject, Signal
     from PySide6.QtWidgets import QApplication
 
-    from pixelcat.desktop import win32
+    from pixelcat.adapters.windows import win32
     from pixelcat.logsetup import setup_logging
 
     setup_logging(False)
@@ -66,7 +66,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     app.setQuitOnLastWindowClosed(False)
     from pixelcat import app as app_mod
     from pixelcat.app import PixelCatApp
-    from pixelcat.desktop import notifications as nf
+    from pixelcat.adapters.windows import notifications as nf
     from pixelcat.llm.agent import ToolOutput
     from pixelcat.llm.tools import ToolError
     from pixelcat.llm.watch import Watch, WatchManager

@@ -1,4 +1,4 @@
-"""pixelcat.desktop.inputs: SendInput keyboard/mouse/touch, focus and clipboard (mocked DLLs).
+"""pixelcat.adapters.windows.inputs: SendInput keyboard/mouse/touch, focus and clipboard (mocked DLLs).
 
 Nothing here reaches the real user32: ``inputs.u32``/``k32``/``advapi32`` and the win32
 handles are fake DLLs, and ``inputs.time`` is a virtual clock (no real waiting).
@@ -11,9 +11,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from desktop.fakes import FakeDLL, out, raising
+from adapters.windows.fakes import FakeDLL, out, raising
 from pixelcat import domain
-from pixelcat.desktop import inputs
+from pixelcat.adapters.windows import inputs
 
 VK_CTRL, VK_SHIFT, VK_ALT, VK_WIN, VK_RETURN, VK_TAB = 0x11, 0x10, 0x12, 0x5B, 0x0D, 0x09
 

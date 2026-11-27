@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from pixelcat.desktop import capture, control, elevation, inputs, uia, volume, win32
-from pixelcat.desktop.control import AppWindow
+from pixelcat.adapters.windows import capture, control, elevation, inputs, uia, volume, win32
+from pixelcat.adapters.windows.control import AppWindow
 from pixelcat.llm import agent as agent_mod
 from pixelcat.llm import tools as tools_mod
 from pixelcat.llm.tools import AppHooks

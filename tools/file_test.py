@@ -33,7 +33,7 @@ def check(name: str, ok: bool, info: str = "") -> None:
 def main() -> int:  # noqa: C901 - a linear test script
     from PySide6.QtWidgets import QApplication
 
-    from pixelcat.desktop import win32
+    from pixelcat.adapters.windows import win32
     from pixelcat.logsetup import setup_logging
 
     setup_logging(False)

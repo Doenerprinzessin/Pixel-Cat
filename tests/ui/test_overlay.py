@@ -112,7 +112,7 @@ def test_cursor_poll_turns_click_through_off_over_the_cat(desktop, overlay: CatO
 
 
 def test_passthrough_keeps_the_window_click_through(desktop, overlay: CatOverlay, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.desktop import inputs
+    from pixelcat.adapters.windows import inputs
 
     monkeypatch.setattr(inputs, "passthrough_active", lambda: True)
     desktop.cursor = _on_cat(overlay)
@@ -192,7 +192,7 @@ def test_holding_the_button_pets_instead_of_clicking(desktop, overlay: CatOverla
 
 
 def test_a_release_that_went_elsewhere_ends_the_drag(desktop, overlay: CatOverlay, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.desktop import win32
+    from pixelcat.adapters.windows import win32
 
     got = _signals(overlay)
     x, y = desktop.cursor = _on_cat(overlay)

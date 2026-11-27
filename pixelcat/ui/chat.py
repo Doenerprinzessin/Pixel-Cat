@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButt
                                QVBoxLayout, QWidget)
 
 from .. import naming
-from ..desktop import win32
+from ..adapters.windows import win32
 from ..sprites.library import SpriteLibrary, render_text
 from . import theme
 from .geometry import Rect, phys_to_qt, place_near

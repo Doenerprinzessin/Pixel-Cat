@@ -19,7 +19,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from ..domain.notifications import Notification, app_matches, badge_count, friendly  # noqa: F401 - re-exported
+from ...domain.notifications import Notification, app_matches, badge_count, friendly  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 

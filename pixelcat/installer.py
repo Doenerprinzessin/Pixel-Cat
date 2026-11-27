@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import __version__, paths
-from .desktop import elevation, system
+from .adapters.windows import elevation, system
 
 log = logging.getLogger(__name__)
 
@@ -321,7 +321,7 @@ class AiPlan:
     model_ready: bool          # already downloaded
     ram_gb: float
     choice: str = ""           # a model tag, "online", "keep" (what's set up now) or "none"
-    hw: Any = None             # this PC (desktop.hardware.Hardware)
+    hw: Any = None             # this PC (domain.Hardware)
     advice: Any = None         # what suits it (llm.models.Advice)
     current: str = ""          # what the cat uses now ("" on a new install)
     current_ok: bool = False   # ...and it suits this PC: "keep" is offered
@@ -433,7 +433,7 @@ def _user_config(lay: Layout) -> dict[str, Any]:
 
 def ai_plan(lay: Layout, updating: bool | None = None) -> AiPlan:
     """What the AI part should do on this PC: looks at the hardware and recommends."""
-    from .desktop.hardware import detect
+    from .adapters.windows.hardware import detect
     from .llm import models
     from .llm.external import parse
     from .llm.model_status import find_ollama_app, model_on_disk
@@ -645,7 +645,7 @@ def _make_window_class():  # type: ignore[no-untyped-def]
     from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
                                    QWidget)
 
-    from .desktop.monitors import enumerate_monitors
+    from .adapters.windows.monitors import enumerate_monitors
     from .domain import primary
     from .sprites.cat_art import Pose
     from .sprites.library import render_text

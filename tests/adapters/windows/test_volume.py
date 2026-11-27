@@ -1,4 +1,4 @@
-"""pixelcat.desktop.volume: master volume via raw COM vtables (fake in-memory COM objects)."""
+"""pixelcat.adapters.windows.volume: master volume via raw COM vtables (fake in-memory COM objects)."""
 from __future__ import annotations
 
 import ctypes
@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from desktop.fakes import FakeCom, FakeDLL, write_ptr
-from pixelcat.desktop import volume
+from adapters.windows.fakes import FakeCom, FakeDLL, write_ptr
+from pixelcat.adapters.windows import volume
 
 P = ctypes.c_void_p
 

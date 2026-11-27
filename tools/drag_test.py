@@ -26,7 +26,7 @@ os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from pixelcat.desktop import win32  # noqa: E402
+from pixelcat.adapters.windows import win32  # noqa: E402
 from pixelcat.logsetup import setup_logging  # noqa: E402
 
 WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0200, 0x0201, 0x0202

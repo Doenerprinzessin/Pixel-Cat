@@ -16,7 +16,7 @@ from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QMouseEvent, QPainter, QPaintEvent
 from PySide6.QtWidgets import QWidget
 
-from ..desktop import inputs, win32
+from ..adapters.windows import inputs, win32
 from ..engine.brain import Brain
 from ..settings import Tuning
 from ..sprites.library import CatFrame, SpriteLibrary

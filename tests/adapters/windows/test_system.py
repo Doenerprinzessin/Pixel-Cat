@@ -1,4 +1,4 @@
-"""pixelcat.desktop.system: single instance, quit request, autostart, activity, lock screen (mocked)."""
+"""pixelcat.adapters.windows.system: single instance, quit request, autostart, activity, lock screen (mocked)."""
 from __future__ import annotations
 
 import ctypes
@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from desktop.fakes import FakeDLL, raising
-from pixelcat.desktop import system, win32
+from adapters.windows.fakes import FakeDLL, raising
+from pixelcat.adapters.windows import system, win32
 
 
 @pytest.fixture
@@ -104,7 +104,8 @@ def test_launch_command_from_source(monkeypatch, tmp_path):
     exe = tmp_path / "python.exe"
     monkeypatch.setattr(sys, "executable", str(exe))
     monkeypatch.delattr(sys, "frozen", raising=False)
-    main = Path(system.__file__).resolve().parent.parent.parent / "main.py"
+    main = Path(__file__).resolve().parents[3] / "main.py"     # the repo's main.py, wherever the adapter lives
+    assert main.is_file()
     assert system.launch_command() == f'"{exe}" "{main}"'
     (tmp_path / "pythonw.exe").write_text("")
     assert system.launch_command() == f'"{tmp_path / "pythonw.exe"}" "{main}"'

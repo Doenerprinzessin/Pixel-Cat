@@ -22,8 +22,8 @@ from ctypes import wintypes
 from pathlib import Path
 
 from . import win32
-from ..domain.processes import KillPlan, Proc  # noqa: F401 - re-exported
-from ..domain.windows import _ALIASES, AppWindow, find_windows  # noqa: F401 - re-exported
+from ...domain.processes import KillPlan, Proc  # noqa: F401 - re-exported
+from ...domain.windows import _ALIASES, AppWindow, find_windows  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 

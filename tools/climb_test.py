@@ -74,7 +74,7 @@ def main() -> int:
 
     from PySide6.QtWidgets import QApplication
 
-    from pixelcat.desktop import win32
+    from pixelcat.adapters.windows import win32
     from pixelcat.logsetup import setup_logging
 
     setup_logging(False)
@@ -120,7 +120,7 @@ def main() -> int:
     pump(2.0)
     test_tops = [t for t in b.smap.tops if b.win_rects.get(t.hwnd) and t.hwnd in pet._known_hwnds]
     by_hwnd = {}
-    for w in __import__("pixelcat.desktop.windows", fromlist=["x"]).enumerate_windows(pet.own_pid):
+    for w in __import__("pixelcat.adapters.windows.windows", fromlist=["x"]).enumerate_windows(pet.own_pid):
         if w.title.startswith("PixelCat test window") and w.title[-1] not in by_hwnd:
             by_hwnd[w.title[-1]] = w.hwnd       # (the topmost one, should an old one be left over)
     check("test windows detected as surfaces", all(any(t.hwnd == h for t in test_tops) for h in by_hwnd.values()),

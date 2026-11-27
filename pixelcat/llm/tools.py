@@ -124,8 +124,8 @@ class ToolBox:
         self.specs[name] = ToolSpec(name, desc, props, required, confirm, run, describe, llm, background, group)
 
     def _register(self) -> None:
-        from ..desktop import control
-        from ..desktop.inputs import BUTTONS
+        from ..adapters.windows import control
+        from ..adapters.windows.inputs import BUTTONS
 
         apps = sorted(self.cfg.apps)
         s = {"type": "string"}
@@ -380,7 +380,7 @@ class ToolBox:
                     continue
                 raise ToolError(f"missing argument '{req}'")
         if name == "open_app":
-            from ..desktop import control
+            from ..adapters.windows import control
 
             key = str(a["name"]).strip().lower()
             if key in self.cfg.apps:
@@ -391,14 +391,14 @@ class ToolBox:
                     raise ToolError(f"I can't find an app called '{a['name']}'")
                 a["_target"], a["_label"] = hit[1], f"'{hit[0]}' (Start menu)"
             a["name"] = key
-            from ..desktop import elevation
+            from ..adapters.windows import elevation
 
             if elevation.needs_admin(a["_target"]) or str(a["_target"]) in self._admin_seen:
                 a["_admin"] = True
                 a["_confirm"] = "hard"          # no ALWAYS for admin things
                 a["_force_confirm"] = True      # ...and asked even in auto mode
         elif name in ("window_action", "close_app"):
-            from ..desktop import control
+            from ..adapters.windows import control
 
             target = str(a["target"]).strip()
             wins = control.find_windows(target, control.list_app_windows(self.hooks.own_pid))
@@ -423,14 +423,14 @@ class ToolBox:
             except AgentError as exc:
                 raise ToolError(str(exc)) from None
         elif name == "force_end":
-            from ..desktop import control
+            from ..adapters.windows import control
 
             try:
                 a["_plan"] = control.plan_force_end(str(a["target"]), self.hooks.own_pid)
             except ValueError as exc:
                 raise ToolError(str(exc)) from None
         elif name == "run_as_admin":
-            from ..desktop import control
+            from ..adapters.windows import control
 
             key = str(a["name"]).strip().lower()
             if key in self.cfg.apps and not re.match(r"^[a-z][a-z0-9+.-]*:", self.cfg.apps[key][0], re.I):
@@ -448,14 +448,14 @@ class ToolBox:
                 raise ToolError("empty search")
             a["query"] = q[:300]
         elif name == "open_settings":
-            from ..desktop import control
+            from ..adapters.windows import control
 
             page = str(a["page"]).strip().lower()
             if page not in control.SETTINGS_PAGES:
                 raise ToolError(f"unknown settings page '{page}'")
             a["page"] = page
         elif name == "media_control":
-            from ..desktop import control
+            from ..adapters.windows import control
 
             act = str(a["action"]).strip().lower().replace("/", "_").replace(" ", "_")
             act = {"play": "play_pause", "pause": "play_pause", "prev": "previous", "skip": "next"}.get(act, act)
@@ -592,7 +592,7 @@ class ToolBox:
 
     @staticmethod
     def _vscode_exe() -> str | None:
-        from ..desktop import control, elevation
+        from ..adapters.windows import control, elevation
 
         hit = control.find_shortcut("visual studio code")
         if hit is not None and str(hit[1]).lower().endswith(".lnk"):
@@ -658,7 +658,7 @@ class ToolBox:
                   required: bool = True) -> tuple[tuple, int, str] | None:
         """``{prefix}element`` or ``{prefix}x``/``{prefix}y`` -> (ref for the agent, the window there, a
         description).  The window is the one at that spot now when the screenshot was of the whole screen."""
-        from ..desktop import inputs, win32
+        from ..adapters.windows import inputs, win32
 
         ag = self.agent
         eid = self._element_arg(a, prefix + "element")
@@ -723,7 +723,7 @@ class ToolBox:
         return pts
 
     def _prepare_watch(self, a: dict[str, Any]) -> None:
-        from ..desktop import control, win32
+        from ..adapters.windows import control, win32
         from .agent import SENSITIVITY, control_monitor
 
         ag = self.agent
@@ -795,7 +795,7 @@ class ToolBox:
             else:
                 a["_hwnd"], a["_label"] = 0, "your screen"
         elif name == "click":
-            from ..desktop.inputs import BUTTONS
+            from ..adapters.windows.inputs import BUTTONS
 
             button = str(a.get("button") or "left").strip().lower()
             button = {"primary": "left", "secondary": "right", "wheel": "middle", "x1": "back", "x2": "forward",
@@ -897,7 +897,7 @@ class ToolBox:
             if ag.is_command_line(a["_hwnd"]):
                 a["_force_confirm"] = True
         elif name == "press_keys":
-            from ..desktop import inputs
+            from ..adapters.windows import inputs
 
             raw = str(a["keys"]).strip()
             parts = [p for p in re.split(r"[\s,;]+", re.sub(r"\s*\+\s*", "+", raw)) if p]
@@ -948,7 +948,7 @@ class ToolBox:
             a["seconds"] = max(0.5, min(10.0, secs))
 
     def _prepare_wait(self, a: dict[str, Any]) -> None:  # noqa: C901 - one branch per event
-        from ..desktop.notifications import friendly
+        from ..adapters.windows.notifications import friendly
         from .watch import DEFAULT_MINUTES, KINDS, MAX_MINUTES, Watch
 
         if self.hooks.watches is None:
@@ -1280,7 +1280,7 @@ class ToolBox:
 
     @staticmethod
     def _force_end(a: dict[str, Any]) -> str:
-        from ..desktop import control
+        from ..adapters.windows import control
 
         plan = a["_plan"]
         name = ", ".join(plan.exes[:3])
@@ -1297,7 +1297,7 @@ class ToolBox:
     @staticmethod
     def force_end_admin(denied: list[int]) -> str:
         """Second step of /force end, only after the user said yes to using admin rights."""
-        from ..desktop import control
+        from ..adapters.windows import control
 
         ok, why = control.force_end_elevated(denied)
         still = control.alive(denied)
@@ -1309,13 +1309,13 @@ class ToolBox:
 
     @staticmethod
     def _run_as_admin(a: dict[str, Any]) -> str:
-        from ..desktop import control
+        from ..adapters.windows import control
 
         ok, why = control.run_as_admin(a["_target"])
         return f"Started {a['_label']} as administrator." if ok else f"Couldn't start {a['_label']} as admin: {why}."
 
     def _list_windows(self, _a: dict[str, Any]) -> str:
-        from ..desktop import control
+        from ..adapters.windows import control
 
         wins = control.list_app_windows(self.hooks.own_pid)
         if not wins:
@@ -1324,7 +1324,7 @@ class ToolBox:
 
     @staticmethod
     def _window_action(a: dict[str, Any]) -> str:
-        from ..desktop import control
+        from ..adapters.windows import control
 
         control.window_action(a["_win"], a["action"])
         past = {"focus": "Switched to", "minimize": "Minimized", "maximize": "Maximized", "restore": "Restored"}
@@ -1332,7 +1332,7 @@ class ToolBox:
 
     @staticmethod
     def _close_app(a: dict[str, Any]) -> str:
-        from ..desktop import control
+        from ..adapters.windows import control
 
         n = control.close_windows(a["_wins"])
         return f"Asked {n} window(s) to close: " + "; ".join(w.label() for w in a["_wins"])
@@ -1357,14 +1357,14 @@ class ToolBox:
 
     @staticmethod
     def _open_settings(a: dict[str, Any]) -> str:
-        from ..desktop import control
+        from ..adapters.windows import control
 
         control.launch(control.SETTINGS_PAGES[a["page"]])
         return f"Opened the {a['page']} settings."
 
     @staticmethod
     def _media(a: dict[str, Any]) -> str:
-        from ..desktop import control
+        from ..adapters.windows import control
 
         control.media_key(a["action"])
         return f"Pressed media {a['action'].replace('_', '/')}."
@@ -1397,20 +1397,20 @@ class ToolBox:
 
     @staticmethod
     def _get_volume(_a: dict[str, Any]) -> str:
-        from ..desktop import volume
+        from ..adapters.windows import volume
 
         level, muted = volume.get_volume()
         return f"Volume is {level}%{' (muted)' if muted else ''}."
 
     @staticmethod
     def _set_volume(a: dict[str, Any]) -> str:
-        from ..desktop import volume
+        from ..adapters.windows import volume
 
         return f"Volume set to {volume.set_volume(a['level'])}%."
 
     @staticmethod
     def _mute(a: dict[str, Any]) -> str:
-        from ..desktop import volume
+        from ..adapters.windows import volume
 
         volume.set_mute(a["muted"])
         return "Sound muted." if a["muted"] else "Sound unmuted."

@@ -18,9 +18,9 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
-from pixelcat.desktop import capture, control, elevation, escwatch, hardware, inputs, ledges, system, uia, volume, win32
-from pixelcat.desktop.monitors import enumerate_monitors
-from pixelcat.desktop.windows import (ctypes_rect, enumerate_windows, foreground_window, is_fullscreen_window,
+from pixelcat.adapters.windows import capture, control, elevation, escwatch, hardware, inputs, ledges, system, uia, volume, win32
+from pixelcat.adapters.windows.monitors import enumerate_monitors
+from pixelcat.adapters.windows.windows import (ctypes_rect, enumerate_windows, foreground_window, is_fullscreen_window,
                                       window_exists)
 from pixelcat.domain import monitor_at, primary
 

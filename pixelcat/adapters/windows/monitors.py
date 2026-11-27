@@ -6,7 +6,7 @@ import logging
 from ctypes import wintypes
 
 from . import win32
-from ..domain.monitors import Monitor, monitor_at, primary  # noqa: F401 - re-exported
+from ...domain.monitors import Monitor, monitor_at, primary  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 

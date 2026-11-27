@@ -8,7 +8,7 @@ import ctypes
 import logging
 
 from . import win32
-from ..domain.windows import WinInfo  # noqa: F401 - re-exported
+from ...domain.windows import WinInfo  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 

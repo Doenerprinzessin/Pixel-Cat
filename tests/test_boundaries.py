@@ -1,4 +1,4 @@
-"""Import boundaries: the domain types and the cat/game core stay free of the Win32 desktop layer.
+"""Import boundaries: the domain types and the cat/game core stay free of the platform adapters.
 
 Static checks read every import (including the lazy ones inside functions) with ``ast``; the runtime
 check imports the core in a fresh interpreter without the Windows shim and looks at ``sys.modules``.
@@ -17,9 +17,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "pixelcat"
 
-# The platform-independent core: it may use pixelcat.domain, never pixelcat.desktop.
+# The platform-independent core: it may use pixelcat.domain, never pixelcat.adapters (nor the old pixelcat.desktop).
 CORE = ["engine", "games", "sprites", "domain", "settings.py", "progress.py"]
-# Qt glue that still calls Win32 directly; PR 2 puts these calls behind desktop ports.
+# Qt glue that still calls Win32 directly; a later slice of PR 2 puts these calls behind desktop ports.
 CORE_EXCEPTIONS = {"games/qt_host.py"}
 
 
@@ -75,9 +75,15 @@ def test_domain_imports_only_stdlib_and_itself(path):
 
 
 @pytest.mark.parametrize("path", [p for p in _files(*CORE) if _rel(p) not in CORE_EXCEPTIONS], ids=_rel)
-def test_core_does_not_import_desktop(path):
-    bad = sorted(name for name in _imports(path) if _is(name, "pixelcat.desktop"))
+def test_core_does_not_import_adapters(path):
+    bad = sorted(name for name in _imports(path) if _is(name, "pixelcat.adapters") or _is(name, "pixelcat.desktop"))
     assert not bad, f"pixelcat/{_rel(path)} imports {bad}; use pixelcat.domain (or a port) instead"
+
+
+def test_the_old_desktop_package_is_gone():
+    # a stale __pycache__ folder from an old checkout may stay behind; source files may not
+    left = sorted(p.relative_to(PKG).as_posix() for p in (PKG / "desktop").rglob("*.py"))
+    assert not left, f"pixelcat/desktop is now pixelcat/adapters/windows: don't add it back ({left})"
 
 
 def test_core_exceptions_still_exist():
@@ -89,9 +95,10 @@ def test_import_scanner_resolves_relative_and_lazy_imports(tmp_path):
     pkg = tmp_path / "pixelcat" / "engine"
     pkg.mkdir(parents=True)
     src = pkg / "x.py"
-    src.write_text("from ..desktop.windows import WinInfo\ndef f():\n    from ..desktop import win32\n",
+    src.write_text("from ..adapters.windows.windows import WinInfo\ndef f():\n    from ..adapters.windows import win32\n",
                    encoding="utf-8")
-    assert {"pixelcat.desktop.windows", "pixelcat.desktop", "pixelcat.desktop.win32"} <= _imports(src, tmp_path)
+    assert {"pixelcat.adapters.windows.windows", "pixelcat.adapters.windows",
+            "pixelcat.adapters.windows.win32"} <= _imports(src, tmp_path)
 
 
 def _loaded_after(code: str) -> set[str]:
@@ -103,12 +110,12 @@ def _loaded_after(code: str) -> set[str]:
     return set(res.stdout.split())
 
 
-def test_domain_loads_without_ctypes_qt_or_desktop():
+def test_domain_loads_without_ctypes_qt_or_adapters():
     loaded = _loaded_after("import pixelcat.domain")
-    assert not {m for m in loaded if _is(m, "pixelcat.desktop") or _is(m, "PySide6") or _is(m, "ctypes")}
+    assert not {m for m in loaded if _is(m, "pixelcat.adapters") or _is(m, "PySide6") or _is(m, "ctypes")}
 
 
-def test_cat_and_game_logic_load_without_desktop():
+def test_cat_and_game_logic_load_without_adapters():
     loaded = _loaded_after("""
         import pkgutil, importlib
         import pixelcat.engine, pixelcat.games
@@ -118,4 +125,4 @@ def test_cat_and_game_logic_load_without_desktop():
                     importlib.import_module(m.name)
     """)
     assert "pixelcat.games.mice" in loaded and "pixelcat.engine.brain" in loaded
-    assert not {m for m in loaded if _is(m, "pixelcat.desktop")}
+    assert not {m for m in loaded if _is(m, "pixelcat.adapters")}

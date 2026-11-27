@@ -1,6 +1,6 @@
-"""Platform-free domain types shared by the core (engine, games) and the desktop layer.
+"""Platform-free domain types shared by the core (engine, games) and the platform adapters.
 
-Nothing in this package may import ctypes, Qt or ``pixelcat.desktop`` (tests/test_boundaries.py).
+Nothing in this package may import ctypes, Qt or ``pixelcat.adapters`` (tests/test_boundaries.py).
 """
 from __future__ import annotations
 

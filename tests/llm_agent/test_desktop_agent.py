@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from llm_agent.agent_fakes import OWN_PID, SCREEN, el
-from pixelcat.desktop import inputs, monitors, uia
+from pixelcat.adapters.windows import inputs, monitors, uia
 from pixelcat.domain import Monitor
 from pixelcat.llm import agent as agent_mod
 from pixelcat.llm import watch as watch_mod

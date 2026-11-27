@@ -34,7 +34,7 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from pixelcat import installer  # noqa: E402
-from pixelcat.desktop import win32  # noqa: E402
+from pixelcat.adapters.windows import win32  # noqa: E402
 from pixelcat.llm.model_status import ModelStatus, model_on_disk, same_model  # noqa: E402
 from pixelcat.settings import Config  # noqa: E402
 

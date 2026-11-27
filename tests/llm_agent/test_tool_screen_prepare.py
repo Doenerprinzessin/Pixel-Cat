@@ -5,7 +5,7 @@ import pytest
 
 from llm_agent.agent_fakes import OWN_PID, el
 from pixelcat import domain
-from pixelcat.desktop import uia
+from pixelcat.adapters.windows import uia
 from pixelcat.llm import tools
 from pixelcat.llm.agent import Shot
 from pixelcat.llm.tools import ToolBox, ToolError

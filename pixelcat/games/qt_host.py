@@ -19,7 +19,7 @@ from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPaintEvent, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ..desktop import inputs, win32
+from ..adapters.windows import inputs, win32
 from ..sprites.library import SpriteLibrary, canvas_to_image, scaled_pixmap
 from ..ui import theme
 from ..ui.geometry import Rect, phys_to_qt, place_near

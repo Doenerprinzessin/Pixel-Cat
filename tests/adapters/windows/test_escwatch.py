@@ -1,13 +1,13 @@
-"""pixelcat.desktop.escwatch: the emergency-stop Esc hook (mocked user32/kernel32)."""
+"""pixelcat.adapters.windows.escwatch: the emergency-stop Esc hook (mocked user32/kernel32)."""
 from __future__ import annotations
 
 import ctypes
 
 import pytest
 
-from desktop.fakes import FakeDLL
-from pixelcat.desktop import escwatch
-from pixelcat.desktop.escwatch import KBDLLHOOKSTRUCT, EscWatcher
+from adapters.windows.fakes import FakeDLL
+from pixelcat.adapters.windows import escwatch
+from pixelcat.adapters.windows.escwatch import KBDLLHOOKSTRUCT, EscWatcher
 
 
 @pytest.fixture

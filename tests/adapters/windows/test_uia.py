@@ -1,4 +1,4 @@
-"""pixelcat.desktop.uia: reading other apps through UI Automation.
+"""pixelcat.adapters.windows.uia: reading other apps through UI Automation.
 
 The COM calls go through ``uia._call``; the tests replace it with a dispatcher over fake
 Python objects (``FakeUia``), so the Client logic (filtering, ordering, ids, text
@@ -12,10 +12,10 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from desktop.fakes import FakeCom, FakeDLL, raising, write_ptr
+from adapters.windows.fakes import FakeCom, FakeDLL, raising, write_ptr
 from pixelcat import domain
-from pixelcat.desktop import uia
-from pixelcat.desktop.uia import Element, Snapshot
+from pixelcat.adapters.windows import uia
+from pixelcat.adapters.windows.uia import Element, Snapshot
 
 BUTTON, EDIT, TEXT, LISTITEM, DOCUMENT, CHECKBOX, PANE = 50000, 50004, 50020, 50007, 50030, 50002, 50033
 

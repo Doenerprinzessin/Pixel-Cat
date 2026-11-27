@@ -38,7 +38,7 @@ def main() -> int:
     args = parser.parse_args()
 
     from pixelcat import paths
-    from pixelcat.desktop import system, win32
+    from pixelcat.adapters.windows import system, win32
     from pixelcat.logsetup import setup_logging
 
     setup_logging(args.debug)

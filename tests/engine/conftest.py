@@ -143,7 +143,7 @@ def grounded_brain() -> Brain:
 def engine_stays_off_the_desktop(monkeypatch: pytest.MonkeyPatch, fake_dll):
     """The engine is pure logic: give the Win32 layer fresh fakes (so nothing real is ever
     reached, on Windows too) and fail if engine code called into it during the test."""
-    from pixelcat.desktop import win32
+    from pixelcat.adapters.windows import win32
 
     fakes = {}
     for name in ("user32", "kernel32", "dwmapi", "shell32", "shcore"):

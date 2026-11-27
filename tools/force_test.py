@@ -42,7 +42,7 @@ def check(name: str, ok: bool, info: str = "") -> None:
 def main() -> int:
     from PySide6.QtWidgets import QApplication
 
-    from pixelcat.desktop import control, win32
+    from pixelcat.adapters.windows import control, win32
     from pixelcat.logsetup import setup_logging
 
     setup_logging(False)
