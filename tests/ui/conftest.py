@@ -1,9 +1,9 @@
 """Stubs for the UI and ``PixelCatApp`` tests.
 
-Every desktop call the widgets and the app controller reach (Win32 window styles, the cursor,
-monitors, the window list, the registry, DPAPI, Ollama, the Copilot runtime, the browser) is
-replaced here, so the tests do the same on macOS and on a real Windows desktop.  Later PRs that
-move these functions behind ports only need to update the targets in this file.
+The widgets and the app controller reach the desktop (window styles, the cursor, monitors, the window
+list, the PC, DPAPI...) only through the ports of ``fake_platform``; what those ports answer comes from
+:class:`Desktop` here.  Ollama, the Copilot runtime and the browser are replaced too, so the tests do the
+same on macOS and on a real Windows desktop.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from pixelcat.domain import Monitor
+from pixelcat.domain import Hardware, Monitor, UserState
 
 MONITOR = Monitor(handle=1, rect=(0, 0, 1920, 1080), work=(0, 0, 1920, 1040), dpi=96, primary=True,
                   device="TEST1")
@@ -30,17 +30,8 @@ class Desktop:
     windows: list[Any] = field(default_factory=list)
     foreground: int = 0
     fullscreen: bool = False
-    notification_state: int = 5                     # QUNS_ACCEPTS_NOTIFICATIONS
+    user_state: UserState = UserState.NORMAL
     autostart: bool = False
-    calls: list[tuple] = field(default_factory=list)
-
-    def log(self, name: str):  # type: ignore[no-untyped-def]
-        def fn(*args: Any, **kwargs: Any) -> None:
-            self.calls.append((name, *args, *kwargs.values()))
-        return fn
-
-    def names(self) -> list[str]:
-        return [c[0] for c in self.calls]
 
 
 def _fake_protect(data: bytes) -> bytes:
@@ -56,37 +47,23 @@ def _fake_unprotect(blob: bytes) -> bytes:
 
 
 @pytest.fixture
-def desktop(monkeypatch: pytest.MonkeyPatch, fake_dll, fake_platform) -> Desktop:  # type: ignore[no-untyped-def]
-    """The Win32 calls the app controller still makes itself.  The overlay, the ball, the chat and the
-    minigame windows use the ports of ``fake_platform`` (their calls are recorded there); the pointer
-    they read is ``Desktop.cursor``."""
-    from pixelcat.adapters.windows import escwatch, inputs, win32
-
+def desktop(fake_platform) -> Desktop:  # type: ignore[no-untyped-def]
+    """What the ports of ``fake_platform`` report (the pointer, the monitors, the window list...).  The
+    overlay, the ball, the chat, the minigame windows and the app controller use those ports; their
+    calls are recorded there.  Everything else the ports answer is the null adapter's "nothing there"
+    (no window exists, none is cloaked, no frame bounds, Esc is never pressed...)."""
     d = Desktop()
-    fake_platform.input.answers("cursor_pos", lambda: d.cursor)
-    fake_platform.display.returns("window_dpi", 96)
-    monkeypatch.setattr(win32, "user32", fake_dll("user32"))
-    for name in ("set_click_through", "make_tool_noactivate", "move_window", "keep_topmost", "set_exstyle",
-                 "message_box"):
-        monkeypatch.setattr(win32, name, d.log(name))
-    monkeypatch.setattr(win32, "cursor_pos", lambda: d.cursor)
-    monkeypatch.setattr(win32, "release_went_elsewhere", lambda hwnd: False)
-    monkeypatch.setattr(win32, "left_button_down", lambda: d.buttons_down)
-    monkeypatch.setattr(win32, "has_mouse_capture", lambda hwnd: False)
-    monkeypatch.setattr(win32, "mouse_buttons_down", lambda: d.buttons_down)
-    monkeypatch.setattr(win32, "last_input_tick", lambda: 0)
-    monkeypatch.setattr(win32, "idle_seconds", lambda: d.idle)
-    monkeypatch.setattr(win32, "window_dpi", lambda hwnd: 96)
-    monkeypatch.setattr(win32, "notification_state", lambda: d.notification_state)
-    monkeypatch.setattr(win32, "window_pid", lambda hwnd: 4242)
-    monkeypatch.setattr(win32, "is_cloaked", lambda hwnd: False)
-    monkeypatch.setattr(win32, "frame_bounds", lambda hwnd: None)
-    monkeypatch.setattr(win32, "get_exstyle", lambda hwnd: 0)
-    monkeypatch.setattr(inputs, "passthrough_active", lambda: False)
-    hook_dll = fake_dll("user32")
-    hook_dll.SetWindowsHookExW.result = 0xBEEF                       # (a fake hook handle)
-    monkeypatch.setattr(escwatch, "_u32", hook_dll)                  # never a real keyboard hook
-    monkeypatch.setattr(escwatch, "_k32", fake_dll("kernel32"))
+    inp, disp, wins = fake_platform.input, fake_platform.display, fake_platform.windows
+    inp.answers("cursor_pos", lambda: d.cursor)
+    inp.answers("mouse_buttons_down", lambda: d.buttons_down)
+    inp.answers("idle_seconds", lambda: d.idle)
+    disp.returns("window_dpi", 96)
+    disp.answers("monitors", lambda: list(d.monitors))
+    disp.answers("user_state", lambda: d.user_state)
+    wins.answers("top_level", lambda own_pid, include=frozenset(): list(d.windows))
+    wins.answers("foreground", lambda: d.foreground)
+    wins.answers("is_fullscreen", lambda win, monitor_rect: d.fullscreen)
+    wins.returns("pid", 4242)
     return d
 
 
@@ -199,28 +176,18 @@ def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path, fake_pl
 
     import pixelcat.app as app_mod
     from pixelcat import persistence, settings
-    from pixelcat.adapters.windows import control, hardware, monitors, system
     from pixelcat.llm import model_status
     from pixelcat.sprites.library import SpriteLibrary
     from pixelcat.ui import tray
 
     env = AppEnv(desktop)
-    monkeypatch.setattr(app_mod, "enumerate_monitors", lambda: list(desktop.monitors))
-    monkeypatch.setattr(monitors, "enumerate_monitors", lambda: list(desktop.monitors))
-    monkeypatch.setattr(app_mod, "enumerate_windows", lambda own_pid, include=frozenset(): list(desktop.windows))
-    monkeypatch.setattr(app_mod, "foreground_window", lambda: desktop.foreground)
-    monkeypatch.setattr(app_mod, "is_fullscreen_window", lambda hwnd, rect: desktop.fullscreen)
     monkeypatch.setattr(app_mod, "save_state", lambda st, *a, **k: env.saved_states.append(st))
     monkeypatch.setattr(persistence, "last_load", "fresh")            # (another test may have loaded a save)
     monkeypatch.setattr(app_mod.PixelCatApp, "_documents", staticmethod(lambda: tmp_path / "Documents"))
     fake_platform.autostart.answers("enabled", lambda: desktop.autostart)
     fake_platform.autostart.answers("set", lambda on: (env.autostart_set.append(on), True)[1])
-    monkeypatch.setattr(system, "create_quit_event", lambda: 0)
-    monkeypatch.setattr(system, "quit_requested", lambda handle: False)
-    monkeypatch.setattr(system, "session_locked", lambda: False)
-    monkeypatch.setattr(control, "prefetch_store_apps", lambda: None)
     monkeypatch.setattr(SpriteLibrary, "prewarm", lambda self, poses, scale: 0)     # (a 1 s warm-up cache)
-    monkeypatch.setattr(hardware, "detect", lambda fresh=False: hardware.Hardware(
+    fake_platform.system.answers("hardware", lambda fresh=False: Hardware(
         ram_gb=32.0, cores=8, cpu="Test CPU", avx2=True, gpus=[], disk_free_gb=500.0))
     monkeypatch.setattr(model_status.ModelStatus, "ensure", lambda self, force=False: env.ensures.append(force))
     fake_platform.secrets.answers("protect", _fake_protect)

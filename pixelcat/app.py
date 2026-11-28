@@ -21,24 +21,19 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from . import naming, paths, persistence, progress
 from .chats import ChatStore, new_id
-from .adapters.windows import system, win32
-from .adapters.windows.monitors import enumerate_monitors
-from .adapters.windows.windows import enumerate_windows, foreground_window, is_fullscreen_window
-from .domain import Monitor, monitor_at, primary
+from .domain import Monitor, UserState, monitor_at, primary
+from .engine.activity import ActivityTracker
 from .engine.animations import all_poses
 from .engine.ballgame import BallGame
 from .engine.brain import Brain, Ctx
 from .engine.needs import Needs
 from .engine.states import STATES, S
 from .engine.surfaces import WINDOW_KINDS, SurfaceMap
-from .adapters.windows.ledges import LedgeFinder
-from .adapters.windows.escwatch import EscWatcher
 from .llm.agent import ToolOutput
 from .llm.model_status import ModelStatus
 from .llm.ollama_client import ChatWorker, friendly_error, parse_text_tool_calls, strip_tool_markup
 from .llm.prompt import build_system_prompt
 from .llm.tools import SCREEN_EYES, AppHooks, ToolBox, ToolError, ToolSpec
-from .adapters.windows import notifications
 from .llm.watch import Watch, WatchManager
 from .logsetup import RateLimitedLogger
 from .persistence import SavedState, save_state
@@ -48,6 +43,7 @@ from .sprites.library import SpriteLibrary
 from .ui.ball import BallOverlay
 from .ui.chat import GREETING, ChatWindow
 from .ui.dialogs import PixelDialog
+from .ui.ledges import LedgeFinder
 from .llm import external, models
 from .llm.model_status import model_on_disk
 from .ui import theme
@@ -144,7 +140,7 @@ class PixelCatApp(QObject):
         self.hidden_fullscreen = False
         self._chat_was_visible = False
         self._known_hwnds: set[int] | None = None
-        self.monitors: list[Monitor] = enumerate_monitors()
+        self.monitors: list[Monitor] = self.platform.display.monitors()
         log.info("monitors: %s", [(m.device, m.rect, m.dpi) for m in self.monitors])
 
         self.needs = Needs(saved.energy, saved.hunger, saved.mood)
@@ -155,7 +151,7 @@ class PixelCatApp(QObject):
             saved.hat = ""
         self.sprites = SpriteLibrary(saved.skin)       # Cosmetics -> Skins
         self.brain = Brain(self.t, self.needs)
-        self.activity = system.ActivityTracker()
+        self.activity = ActivityTracker(self.platform.input)
         self.overlay = CatOverlay(self.brain, self.sprites, self.t, windows=self.platform.windows,
                                   input=self.platform.input)
         self.overlay.hat = saved.hat                   # Cosmetics -> Hats
@@ -171,7 +167,7 @@ class PixelCatApp(QObject):
         # the minigames: their things (mice, shelves, the laser dot...) are small windows of their own
         self.mini: MiniGame | None = None
         self._real_wins: list[Any] = []                  # the last window list (props come on top)
-        self.ledges = LedgeFinder()                      # borders inside windows the cat can sit on
+        self.ledges = LedgeFinder(self.platform.capture)  # borders inside windows the cat can sit on
         self._ledge_t = -100.0
         self._ledge_sig: tuple = ()
         self._under_t = 0.0
@@ -256,7 +252,7 @@ class PixelCatApp(QObject):
         self._task_id = 0
         self._tool_thread: ToolThread | None = None
         self._live_tools: set[ToolThread] = set()
-        self.esc_watch = EscWatcher(self._on_escape)
+        self.esc_watch = self.platform.input.escape_watcher(self._on_escape)
 
         # overlay input -> brain
         ov = self.overlay
@@ -311,14 +307,13 @@ class PixelCatApp(QObject):
         self.overlay.sync(self.scale_for(mon))
         self.agent.overlay_hwnd = self.overlay.hwnd()
         self.tray.show()
-        from .adapters.windows import control
-        control.prefetch_store_apps()  # warm the Start-menu/Store app list in the background
+        self.platform.apps.prefetch()  # warm the Start-menu/Store app list in the background
         self.brain.set_state(S.LOAFING if self.quiet else S.SITTING, travel=False)
         for tm in (self.tick_timer, self.win_timer, self.mon_timer, self.fs_timer, self.save_timer,
                    self.top_timer, self.tray_timer):
             tm.start()
-        if not self.selftest or system.INSTANCE:
-            self._quit_event = system.create_quit_event()
+        if not self.selftest or self.platform.system.instance:
+            self._quit_event = self.platform.system.create_quit_event()
             self.quit_timer.start()
         if not self.saved.autostart_asked and not self.selftest:
             QTimer.singleShot(2500, self._ask_autostart)
@@ -473,7 +468,7 @@ class PixelCatApp(QObject):
             return
         try:
             self._own_hwnds = self._own_surfaces()
-            wins = enumerate_windows(self.own_pid, self._own_hwnds)
+            wins = self.platform.windows.top_level(self.own_pid, self._own_hwnds)
             self._real_wins = wins
             rects = {w.hwnd: w.rect for w in wins}
             if self._known_hwnds is not None and self.brain.mode == "ground" and not self._mini_active():
@@ -533,7 +528,7 @@ class PixelCatApp(QObject):
         if now - self._ledge_t < wait:
             return
         self._ledge_t = now
-        if system.session_locked():                      # (the lock screen: nothing to see)
+        if self.platform.display.session_locked():       # (the lock screen: nothing to see)
             return
         self._ledge_quick = max(0, self._ledge_quick - 1)
         own = [w.rect for w in self._real_wins if w.hwnd in self._own_hwnds]
@@ -565,11 +560,11 @@ class PixelCatApp(QObject):
             hwnd = b.wall.hwnd
         if hwnd <= 0 or any(p.hwnd == hwnd for p in self.host.props):
             return
-        u = win32.user32
+        w = self.platform.windows
         try:
             rect = None
-            if u.IsWindow(hwnd) and u.IsWindowVisible(hwnd) and not u.IsIconic(hwnd) and not win32.is_cloaked(hwnd):
-                rect = win32.frame_bounds(hwnd)
+            if w.exists(hwnd) and w.is_visible(hwnd) and not w.is_minimized(hwnd) and not w.is_cloaked(hwnd):
+                rect = w.frame_bounds(hwnd)
         except Exception:  # noqa: BLE001
             return
         if rect is None:
@@ -578,7 +573,7 @@ class PixelCatApp(QObject):
 
     def _refresh_monitors(self) -> None:
         try:
-            mons = enumerate_monitors()
+            mons = self.platform.display.monitors()
             if [(m.rect, m.work, m.dpi) for m in mons] != [(m.rect, m.work, m.dpi) for m in self.monitors]:
                 log.info("monitor layout changed: %s", [(m.device, m.rect, m.dpi) for m in mons])
                 self.monitors = mons
@@ -591,14 +586,14 @@ class PixelCatApp(QObject):
 
     def _check_fullscreen(self) -> None:
         try:
-            st = win32.notification_state()
-            hide = st == win32.QUNS_RUNNING_D3D_FULL_SCREEN or (
-                self.cfg.hide_during_presentations and st == win32.QUNS_PRESENTATION_MODE)
+            st = self.platform.display.user_state()
+            hide = st == UserState.FULLSCREEN_APP or (
+                self.cfg.hide_during_presentations and st == UserState.PRESENTATION)
             if not hide:
-                fg = foreground_window()
-                if fg and win32.window_pid(fg) != self.own_pid:
+                fg = self.platform.windows.foreground()
+                if fg and self.platform.windows.pid(fg) != self.own_pid:
                     mon = monitor_at(self.monitors, self.brain.x, self.brain.y - 1)
-                    hide = is_fullscreen_window(fg, mon.rect)
+                    hide = self.platform.windows.is_fullscreen(fg, mon.rect)
             if hide != self.hidden_fullscreen:
                 self._set_hidden(hide)
         except Exception:  # noqa: BLE001
@@ -628,7 +623,7 @@ class PixelCatApp(QObject):
             self._refresh_windows()
 
     def _check_quit_request(self) -> None:
-        if system.quit_requested(self._quit_event):
+        if self.platform.system.quit_requested(self._quit_event):
             log.info("Setup asked me to close (update or uninstall)")
             self.quit_timer.stop()
             self.quit()
@@ -638,7 +633,7 @@ class PixelCatApp(QObject):
             mini = self.mini if self._mini_active() else None
             if mini is None or not mini.cat_z_locked:     # hide and seek: the cat stays behind its window
                 try:
-                    win32.keep_topmost(self.overlay.hwnd())
+                    self.platform.windows.keep_topmost(self.overlay.hwnd())
                 except Exception:  # noqa: BLE001
                     pass
             self.ball_win.keep_on_top()   # the ball stays above the cat (it's in its mouth sometimes)
@@ -816,9 +811,7 @@ class PixelCatApp(QObject):
     def _advice(self) -> Any:
         """What suits this PC (looked at once)."""
         if getattr(self, "_pc_advice", None) is None:
-            from .adapters.windows.hardware import detect
-
-            self._hw = detect()
+            self._hw = self.platform.system.hardware()
             self._pc_advice = models.advise(self._hw)
         return self._pc_advice
 
@@ -2459,7 +2452,7 @@ class PixelCatApp(QObject):
             self.mini = None
         try:
             if self.overlay.hwnd():
-                win32.keep_topmost(self.overlay.hwnd())
+                self.platform.windows.keep_topmost(self.overlay.hwnd())
         except Exception:  # noqa: BLE001
             pass
         st = self.saved
@@ -3658,7 +3651,7 @@ class PixelCatApp(QObject):
             return
         typing = (self.chat is not None and self.chat.isVisible() and bool(self.chat.input.text().strip())
                   and getattr(self, "_typing_waits", 0) < 12)    # don't lock the box mid-sentence (max 1 min)
-        if typing or system.session_locked():
+        if typing or self.platform.display.session_locked():
             self._typing_waits = getattr(self, "_typing_waits", 0) + (1 if typing else 0)
             if not self._wake_timer.isActive():
                 self._wake_timer.start()
@@ -3703,7 +3696,7 @@ class PixelCatApp(QObject):
                                   QSystemTrayIcon.MessageIcon.Information, 15000)
 
     def _tray_message(self, title: str, text: str, icon: QSystemTrayIcon.MessageIcon, ms: int) -> None:
-        notifications.remember_own(title, text)   # a watch never wakes up on the cat's own pop-ups
+        self.platform.notifications.remember_own(title, text)   # a watch never wakes up on the cat's own pop-ups
         self.tray.showMessage(title, text, icon, ms)
 
     # ================================================================ tool hooks

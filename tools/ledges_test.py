@@ -27,9 +27,10 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 app = QApplication(sys.argv[:1])
-from pixelcat.adapters.windows import ledges as L  # noqa: E402
-from pixelcat.adapters.windows.ledges import LedgeFinder, find_tops  # noqa: E402
-from pixelcat.domain import WinInfo  # noqa: E402
+from pixelcat.adapters.windows import ledges as L  # noqa: E402  (the screen snapshot)
+from pixelcat.adapters.windows.platform import WindowsCapture  # noqa: E402
+from pixelcat.domain import WinInfo, primary  # noqa: E402
+from pixelcat.ui.ledges import LedgeFinder, find_tops  # noqa: E402
 
 results: list[tuple[str, bool, str]] = []
 TEXT_Y = [190 + i * 30 for i in range(10)]     # (window-relative baselines of the paragraph)
@@ -94,7 +95,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("a window-sized screen takes a few ms", ms < 80, f"{ms:.0f} ms")
 
     # remembering ---------------------------------------------------------------
-    f = LedgeFinder()
+    f = LedgeFinder(WindowsCapture())
     area = (0, 0, 1600, 1000)
     w1 = WinInfo(5, win, 0, "W", "X", False, False)
     f.scan([w1], area, [], 48, 1, image=img)
@@ -167,13 +168,13 @@ def main() -> int:  # noqa: C901 - a linear test script
 
     if "--live" in sys.argv:                  # the real screen, in memory; prints counts only
         from pixelcat.adapters.windows import win32
-        from pixelcat.adapters.windows.monitors import enumerate_monitors, primary
+        from pixelcat.adapters.windows.monitors import enumerate_monitors
         from pixelcat.adapters.windows.windows import enumerate_windows
 
         win32.set_dpi_awareness()
         mon = primary(enumerate_monitors())
         wins = enumerate_windows(os.getpid())
-        lf = LedgeFinder()
+        lf = LedgeFinder(WindowsCapture())
         for _ in range(2):
             lf.start(wins, mon.work, [], 48, 3)
             while not lf.poll():

@@ -1,4 +1,4 @@
-"""pixelcat.adapters.windows.system: single instance, quit request, autostart, activity, lock screen (mocked)."""
+"""pixelcat.adapters.windows.system: single instance, quit request, autostart, lock screen (mocked)."""
 from __future__ import annotations
 
 import ctypes
@@ -148,66 +148,6 @@ def test_set_autostart_writes_and_removes_the_run_value(fake_winreg, monkeypatch
 
 def test_set_autostart_without_the_run_key(fake_winreg):
     assert system.set_autostart(True) is False
-
-
-# ---------------------------------------------------------------- activity
-@pytest.fixture
-def activity(monkeypatch, clock, w32):  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(win32, "IS_WINDOWS", True)
-    st = SimpleNamespace(tick=100, cursor=(0, 0), buttons=False, clock=clock)
-    monkeypatch.setattr(win32, "last_input_tick", lambda: st.tick)
-    monkeypatch.setattr(win32, "cursor_pos", lambda: st.cursor)
-    monkeypatch.setattr(win32, "mouse_buttons_down", lambda: st.buttons)
-    monkeypatch.setattr(system, "time", clock)
-    st.tracker = system.ActivityTracker()
-    return st
-
-
-def test_typing_is_input_without_mouse_movement(activity):
-    t = activity.tracker
-    activity.clock.now += 1
-    t.poll(False)
-    assert not t.typing(2.0) and t.last_typing == 0.0
-    activity.tick = 150
-    activity.clock.now += 1
-    t.poll(False)
-    assert t.typing(2.0) and t.busy(2.0) and t.last_typing == activity.clock.now
-    activity.clock.now += 3
-    assert not t.typing(2.0) and not t.busy(2.0)
-
-
-def test_mouse_movement_is_not_typing_and_sets_speed(activity):
-    t = activity.tracker
-    activity.tick, activity.cursor = 150, (30, 40)
-    activity.clock.now += 0.5
-    t.poll(False)
-    assert not t.typing(5.0) and t.cursor == (30, 40)
-    assert t.cursor_speed == pytest.approx(100.0) and t.last_mouse_move == activity.clock.now
-    activity.clock.now += 0.5
-    t.poll(False)
-    assert t.cursor_speed == pytest.approx(50.0)
-
-
-@pytest.mark.parametrize("over_cat, busy", [(False, True), (True, False)])
-def test_clicks_count_unless_on_the_cat(activity, over_cat, busy):
-    activity.buttons, activity.tick = True, 101
-    activity.clock.now += 0.1
-    activity.tracker.poll(over_cat)
-    assert activity.tracker.busy(1.0) is busy
-    assert not activity.tracker.typing(1.0)
-
-
-def test_poll_ignores_read_errors(activity, monkeypatch):
-    monkeypatch.setattr(win32, "cursor_pos", raising(OSError("desktop switched")))
-    activity.tracker.poll(False)
-    assert activity.tracker.cursor == (0, 0)
-
-
-def test_idle_seconds(monkeypatch):
-    monkeypatch.setattr(win32, "idle_seconds", lambda: 12.5)
-    assert system.ActivityTracker.idle_seconds() == 12.5
-    monkeypatch.setattr(win32, "idle_seconds", raising(OSError("x")))
-    assert system.ActivityTracker.idle_seconds() == 0.0
 
 
 # ---------------------------------------------------------------- lock screen

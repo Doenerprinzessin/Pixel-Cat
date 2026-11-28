@@ -81,7 +81,7 @@ def _ev(kind: QEvent.Type) -> QMouseEvent:
 def test_hidden_without_a_game(desktop, fake_platform, ballwin: BallOverlay) -> None:  # type: ignore[no-untyped-def]
     assert not ballwin.wanted()
     ballwin.sync(2)
-    assert not ballwin.isVisible() and desktop.calls == [] and fake_platform.windows.calls == []
+    assert not ballwin.isVisible() and fake_platform.system.called("message_box") == [] and fake_platform.windows.calls == []
 
 
 def test_a_game_shows_the_window_centred_on_the_ball(fake_platform, ballwin: BallOverlay, game) -> None:  # type: ignore[no-untyped-def]

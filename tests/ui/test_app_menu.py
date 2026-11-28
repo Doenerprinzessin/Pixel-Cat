@@ -102,11 +102,11 @@ def test_external_ai_models(pet) -> None:  # type: ignore[no-untyped-def]
         "ext:effort:xhigh | Extra high", "ext:effort:max | Max"]
 
 
-def test_external_is_marked_best_on_a_pc_without_room_for_a_local_ai(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.adapters.windows import hardware
+def test_external_is_marked_best_on_a_pc_without_room_for_a_local_ai(pet) -> None:  # type: ignore[no-untyped-def]
+    from pixelcat.domain import Hardware
 
-    monkeypatch.setattr(hardware, "detect", lambda fresh=False: hardware.Hardware(ram_gb=8.0, cores=4, gpus=[],
-                                                                                    disk_free_gb=500.0))
+    pet.platform.system.answers("hardware", lambda fresh=False: Hardware(ram_gb=8.0, cores=4, gpus=[],
+                                                                         disk_free_gb=500.0))
     assert pet._external_menu().note == "BEST"
 
 

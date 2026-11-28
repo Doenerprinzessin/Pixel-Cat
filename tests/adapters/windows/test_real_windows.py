@@ -22,7 +22,10 @@ from pixelcat.adapters.windows import capture, control, elevation, escwatch, har
 from pixelcat.adapters.windows.monitors import enumerate_monitors
 from pixelcat.adapters.windows.windows import (ctypes_rect, enumerate_windows, foreground_window, is_fullscreen_window,
                                       window_exists)
+from pixelcat.adapters.windows.platform import WindowsCapture, WindowsInput
 from pixelcat.domain import monitor_at, primary
+from pixelcat.engine.activity import ActivityTracker
+from pixelcat.ui.ledges import LedgeFinder
 
 pytestmark = [pytest.mark.windows, pytest.mark.qt]
 
@@ -237,7 +240,7 @@ def test_ledges_grab_and_scan_our_window(own_window):
     frame = win32.frame_bounds(hwnd)
     img = ledges.grab(frame)
     assert img is not None and (img.width(), img.height()) == (frame[2] - frame[0], frame[3] - frame[1])
-    finder = ledges.LedgeFinder()
+    finder = LedgeFinder(WindowsCapture())
     wins = [w for w in enumerate_windows(own_pid=-1) if w.hwnd == hwnd]
     finder.scan(wins, frame, [], 48, 1)
     finder.scan(wins, frame, [], 48, 1)
@@ -277,9 +280,9 @@ def test_single_instance_and_quit_request_with_our_own_names(instance_names):
 def test_system_read_only_queries():
     assert isinstance(system.autostart_enabled(), bool)
     assert system.session_locked() in (True, False)
-    tracker = system.ActivityTracker()
+    tracker = ActivityTracker(WindowsInput())
     tracker.poll(False)
-    assert isinstance(tracker.busy(1.0), bool) and system.ActivityTracker.idle_seconds() >= 0.0
+    assert isinstance(tracker.busy(1.0), bool) and tracker.idle_seconds() >= 0.0
 
 
 def test_hardware_detect(monkeypatch):

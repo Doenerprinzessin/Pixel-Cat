@@ -64,7 +64,6 @@ def main() -> int:  # noqa: C901 - a linear test script
     win32.set_dpi_awareness()
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
-    from pixelcat import app as app_mod
     from pixelcat.app import PixelCatApp
     from pixelcat.bootstrap import build_platform
     from pixelcat.adapters.windows import notifications as nf
@@ -267,13 +266,12 @@ def main() -> int:  # noqa: C901 - a linear test script
     pet._end_task()
     pump(1.5)
     check("...then the cat wakes up", len(woken) == 1)
-    real_locked = app_mod.system.session_locked
-    app_mod.system.session_locked = lambda: True
+    pet.platform.display.session_locked = lambda: True    # type: ignore[method-assign]
     woken.clear()
     pet._on_watch_fired(w, "It is now.", False)
     pump(1)
     check("on the lock screen the wake-up waits", not woken and pet._wake_timer.isActive())
-    app_mod.system.session_locked = real_locked
+    del pet.platform.display.session_locked      # (the real one again)
     pump(7, lambda: bool(woken))
     check("...and happens once the PC is unlocked", len(woken) == 1)
 

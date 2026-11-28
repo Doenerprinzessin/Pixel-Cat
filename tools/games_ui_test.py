@@ -58,7 +58,6 @@ def main() -> int:  # noqa: C901 - a linear test script
     win32.set_dpi_awareness()
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
-    import pixelcat.app as appmod
     from pixelcat import progress
     from pixelcat.app import PixelCatApp
     from pixelcat.bootstrap import build_platform
@@ -187,9 +186,8 @@ def main() -> int:  # noqa: C901 - a linear test script
         pops[0].ok.click()
     pump(0.5)
     # ---------------------------------------------------------------- laser, with no windows at all
-    real_enum = appmod.enumerate_windows
     pet.stop_minigame()
-    appmod.enumerate_windows = lambda pid, include=frozenset(): []   # type: ignore[assignment]
+    pet.platform.windows.top_level = lambda pid, include=frozenset(): []   # type: ignore[method-assign]
     pet._refresh_windows()
     pet._begin_game("laser")
     g = pet.mini
@@ -220,7 +218,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     finish_game("laser")
     check("laser: the temporary furniture is gone from the cat's world too",
           not any(s.hwnd in pids for s in brain.smap.tops))
-    appmod.enumerate_windows = real_enum        # type: ignore[assignment]
+    del pet.platform.windows.top_level          # (the real one again)
     pet._refresh_windows()
     # ---------------------------------------------------------------- treat toss
     pet._on_menu("game:treats")

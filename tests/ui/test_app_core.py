@@ -5,8 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pixelcat import naming, progress
-from pixelcat.adapters.windows import win32
-from pixelcat.domain import Monitor, WinInfo
+from pixelcat.domain import Monitor, UserState, WinInfo
 from pixelcat.engine.states import S
 from pixelcat.persistence import SavedState
 from pixelcat.ui import theme
@@ -35,7 +34,7 @@ def test_construction_wires_the_parts_without_starting_anything(pet, app_env) ->
     assert not any(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer,
                                           pet.save_timer, pet.top_timer, pet.tray_timer, pet.quit_timer))
     assert pet.tick_timer.interval() == 1000 // pet.t.fps_active
-    assert app_env.desktop.calls == [] and pet.platform.windows.calls == [] and app_env.ensures == []
+    assert pet.platform.system.called("message_box") == [] and pet.platform.windows.calls == [] and app_env.ensures == []
     assert not pet.overlay.isVisible()
 
 
@@ -181,10 +180,10 @@ def test_a_new_window_next_to_the_cat_startles_it(started, app_env) -> None:  # 
 def test_hidden_during_fullscreen_apps_and_back(started, app_env) -> None:  # type: ignore[no-untyped-def]
     pet = started
     pet._ensure_chat().show_near(pet.overlay.cat_rect(), pet.monitors[0].work, 2, activate=False)
-    app_env.desktop.notification_state = win32.QUNS_RUNNING_D3D_FULL_SCREEN
+    app_env.desktop.user_state = UserState.FULLSCREEN_APP
     pet._check_fullscreen()
     assert pet.hidden_fullscreen and not pet.overlay.isVisible() and not pet.chat.isVisible()
-    app_env.desktop.notification_state = 5
+    app_env.desktop.user_state = UserState.NORMAL
     pet._check_fullscreen()
     assert not pet.hidden_fullscreen and pet.overlay.isVisible() and pet.chat.isVisible()
     assert pet.errors == []
@@ -193,16 +192,16 @@ def test_hidden_during_fullscreen_apps_and_back(started, app_env) -> None:  # ty
 @pytest.mark.parametrize(("presentations", "hides"), [(True, True), (False, False)])
 def test_presentation_mode(started, app_env, presentations: bool, hides: bool) -> None:  # type: ignore[no-untyped-def]
     started.cfg.hide_during_presentations = presentations
-    app_env.desktop.notification_state = win32.QUNS_PRESENTATION_MODE
+    app_env.desktop.user_state = UserState.PRESENTATION
     started._check_fullscreen()
     assert started.hidden_fullscreen is hides
 
 
-def test_a_fullscreen_foreground_window_of_another_app_hides_the_cat(started, app_env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_a_fullscreen_foreground_window_of_another_app_hides_the_cat(started, app_env) -> None:  # type: ignore[no-untyped-def]
     app_env.desktop.foreground, app_env.desktop.fullscreen = 77, True
     started._check_fullscreen()
     assert started.hidden_fullscreen
-    monkeypatch.setattr(win32, "window_pid", lambda hwnd: started.own_pid)      # our own window: not hidden
+    started.platform.windows.returns("pid", started.own_pid)                    # our own window: not hidden
     started._check_fullscreen()
     assert not started.hidden_fullscreen
 
@@ -230,9 +229,9 @@ def test_a_new_monitor_layout_is_picked_up(started, app_env) -> None:  # type: i
     assert pet.monitors == [new] and len(pet.brain.win_rects) == n
 
 
-def test_keep_on_top(started, app_env) -> None:  # type: ignore[no-untyped-def]
+def test_keep_on_top(started) -> None:  # type: ignore[no-untyped-def]
     started._keep_on_top()
-    assert ("keep_topmost", started.overlay.hwnd()) in app_env.desktop.calls
+    assert ((started.overlay.hwnd(),), {}) in started.platform.windows.called("keep_topmost")
 
 
 def test_the_window_under_the_cat_is_followed(started, app_env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -243,7 +242,7 @@ def test_the_window_under_the_cat_is_followed(started, app_env, monkeypatch) -> 
     monkeypatch.setattr(pet.brain, "ride_window", lambda hwnd, rect: rides.append((hwnd, rect)))
     surf = next(s for s in pet.brain.smap.surfaces if s.hwnd == 404)
     pet.brain.mode, pet.brain.surf = "ground", surf
-    pet._ride_window()                                  # (the fake user32 says: no such window)
+    pet._ride_window()                                  # (the fake platform says: no such window)
     assert rides == [(404, None)] and pet._ledge_t == 0.0
 
 
@@ -298,13 +297,11 @@ def test_quit_still_quits_when_saving_fails(pet, monkeypatch) -> None:  # type: 
     assert pet.qapp.quits == 1
 
 
-def test_quit_from_the_menu_and_the_quit_request(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.adapters.windows import system
-
+def test_quit_from_the_menu_and_the_quit_request(pet) -> None:  # type: ignore[no-untyped-def]
     pet.qapp = FakeQApp()
     pet._on_menu("quit")
     assert pet.qapp.quits == 1
-    monkeypatch.setattr(system, "quit_requested", lambda handle: True)
+    pet.platform.system.returns("quit_requested", True)
     pet._check_quit_request()
     assert pet.qapp.quits == 2
 
