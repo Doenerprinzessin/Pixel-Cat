@@ -275,7 +275,7 @@ class Credentials:
 
     def set(self, name: str, value: Any) -> None:
         with self._lock:
-            data = self._load()
+            data = dict(self._load())
             if self.locked:
                 raise SecretStoreUnavailable("The saved keys couldn't be opened this run, so nothing was saved - "
                                              "quit Pixel Cat, allow it to use the Keychain and start it again.")
@@ -288,6 +288,7 @@ class Credentials:
             tmp = path.with_name(path.name + ".tmp")
             tmp.write_bytes(blob)
             os.replace(tmp, path)
+            self._data = data                   # (only once it's saved: a failed save changes nothing)
 
 
 class MemoryCredentials(Credentials):

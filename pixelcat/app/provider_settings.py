@@ -14,6 +14,7 @@ from PySide6.QtCore import QObject, QTimer
 from PySide6.QtGui import QGuiApplication
 
 from ..domain import WINDOWS
+from ..domain.secrets import SecretStoreUnavailable
 from ..llm import external, models
 from ..ui.menu import MenuItem
 from .popups import paras
@@ -34,6 +35,12 @@ if TYPE_CHECKING:
     from .state import ChatState
 
 log = logging.getLogger("pixelcat.app")   # (the app's logger name; tests look for it)
+
+
+def _store_problem(e: SecretStoreUnavailable) -> str:
+    """Why the keys weren't saved, for the user (never on Windows: its store is always there)."""
+    why = e.strerror or str(e)
+    return why[:1].upper() + why[1:]
 
 
 class ProviderSettings(QObject):
@@ -399,21 +406,23 @@ class ProviderSettings(QObject):
         auth = self.accounts.auth(p)
         s = self.accounts.ext_p(p)
         if only_key or auth == "key":
-            self.accounts.creds.set(f"{p}_key", None)
+            if not self._keys_changed(prov.brand, lambda: self.accounts.creds.set(f"{p}_key", None)):
+                return
             if s.get("auth") == "key":
                 s["auth"] = ""
             msg = prov.key_removed
         elif auth in ("signin", "chatgpt"):
             signin = self.providers[p].signin()
+            if prov.signin_kind == "device" and not self._keys_changed(
+                    prov.brand, lambda: signin.sign_out(self.accounts.creds)):   # (quick: it forgets the token)
+                return
             s["auth"] = ""
             msg = prov.signed_out
             if prov.signin_kind == "browser":
                 self.popups.in_background(lambda: signin.sign_out(self.accounts.creds), lambda ok: None if ok is True else self.popups.popup(
                     "Signed out", paras(["OpenAI couldn't confirm the sign-out. To be sure, disconnect Pixel Cat "
                                                "in ChatGPT's settings (Connected apps)."]), "OK"))
-            elif prov.signin_kind == "device":
-                signin.sign_out(self.accounts.creds)              # (quick: it forgets the token)
-            else:
+            elif prov.signin_kind != "device":
                 self.popups.in_background(lambda: signin.sign_out(self.accounts.creds), lambda _r: None)
         else:
             return
@@ -432,6 +441,16 @@ class ProviderSettings(QObject):
                 self.model_status.override = None
                 self.model_choice.update_model_chip()
         self.popups.popup(prov.brand, paras([msg]), "OK")
+
+    def _keys_changed(self, title: str, change: Callable[[], None]) -> bool:
+        """Runs a change to the saved keys; False (and a popup saying why) if the secret store can't be used."""
+        try:
+            change()
+        except SecretStoreUnavailable as e:
+            log.warning("the saved keys weren't changed: %s", e)
+            self.popups.popup(title, paras([html.escape(_store_problem(e))]), "OK")
+            return False
+        return True
 
     def _ask_key(self, p: str) -> None:
         prov = self.providers[p].info
@@ -475,7 +494,8 @@ class ProviderSettings(QObject):
                 except RuntimeError:
                     pass                                 # (the dialog was closed meanwhile)
                 return
-            self.accounts.creds.set(f"{p}_key", key)
+            if not self._key_saved(p, key, dlg):
+                return
             self.accounts.ext_p(p)["auth"] = "key"
             self.accounts.set_models(p, res)
             log.info("%s connected with an API key (%d models)", p, len(res))
@@ -485,6 +505,19 @@ class ProviderSettings(QObject):
                 pass
             self._ext_connected(p)
         self.popups.in_background(work, got)
+
+    def _key_saved(self, p: str, key: str, dlg: Any) -> bool:
+        """Keeps a checked key; False (the dialog says why) if the secret store can't be used right now."""
+        try:
+            self.accounts.creds.set(f"{p}_key", key)
+        except SecretStoreUnavailable as e:
+            log.warning("%s key not saved: %s", p, e)
+            try:
+                dlg.checked(False, _store_problem(e))
+            except RuntimeError:
+                pass                                 # (the dialog was closed meanwhile)
+            return False
+        return True
 
     def _cli_signin(self, p: str) -> None:
         """Sign in with Anthropic: one click - Pixel Cat gets Anthropic's sign-in helper if it
@@ -729,7 +762,8 @@ class ProviderSettings(QObject):
                     pass                                 # (the dialog was closed meanwhile)
                 return
             login, ms = res
-            self.accounts.creds.set(f"{p}_key", key)
+            if not self._key_saved(p, key, dlg):
+                return
             s = self.accounts.ext_p(p)
             s["auth"], s["login"] = "key", login
             self._drop_copilot_chat()

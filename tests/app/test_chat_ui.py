@@ -29,6 +29,8 @@ class FakeWindow:
     def say(self, role: str, text: str) -> None:
         self.msgs.append(SimpleNamespace(role=role, text=text))
 
+    add = say
+
     def set_history(self, items: list[Any], cid: str | None) -> None:
         self.lists.append((items, cid))
 
@@ -86,6 +88,20 @@ def test_a_chat_that_cant_be_written_stays_unsaved(tmp_path: Path, caplog: pytes
     assert ui.chat_id is None and ui.chat_sig == ""
     assert any(r.name == "pixelcat.app" and r.getMessage() == "couldn't save the chat to the chat history"
                for r in caplog.records)
+
+
+def test_a_chat_the_secret_store_cant_protect_says_chats_arent_saved(tmp_path: Path) -> None:
+    from pixelcat.domain.secrets import SecretStoreUnavailable
+
+    ui, f = make(tmp_path)
+    ui.chat = FakeWindow()  # type: ignore[assignment]
+    f.chat_state.history.append({"role": "user", "content": "hi"})
+    f.dpapi.protect_error = SecretStoreUnavailable("the keychain is locked")
+    ui.store_chat()                                   # (before the history was ever read)
+    notes = [m.text for m in ui.chat.msgs if m.role == "error"]  # type: ignore[union-attr]
+    assert ui.chat_id is None and len(notes) == 1 and "chats aren't saved" in notes[0]
+    ui.store_chat()                                   # (once per run)
+    assert [m.role for m in ui.chat.msgs].count("error") == 1  # type: ignore[union-attr]
 
 
 def test_the_saved_chats_list_shows_model_names_and_deleting_the_open_one_starts_a_new_chat(tmp_path: Path) -> None:

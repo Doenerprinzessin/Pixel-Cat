@@ -105,8 +105,12 @@ class ChatStore:
     def _write(self, path: Path, data: Any) -> None:
         if self.locked:
             raise SecretStoreUnavailable("the saved chats couldn't be opened this run - not writing them")
-        blob = self.secrets.protect(json.dumps(data, ensure_ascii=False, separators=(",", ":"),
-                                               default=str).encode("utf-8"))
+        try:
+            blob = self.secrets.protect(json.dumps(data, ensure_ascii=False, separators=(",", ":"),
+                                                   default=str).encode("utf-8"))
+        except SecretStoreUnavailable:
+            self.locked = True
+            raise
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_bytes(blob)
         for attempt in range(20):        # (a virus scanner may hold the file for a moment)
@@ -191,8 +195,11 @@ class ChatStore:
             log.warning("couldn't delete chat %s: %s", cid, exc)
 
     def delete(self, cid: str) -> None:
+        items = self.index()
+        if self.locked:                  # (the index can't be written: the chat stays in it and on disk)
+            raise SecretStoreUnavailable("the saved chats couldn't be opened this run - not deleting one")
         self._remove(cid)
-        self._write_index([i for i in self.index() if i.id != cid])
+        self._write_index([i for i in items if i.id != cid])
 
     def delete_all(self) -> int:
         items = self.index()

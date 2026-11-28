@@ -250,6 +250,32 @@ def test_a_good_github_token_connects_copilot(bg, monkeypatch) -> None:  # type:
     assert bg.accounts.ext_p("copilot")["login"] == "octocat" and bg.accounts.ext_p("copilot")["quota"]["total"] == 300.0
 
 
+def _locked_keys(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from pixelcat.domain.secrets import SecretStoreUnavailable
+
+    def locked(name, value):  # type: ignore[no-untyped-def]
+        raise SecretStoreUnavailable(-25308, "the Keychain can't be used right now (reading the data key): locked")
+    monkeypatch.setattr(pet.accounts.creds, "set", locked)
+
+
+@pytest.mark.parametrize(("p", "module", "check"), [("anthropic", "anthropic_client", "list_models"),
+                                                    ("copilot", "copilot_client", "check_token")])
+def test_a_good_key_that_cant_be_saved_says_why(bg, monkeypatch, p: str, module: str, check: str) -> None:  # type: ignore[no-untyped-def]
+    import importlib
+
+    mod = importlib.import_module(f"pixelcat.adapters.llm.{module}")
+    monkeypatch.setattr(mod, "runtime_path", lambda: "copilot-runtime", raising=False)
+    monkeypatch.setattr(mod, check, lambda *a, **k: ("octocat", MODELS) if check == "check_token" else MODELS)
+    _locked_keys(bg, monkeypatch)
+    bg.provider_settings._ask_key(p)
+    dlg = bg.provider_settings.key_dialog
+    dlg.field.setText("sk-good")
+    dlg._save()
+    assert dlg.isVisible() and dlg.field.isEnabled() and dlg.save.isEnabled()
+    assert dlg.status.text() == "The Keychain can't be used right now (reading the data key): locked"
+    assert bg.accounts.auth(p) == "" and not bg.accounts.models(p)
+
+
 def test_copilot_without_its_runtime_offers_to_get_it(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from pixelcat.adapters.llm import copilot_client
 
@@ -358,6 +384,24 @@ def test_removing_a_key_goes_back_to_the_default_model(bg, app_env) -> None:  # 
     assert bg.creds.get("anthropic_key") is None and bg.accounts.auth("anthropic") == ""
     assert bg.cfg.model == "qwen3.5:35b-a3b" and ("model", "qwen3.5:35b-a3b") in app_env.user_settings
     assert bg.popups.open[-1].text.text().endswith("The Anthropic API key is removed.</p>")
+
+
+def test_removing_a_key_that_cant_be_saved_says_why(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    bg.creds.set("anthropic_key", "k")
+    _locked_keys(bg, monkeypatch)
+    bg._on_menu("ext:out:anthropic")
+    assert bg.creds.get("anthropic_key") == "k" and bg.accounts.auth("anthropic") == "key"
+    pop = bg.popups.open[-1]
+    assert pop.title == "Claude" and "can&#x27;t be used right now" in pop.text.text()
+
+
+def test_signing_out_of_github_when_the_keys_cant_be_saved(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    bg.creds.set("copilot_signin", {"token": "t"})
+    bg.accounts.ext_p("copilot").update(auth="signin", login="octocat")
+    _locked_keys(bg, monkeypatch)
+    bg._on_menu("ext:out:copilot")
+    assert bg.accounts.auth("copilot") == "signin" and bg.creds.get("copilot_signin") == {"token": "t"}
+    assert "right now" in bg.popups.open[-1].text.text()
 
 
 def test_the_credentials_swapped_on_the_accounts_are_the_ones_every_part_uses(bg) -> None:  # type: ignore[no-untyped-def]

@@ -230,6 +230,25 @@ def test_a_missing_index_with_a_locked_secret_store_isnt_rebuilt(store: ChatStor
     assert not (store.folder() / "index.dat").exists()
 
 
+def test_a_secret_store_that_cant_protect_locks_the_store(store: ChatStore, dpapi) -> None:  # type: ignore[no-untyped-def]
+    store.save(chat(1))
+    before = files(store)
+    dpapi.protect_error = SecretStoreUnavailable("the keychain is locked")
+    with pytest.raises(SecretStoreUnavailable):
+        store.save(chat(2))
+    assert store.locked and files(store) == before
+
+
+def test_deleting_with_a_locked_secret_store_keeps_the_chat(store: ChatStore, dpapi) -> None:  # type: ignore[no-untyped-def]
+    for n in (1, 2):
+        store.save(chat(n))
+    before = files(store)
+    dpapi.unprotect_error = SecretStoreUnavailable("the keychain is locked")
+    with pytest.raises(SecretStoreUnavailable):
+        store.delete(cid(1))
+    assert store.locked and files(store) == before
+
+
 def test_default_folder_is_in_the_data_dir(dpapi) -> None:  # type: ignore[no-untyped-def]
     store = ChatStore(secrets=dpapi)
     assert store.folder() == paths.data_dir() / "chats"

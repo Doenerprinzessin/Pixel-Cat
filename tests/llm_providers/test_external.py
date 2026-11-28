@@ -204,6 +204,22 @@ def test_keys_file_with_a_locked_secret_store_is_never_overwritten(tmp_path, fak
     assert X.Credentials(tmp_path, secrets=fake_crypt).get("anthropic_key") == "sk-ant-1"
 
 
+def test_a_failed_save_changes_no_key(tmp_path, fake_crypt, monkeypatch):
+    from pixelcat.domain.secrets import SecretStoreUnavailable
+
+    c = X.Credentials(tmp_path, secrets=fake_crypt)
+    c.set("anthropic_key", "sk-ant-1")
+
+    def unavailable(data):
+        raise SecretStoreUnavailable("the keychain is locked")
+    monkeypatch.setattr(fake_crypt, "protect", unavailable)
+    with pytest.raises(SecretStoreUnavailable):
+        c.set("anthropic_key", None)
+    with pytest.raises(SecretStoreUnavailable):
+        c.set("openai_key", "sk-2")
+    assert c.get("anthropic_key") == "sk-ant-1" and c.get("openai_key") is None
+
+
 def test_memory_credentials_are_never_written(fake_crypt):
     from pixelcat import paths
 
