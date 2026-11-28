@@ -72,3 +72,63 @@ def test_installer_window(app_main, argv: list[str], exe: str, mode: str) -> Non
 def test_a_second_cat_only_says_so(app_main) -> None:  # type: ignore[no-untyped-def]
     assert app_main.run() == 0
     assert app_main.calls[-1][0] == "message" and "already running" in app_main.calls[-1][1]
+
+
+# ---- what main loads before Qt (a fresh interpreter, the real Windows adapter; the test shim off Windows) ----------
+
+# main sets the DPI awareness, runs the quiet installer and lets a second copy exit before Qt or the heavy
+# desktop modules are loaded (Qt would otherwise pick its own DPI awareness first).
+_STARTUP_PROBE = """
+import json, sys
+if sys.platform != "win32":
+    import winshim
+    winshim.install()
+from pixelcat import bootstrap, logsetup
+case = sys.argv[1]
+if case == "dpi":
+    platform = bootstrap.build_platform("win32")
+    platform.display.set_dpi_awareness()
+    rc = None
+else:
+    import main
+    from pixelcat.adapters.windows import installer, system, win32   # (main loads the installer anyway)
+    build = bootstrap.build_platform
+    bootstrap.build_platform = lambda *a, **k: build("win32")
+    logsetup.setup_logging = lambda debug=False: None
+    installer.run_quiet = lambda args: 7                     # (the real one would install)
+    system.acquire_single_instance = lambda: False           # another cat runs
+    win32.message_box = lambda text, title="Pixel Cat": None
+    sys.frozen = True
+    sys.argv = ["main.py"] + (["--install", "--quiet"] if case == "quiet" else [])
+    rc = main.main()
+print("@@probe" + json.dumps({"rc": rc, "qt": sorted(m for m in sys.modules if m.split(".")[0] == "PySide6"),
+                              "adapters": sorted(m.rsplit(".", 1)[1] for m in sys.modules
+                                                 if m.startswith("pixelcat.adapters.windows."))}))
+"""
+
+
+def _startup(case: str) -> dict:
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(root), str(root / "tests")])}
+    res = subprocess.run([sys.executable, "-c", _STARTUP_PROBE, case], cwd=root, capture_output=True, text=True,
+                         timeout=120, env=env)
+    lines = [line for line in res.stdout.splitlines() if line.startswith("@@probe")]
+    assert lines, res.stderr
+    return json.loads(lines[-1][len("@@probe"):])
+
+
+@pytest.mark.parametrize("case, rc, allowed", [
+    ("dpi", None, {"platform", "system", "win32"}),
+    ("quiet", 7, {"platform", "system", "win32", "installer", "elevation", "known_folders"}),
+    ("second", 0, {"platform", "system", "win32", "installer", "elevation", "known_folders"}),
+], ids=["dpi-awareness", "quiet-install", "second-instance"])
+def test_main_does_not_load_qt_or_the_desktop_modules_before_it_needs_them(case: str, rc, allowed: set) -> None:  # type: ignore[no-untyped-def]
+    res = _startup(case)
+    assert res["rc"] == rc
+    assert res["qt"] == []
+    assert set(res["adapters"]) <= allowed, sorted(set(res["adapters"]) - allowed)

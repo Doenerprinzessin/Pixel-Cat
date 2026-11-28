@@ -3,18 +3,23 @@
 Each method only forwards to the module function it wraps, looked up when it is called (so tests that
 replace a module function reach the adapter too), and translates the platform-neutral names of the
 ports (element kinds, clipboard kinds, modifier keys, settings pages, the user's state) to Windows values.
-All modules are imported here up front, ``control`` before ``inputs``: their ctypes declarations happen
-at import time, and ``inputs.is_elevated`` relies on the ones ``control`` makes.
+Only ``win32`` and ``system`` are imported up front: ``main`` sets the DPI awareness, runs the quiet
+installer and lets a second copy exit before Qt (or anything heavy) is loaded.  The other modules are
+imported on first use, as before the ports: the installer (with ``elevation``), ``hardware``, ``volume``
+and the storage modules each on their own, and the desktop modules the app uses all together, in the
+order the app always imported them (``control`` before ``inputs``: their ctypes declarations happen at
+import time, and ``inputs.is_elevated`` relies on the ones ``control`` makes).
 """
 from __future__ import annotations
 
+import importlib
 import threading
 from contextlib import AbstractContextManager
 from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, Callable
 
-from . import (capture, control, dpapi, elevation, escwatch, hardware, inputs, installer, known_folders, ledges,
-               monitors, notifications, registry, system, uia, volume, win32, windows)
+from . import system, win32
 from ...domain import (AppWindow, ClipboardKind, Element, ElementKinds, Hardware, KillPlan, Monitor, Snapshot,
                        UserState, WindowId, WinInfo)
 from ...ports import ClipboardBackup, EscapeWatcher, Keys, NotificationFeed, Platform, Rect
@@ -22,7 +27,39 @@ from ...ports import ClipboardBackup, EscapeWatcher, Keys, NotificationFeed, Pla
 if TYPE_CHECKING:
     from PySide6.QtGui import QImage
 
-_KINDS = {"interactive": uia.INTERACTIVE, "readable": uia.READABLE}
+# The desktop modules the app imported together (after Qt), in that order.
+_DESKTOP = ("monitors", "windows", "ledges", "escwatch", "capture", "control", "inputs", "uia", "notifications")
+_import_lock = threading.RLock()
+
+
+def _load(name: str) -> ModuleType:
+    """The adapter module ``name``; a desktop module brings all of ``_DESKTOP`` with it, in order."""
+    with _import_lock:
+        for each in _DESKTOP if name in _DESKTOP else (name,):
+            importlib.import_module(f"{__package__}.{each}")
+    return importlib.import_module(f"{__package__}.{name}")
+
+
+class _Lazy:
+    """Stands for an adapter module and imports it (see :func:`_load`) when one of its names is used."""
+
+    def __init__(self, name: str) -> None:
+        object.__setattr__(self, "_name", name)
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(_load(self._name), attr)
+
+    def __setattr__(self, attr: str, value: Any) -> None:
+        setattr(_load(self._name), attr, value)
+
+
+(capture, control, dpapi, elevation, escwatch, hardware, inputs, installer, known_folders, ledges, monitors,
+ notifications, registry, uia, volume, windows) = (
+    _Lazy(name) for name in ("capture", "control", "dpapi", "elevation", "escwatch", "hardware", "inputs",
+                             "installer", "known_folders", "ledges", "monitors", "notifications", "registry", "uia",
+                             "volume", "windows"))
+
+_KINDS = {"interactive": "INTERACTIVE", "readable": "READABLE"}       # uia's constants
 _CLIPBOARD_FORMATS: dict[str, int | str] = {"files": 15, "rtf": "Rich Text Format", "html": "HTML Format"}  # CF_HDROP
 _MODIFIER_VK = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "win": 0x5B}
 _USER_STATES = {win32.QUNS_RUNNING_D3D_FULL_SCREEN: UserState.FULLSCREEN_APP,
@@ -220,7 +257,7 @@ class WindowsClipboard:
 
 class WindowsAccessibility:
     def snapshot(self, win: WindowId, kinds: ElementKinds = "interactive", limit: int = 150) -> Snapshot:
-        return uia.snapshot(win, _KINDS[kinds], limit)
+        return uia.snapshot(win, getattr(uia, _KINDS[kinds]), limit)
 
     def focused_element(self) -> Element | None:
         return uia.focused_element()
