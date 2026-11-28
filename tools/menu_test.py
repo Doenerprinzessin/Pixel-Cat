@@ -602,7 +602,7 @@ def main() -> int:
     pet.minigames.set_skin("charcoal")
     pet.saved.xp = 0
     # a game: menu closes, the game starts
-    pet._refresh_windows()                       # the cat needs its world (monitors, windows) to play
+    pet.world.refresh_windows()                       # the cat needs its world (monitors, windows) to play
     pet.brain.place(pet.brain.smap.floors[0].x1 + 400, pet.brain.smap.floors[0].y - 1)
     m.expanded = {"games"}
     m.items = pet._menu_items()

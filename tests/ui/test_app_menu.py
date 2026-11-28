@@ -410,8 +410,8 @@ def test_a_minigame_starts_and_stops(pet) -> None:  # type: ignore[no-untyped-de
             and pet.minigames.running_game() == "laser")
     assert find(pet._menu_items(), "stopgame").label == "Stop Laser pointer"
     for _ in range(5):
-        pet._last_tick -= 1 / 30
-        pet._tick()
+        pet.world._last_tick -= 1 / 30
+        pet.world.tick()
     pet._on_menu("stopgame")
     assert pet.game_state.mini is None and pet.saved.game_plays == {"laser": 1}
 

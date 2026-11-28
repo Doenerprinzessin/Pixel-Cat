@@ -166,7 +166,7 @@ def main() -> int:
         m = pet.menu
         check("right-click opens menu (stays open after release)", m.isVisible())
         g = m.geometry()
-        mon = min(pet.monitors, key=lambda mm: mm.distance2(pet.brain.x, pet.brain.y))
+        mon = min(pet.world_state.monitors, key=lambda mm: mm.distance2(pet.brain.x, pet.brain.y))
         wl, wt, wr, wb = mon.work
         inside = g.left() >= wl and g.top() >= wt and g.right() < wr and g.bottom() < wb
         cl, ct, cr, cb = ov.cat_rect()

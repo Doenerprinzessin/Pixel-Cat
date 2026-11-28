@@ -81,7 +81,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     own = os.getpid()
     stolen: list[str] = []
     ticks: list[float] = []
-    real_tick = pet._tick
+    real_tick = pet.world.tick
 
     def timed_tick() -> None:
         t0 = time.perf_counter()
@@ -189,7 +189,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     # ---------------------------------------------------------------- laser, with no windows at all
     pet.minigames.stop_minigame()
     pet.platform.windows.top_level = lambda pid, include=frozenset(): []   # type: ignore[method-assign]
-    pet._refresh_windows()
+    pet.world.refresh_windows()
     pet.minigames._begin_game("laser")
     g = pet.game_state.mini
     props = list(host.props)
@@ -210,17 +210,17 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("laser: the dot follows the pointer", abs(mid[0] - fake[0][0]) <= 6 and abs(mid[1] - fake[0][1]) <= 6,
           f"dot {mid} pointer {fake[0]}")
     check("laser: the cat pounces on the dot", pounced, f"{g.pounces} pounces")
-    pet._set_hidden(True)
+    pet.world._set_hidden(True)
     check("a fullscreen app hides the game's windows", not any(w.isVisible() for w in windows_of(g))
           and not host.hud.isVisible())
-    pet._set_hidden(False)
+    pet.world._set_hidden(False)
     pump(0.4)
     check("...and they come back afterwards", all(w.isVisible() for w in windows_of(g)) and host.hud.isVisible())
     finish_game("laser")
     check("laser: the temporary furniture is gone from the cat's world too",
           not any(s.hwnd in pids for s in brain.smap.tops))
     del pet.platform.windows.top_level          # (the real one again)
-    pet._refresh_windows()
+    pet.world.refresh_windows()
     # ---------------------------------------------------------------- treat toss
     pet._on_menu("game:treats")
     g = pet.game_state.mini
@@ -286,11 +286,11 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("hide: the cat hides behind something (behind a real window it is no longer topmost)",
           hidden and under is not None and (not real_spot or not ex & win32.WS_EX_TOPMOST),
           f"behind {'a window' if real_spot else 'furniture'}")
-    pet._keep_on_top()
+    pet.world.keep_on_top()
     ex2 = win32.get_exstyle(pet.overlay.hwnd())
     check("hide: keeping the cat on top doesn't pull it out of its hiding place",
           not real_spot or not ex2 & win32.WS_EX_TOPMOST)
-    pet._on_cat_click()
+    pet.world.on_cat_click()
     check("hide: clicking the cat finds it", len(g.times) == 1, str(g.times))
     pump(1)
     finish_game("hide")
@@ -298,7 +298,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     # (another process's window, shown without taking the focus, in the middle of the cat's screen)
     import subprocess
 
-    mon = pet._cat_monitor()
+    mon = pet.world.cat_monitor()
     wx, wy = (mon.work[0] + mon.work[2]) // 2 - 300, (mon.work[1] + mon.work[3]) // 2 - 200
     helper = subprocess.Popen([sys.executable, "-c", HELPER, str(wx), str(wy)])
     HELPERS.append(helper)
@@ -306,8 +306,8 @@ def main() -> int:  # noqa: C901 - a linear test script
 
     def find_helper() -> bool:
         nonlocal hw
-        pet._refresh_windows()
-        hw = next((w.hwnd for w in pet._real_wins if w.title == "Pixel Cat hide test"), 0)
+        pet.world.refresh_windows()
+        hw = next((w.hwnd for w in pet.world._real_wins if w.title == "Pixel Cat hide test"), 0)
         return bool(hw)
     if pump(10, find_helper):
         pet._on_menu("game:hide")
@@ -327,11 +327,11 @@ def main() -> int:  # noqa: C901 - a linear test script
         check("hide behind a real window: the cat is under that window (not topmost any more)",
               hidden and host.cat_under == hw and not ex & win32.WS_EX_TOPMOST and below,
               f"topmost={bool(ex & win32.WS_EX_TOPMOST)} below={below}")
-        pet._keep_on_top()
+        pet.world.keep_on_top()
         pump(0.3)
         ex = win32.get_exstyle(pet.overlay.hwnd())
         check("...and stays there (keeping on top skips it)", not ex & win32.WS_EX_TOPMOST)
-        pet._on_cat_click()
+        pet.world.on_cat_click()
         pump(0.3)
         ex = win32.get_exstyle(pet.overlay.hwnd())
         check("found: the cat jumps out and is on top again", len(g.times) == 1 and bool(ex & win32.WS_EX_TOPMOST))

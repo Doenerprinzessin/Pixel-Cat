@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from ..domain import Monitor
     from ..games.base import MiniGame
 
 
@@ -13,3 +14,14 @@ class GameState:
 
     def __init__(self) -> None:
         self.mini: MiniGame | None = None
+
+
+class WorldState:
+    """The desktop the cat lives on.  ``monitors`` is replaced (not changed) when the layout changes - read it
+    here every time.  ``hidden_fullscreen``: the cat hides behind a fullscreen app (set by the ``World``);
+    ``chat_was_visible``: the chat comes back with the cat (set by the world, and by the chat opening while hidden)."""
+
+    def __init__(self, monitors: list[Monitor]) -> None:
+        self.monitors = monitors
+        self.hidden_fullscreen = False
+        self.chat_was_visible = False

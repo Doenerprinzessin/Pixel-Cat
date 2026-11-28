@@ -97,11 +97,11 @@ def main() -> int:  # noqa: C901 - a linear test script
     pet.save = lambda: None
     pet.start()
     b = pet.brain
-    mon = primary(pet.monitors)
+    mon = primary(pet.world_state.monitors)
     wx, wy = (mon.work[0] + mon.work[2]) // 2 - 450, (mon.work[1] + mon.work[3]) // 2 - 150
     samples: list[tuple[float, float, str, float]] = []
     hwnd_box = [0]
-    real_tick = pet._tick
+    real_tick = pet.world.tick
 
     def timed_tick() -> None:
         real_tick()
@@ -138,7 +138,7 @@ def main() -> int:  # noqa: C901 - a linear test script
         return h, hwnd
 
     def sit_on(hwnd: int) -> bool:
-        pet._refresh_windows()
+        pet.world.refresh_windows()
         top = next((t for t in b.smap.tops if t.hwnd == hwnd), None)
         if top is None:
             return False

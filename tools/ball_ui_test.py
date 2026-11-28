@@ -56,7 +56,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     win32.cursor_pos = lambda: fake[0]          # type: ignore[assignment]
     win32.left_button_down = lambda: held[0]    # type: ignore[assignment]
     ticks: list[float] = []
-    real_tick = pet._tick
+    real_tick = pet.world.tick
 
     def timed_tick() -> None:
         t0 = time.perf_counter()
@@ -143,9 +143,9 @@ def main() -> int:  # noqa: C901 - a linear test script
         pet.overlay.grab().save(str(ROOT / "build" / "preview" / "cat_live.png"))
         check("the crown and the round-7 ball draw without errors", True)
         # fullscreen apps hide the ball too
-        pet._set_hidden(True)
+        pet.world._set_hidden(True)
         check("a fullscreen app hides the ball window", not bw.isVisible())
-        pet._set_hidden(False)
+        pet.world._set_hidden(False)
         pump(0.5)
         check("...and it comes back afterwards", bw.isVisible())
         pet._open_menu()

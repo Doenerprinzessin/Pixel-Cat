@@ -120,7 +120,7 @@ def main() -> int:
             pet.overlay.grab().save(str(OUT / f"{len(shots):02d}_{tag}.png"))
 
     pump(2.0)
-    test_tops = [t for t in b.smap.tops if b.win_rects.get(t.hwnd) and t.hwnd in pet._known_hwnds]
+    test_tops = [t for t in b.smap.tops if b.win_rects.get(t.hwnd) and t.hwnd in pet.world._known_hwnds]
     by_hwnd = {}
     for w in __import__("pixelcat.adapters.windows.windows", fromlist=["x"]).enumerate_windows(pet.own_pid):
         if w.title.startswith("PixelCat test window") and w.title[-1] not in by_hwnd:
