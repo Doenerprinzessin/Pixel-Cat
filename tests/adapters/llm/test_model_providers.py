@@ -134,7 +134,7 @@ def test_copilot_self_check_builds_a_client_it_never_starts(monkeypatch) -> None
     assert PROVIDERS["copilot"].self_check() == f"runtime {CLI_VERSION}, downloaded on first use"
     monkeypatch.setattr(copilot_client, "runtime_path", lambda: "rt")
     assert PROVIDERS["copilot"].self_check().endswith(", here")
-    assert made == [("selftest", "copilot-runtime.exe")] * 2
+    assert made == [("selftest", copilot_client.runtime_name())] * 2
 
 
 def test_the_self_checks_say_what_they_found_or_raise(monkeypatch) -> None:  # type: ignore[no-untyped-def]

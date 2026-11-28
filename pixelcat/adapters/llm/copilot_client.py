@@ -1,6 +1,6 @@
 """GitHub Copilot models through GitHub's official Copilot SDK (``microsoft-copilot-sdk``).
 
-* The SDK drives GitHub's Copilot runtime (``copilot-runtime.exe``).  Pixel Cat gets it on
+* The SDK drives GitHub's Copilot runtime (``copilot-runtime.exe`` on Windows).  Pixel Cat gets it on
   first use from GitHub's official release page (github.com/github/copilot-cli - the SDK
   checks it against the release's SHA-256 sums) into %LOCALAPPDATA%\\PixelCat\\tools\\copilot:
   no installer, no admin rights, nothing on the PATH.  It runs as a hidden child process
@@ -26,6 +26,7 @@ import asyncio
 import concurrent.futures
 import logging
 import os
+import sys
 import threading
 import time
 import urllib.error
@@ -89,6 +90,11 @@ def _dl() -> Any:
     return dl
 
 
+def runtime_name() -> str:
+    """The runtime's file name on this platform, as the SDK names it (``copilot-runtime.exe`` on Windows)."""
+    return "copilot-runtime.exe" if sys.platform == "win32" else "copilot-runtime"
+
+
 def runtime_path() -> str | None:
     """GitHub's Copilot runtime, if it is here and complete."""
     try:
@@ -98,7 +104,7 @@ def runtime_path() -> str | None:
         if not CLI_VERSION:
             return None
         pair = dl.get_cache_dir(CLI_VERSION) / "prebuilds" / get_runtime_platform()
-        wrapper = pair / "copilot-runtime.exe"
+        wrapper = pair / runtime_name()
         complete = getattr(dl, "_runtime_bundle_is_complete", None)
         ok = complete(pair, wrapper.name) if complete else (wrapper.is_file() and (pair / "runtime.node").is_file())
         return str(wrapper) if ok else None

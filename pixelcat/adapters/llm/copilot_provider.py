@@ -81,5 +81,5 @@ class CopilotProvider(ProviderBase):
         from copilot._cli_version import CLI_VERSION
 
         from . import copilot_client, github_signin  # noqa: F401
-        copilot_client.new_client("selftest", "copilot-runtime.exe")     # (made, never started)
+        copilot_client.new_client("selftest", copilot_client.runtime_name())     # (made, never started)
         return f"runtime {CLI_VERSION}, {'here' if copilot_client.runtime_path() else 'downloaded on first use'}"

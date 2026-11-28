@@ -183,7 +183,7 @@ def test_runtime_path(fake_dl):
     from copilot._cli_version import CLI_VERSION, get_runtime_platform
 
     assert CC.runtime_path() == str(fake_dl.get_cache_dir(CLI_VERSION) / "prebuilds" / get_runtime_platform()
-                                    / "copilot-runtime.exe")
+                                    / CC.runtime_name())
     fake_dl.complete = False
     assert CC.runtime_path() is None
 
@@ -196,10 +196,35 @@ def test_runtime_path_without_the_sdks_check(tmp_path, monkeypatch):
     assert CC.runtime_path() is None
     pair = dl.get_cache_dir(CLI_VERSION) / "prebuilds" / get_runtime_platform()
     pair.mkdir(parents=True)
-    (pair / "copilot-runtime.exe").write_bytes(b"x")
+    (pair / CC.runtime_name()).write_bytes(b"x")
     assert CC.runtime_path() is None
     (pair / "runtime.node").write_bytes(b"x")
-    assert CC.runtime_path() == str(pair / "copilot-runtime.exe")
+    assert CC.runtime_path() == str(pair / CC.runtime_name())
+
+
+@pytest.mark.parametrize("platform, name", [("win32", "copilot-runtime.exe"), ("darwin", "copilot-runtime"),
+                                            ("linux", "copilot-runtime")])
+def test_runtime_name_by_platform(monkeypatch, platform, name):
+    monkeypatch.setattr(CC.sys, "platform", platform)
+    assert CC.runtime_name() == name
+
+
+@pytest.mark.parametrize("platform, name, other", [("win32", "copilot-runtime.exe", "copilot-runtime"),
+                                                   ("darwin", "copilot-runtime", "copilot-runtime.exe")])
+def test_runtime_path_finds_the_runtime_by_its_platform_name(tmp_path, monkeypatch, platform, name, other):
+    from copilot import _cli_version
+
+    monkeypatch.setattr(CC.sys, "platform", platform)
+    monkeypatch.setattr(_cli_version, "get_runtime_platform", lambda: f"{platform}-x64")
+    dl = FakeDL(tmp_path, complete=None)
+    monkeypatch.setattr(CC, "_dl", lambda: dl)
+    pair = dl.get_cache_dir(_cli_version.CLI_VERSION) / "prebuilds" / f"{platform}-x64"
+    pair.mkdir(parents=True)
+    (pair / "runtime.node").write_bytes(b"x")
+    (pair / other).write_bytes(b"x")
+    assert CC.runtime_path() is None
+    (pair / name).write_bytes(b"x")
+    assert CC.runtime_path() == str(pair / name)
 
 
 def test_runtime_path_when_the_sdk_fails(monkeypatch):
