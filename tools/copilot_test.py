@@ -508,7 +508,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
 
     def say(text: str) -> None:
         n = len(pet.popups.open)
-        pet._on_user_message(text)
+        pet.session.on_user_message(text)
         wait(lambda: (pet.session.worker is None and not pet.session.task_active) or chat.choice.isVisible()
              or chat._confirm_cb is not None or len(pet.popups.open) > n, 90)
 
@@ -555,7 +555,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     pet._on_copilot_credits(1999.0)
     pet._on_copilot_credits(1.0)
     S["script"] = [reply("Still here!")]
-    pet._on_user_message("are you there?")
+    pet.session.on_user_message("are you there?")
     wait(lambda: chat.choice.isVisible(), 20)
     card = chat.choice_label.text() if chat.choice.isVisible() else ""
     labels = [b_.text() for b_ in chat._choice_btns] if chat.choice.isVisible() else []
@@ -572,7 +572,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     pet.accounts.ext_p("copilot")["credit_limit"] = 0
     S["script"] = [reply("allowance", status=402)] * 6
     n_pop = len(pet.popups.open)
-    pet._on_user_message("one more?")
+    pet.session.on_user_message("one more?")
     wait(lambda: len(pet.popups.open) > n_pop, 120)
     pop = pet.popups.open[-1] if len(pet.popups.open) > n_pop else None
     text = pop.text.text() if pop is not None else ""
@@ -584,7 +584,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     S["script"] = []
     # new chat, quit -------------------------------------------------------------------------------------------------
     sid = pet.session._copilot.session_id if pet.session._copilot is not None else ""
-    pet.new_chat()
+    pet.session.new_chat()
     time.sleep(2.0)
     left = CC._LOOP.run(CC._RT.client.list_sessions(), 30) if CC._RT.client is not None else []
     check("new chat: the Copilot session is deleted", bool(sid) and pet.session._copilot is None

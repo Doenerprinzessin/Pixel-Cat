@@ -260,7 +260,7 @@ def test_auto_mode_acts_up_to_its_limit_then_asks(loop, workers) -> None:  # typ
     loop.cfg.auto_mode_max_actions = 2
     loop.tb.add("act", confirm="soft")
     loop.tb.add("click", confirm="soft", group="desktop")
-    loop.set_auto_mode(True)
+    loop.session.set_auto_mode(True)
     ask(loop, "go")
     workers[-1].events.done("", [call("click", n=0), call("act", n=1), call("act", n=2), call("act", n=3)])
     assert [r[1]["n"] for r in loop.tb.ran] == [0, 1, 2] and loop.session._auto_actions == 2      # (clicks don't count)
@@ -272,7 +272,7 @@ def test_auto_mode_acts_up_to_its_limit_then_asks(loop, workers) -> None:  # typ
 def test_auto_mode_also_does_hard_actions_but_never_forced_ones(loop, workers) -> None:  # type: ignore[no-untyped-def]
     loop.tb.add("close", confirm="hard")
     loop.tb.add("run_box", confirm="soft", extra={"_force_confirm": True})
-    loop.set_auto_mode(True)
+    loop.session.set_auto_mode(True)
     ask(loop, "go")
     workers[-1].events.done("", [call("close", n=1), call("run_box", n=2)])
     assert loop.tb.ran == [("close", {"n": 1})]
@@ -340,7 +340,7 @@ def test_a_new_chat_stops_the_task_and_forgets_it(loop, workers) -> None:  # typ
     loop.tb.add("close", confirm="hard")
     ask(loop, "close it")
     workers[0].events.done("", [call("close")])
-    loop.new_chat()
+    loop.session.new_chat()
     assert not loop.session.task_active and loop.chat_state.history == [] and loop.session._pending_calls == []
     assert loop.chat_ui.chat._confirm_cb is None and loop.session.agent.cancel.is_set()
 

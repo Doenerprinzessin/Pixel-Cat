@@ -102,7 +102,7 @@ def test_an_action_asks_first(chat_pet, workers, app_env, answer: str, copied: b
 
 def test_auto_mode_does_it_without_asking(chat_pet, workers, app_env) -> None:  # type: ignore[no-untyped-def]
     pet = chat_pet
-    pet.set_auto_mode(True)
+    pet.session.set_auto_mode(True)
     _say(pet, "copy purr")
     workers[-1].events.done("", [{"name": "copy_to_clipboard", "arguments": {"text": "purr"}}])
     assert pet.chat_ui.chat._confirm_cb is None and app_env.clipboard.text() == "purr"
@@ -333,11 +333,11 @@ def test_a_chat_is_saved_and_can_be_reopened(chat_pet, workers) -> None:  # type
     workers[-1].events.done("Pack a beret.", [])
     cid = pet.chat_ui.chat_id
     assert cid and [i.title for i in pet.chat_ui.chats.index()] == ["plan a trip to Paris"]
-    pet.new_chat()
+    pet.session.new_chat()
     assert pet.chat_state.history == [] and pet.chat_ui.chat_id is None
     pet.chat_ui.toggle_history()
     assert pet.chat_ui.chat.history_shown and "plan a trip to Paris" in pet.chat_ui.chat.hist_view.toPlainText()
-    pet.open_saved_chat(cid)
+    pet.session.open_saved_chat(cid)
     assert pet.chat_ui.chat_id == cid and pet.chat_state.history[-1]["content"] == "Pack a beret."
     assert [m.text for m in pet.chat_ui.chat.msgs][:2] == ["plan a trip to Paris", "Pack a beret."]
     assert pet.chat_ui.chat.msgs[-1].text.startswith("🕘 Our chat from ")
@@ -353,13 +353,13 @@ def test_deleting_saved_chats(chat_pet, workers) -> None:  # type: ignore[no-unt
     for q in ("one", "two"):
         _say(pet, q)
         workers[-1].events.done("ok", [])
-        pet.new_chat()
+        pet.session.new_chat()
     ids = [i.id for i in pet.chat_ui.chats.index()]
     pet.chat_ui._delete_saved_chat(ids[0])
     assert [i.id for i in pet.chat_ui.chats.index()] == ids[1:]
     pet.chat_ui._delete_all_chats()
     assert pet.chat_ui.chats.index() == []
-    pet.open_saved_chat("gone")
+    pet.session.open_saved_chat("gone")
     assert "can't be opened any more" in pet.chat_ui.chat.msgs[-1].text
 
 

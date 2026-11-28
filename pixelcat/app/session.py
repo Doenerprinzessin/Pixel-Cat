@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import threading
+import time
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
@@ -19,8 +20,9 @@ from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from .. import naming, paths
-from ..llm import external
+from ..llm import external, models
 from ..llm.agent import ToolOutput
+from ..llm.model_status import model_on_disk
 from ..llm.prompt import build_system_prompt
 from ..llm.qt_chat import QtChatWorker
 from ..llm.replies import friendly_error, parse_text_tool_calls, strip_tool_markup
@@ -33,6 +35,7 @@ if TYPE_CHECKING:
     from ..engine.brain import Brain
     from ..llm.agent import DesktopAgent
     from ..llm.external import Credentials
+    from ..llm.model_status import ModelStatus
     from ..llm.tools import ToolBox
     from ..llm.watch import Watch, WatchManager
     from ..persistence import SavedState
@@ -73,21 +76,25 @@ class AgentSession(QObject):
     """The chat's AI turns.  ``worker``: the running model request (its signals come to this object's slots,
     which tell the current request from a stale one by ``sender()``); ``task_active``: a task runs (the model may
     use tools for several rounds); the tool round's state, the context sent last, Copilot's conversation, the
-    watches that woke up and the timers set.
+    watches that woke up and the timers set.  A new chat and a saved chat reopened reset and restore all of it;
+    ``on_user_message`` is the user's turn (after the chat's own commands: ``local_command(text)``).
 
     ``toolbox``, ``agent`` and ``esc_watch`` are set by the controller right after this object is made (the
     toolbox's hooks and the Esc watcher call this object).  ``chat_ui()``, ``model_choice()`` (made later) and
     the controller's callbacks are called at call time: ``save()``, ``sync_tray()``, ``ext_gate(p)``,
-    ``credit_gate()``, ``copilot_credits(n)``, ``copilot_quota()``, ``limit_popup(p, info)``."""
+    ``credit_gate()``, ``copilot_credits(n)``, ``copilot_quota()``, ``limit_popup(p, info)``,
+    ``show_model_banner()``, ``local_command(text)``."""
 
     def __init__(self, chat_state: ChatState, cfg: Config, saved: SavedState, providers: Mapping[str, ModelProvider],
                  accounts: Accounts, creds: Credentials, provider_settings: ProviderSettings, watches: WatchManager,
                  brain: Brain, game: BallGame, minigames: Minigames, overlay: CatOverlay, tray: Tray,
-                 notifications: NotificationPort, display: DisplayPort, folders: KnownFolders, *,
+                 notifications: NotificationPort, display: DisplayPort, folders: KnownFolders,
+                 model_status: ModelStatus, *,
                  parent: QObject | None = None, chat_ui: Callable[[], ChatUI], model_choice: Callable[[], ModelChoice],
                  save: Callable[[], None], sync_tray: Callable[[], None], ext_gate: Callable[[str], bool],
                  credit_gate: Callable[[], bool], copilot_credits: Callable[[float], None],
-                 copilot_quota: Callable[[], None], limit_popup: Callable[[str, dict[str, Any]], None]) -> None:
+                 copilot_quota: Callable[[], None], limit_popup: Callable[[str, dict[str, Any]], None],
+                 show_model_banner: Callable[[], None], local_command: Callable[[str], bool]) -> None:
         super().__init__(parent)
         self.chat_state = chat_state
         self.cfg = cfg
@@ -105,6 +112,7 @@ class AgentSession(QObject):
         self.notifications = notifications
         self.display = display
         self.folders = folders
+        self.model_status = model_status
         self._chat_ui = chat_ui
         self._model_choice = model_choice
         self._save = save
@@ -114,6 +122,8 @@ class AgentSession(QObject):
         self._copilot_credits = copilot_credits
         self._copilot_quota = copilot_quota
         self._limit_popup = limit_popup
+        self._show_model_banner = show_model_banner
+        self._local_command = local_command
         self.resume_after_switch = False                 # token limit: go on once another model is picked
         self._ext_notes: set[str] = set()
         self._copilot: Any = None                        # the Copilot runtime's session for this chat
@@ -296,6 +306,110 @@ class AgentSession(QObject):
         if self.task_active:
             log.info("Esc pressed - stopping the desktop task")
             self.cancel_chat()
+
+    # ---------------------------------------------------------------- a new chat, a saved chat, the user's turn
+    def new_chat(self) -> None:
+        """Forget the conversation (frees the model's context) and start fresh.  The one so far
+        stays in the chat history."""
+        self._save()
+        if self.worker is not None:
+            self.worker.cancel()
+            self.worker = None
+        self.end_task(cancelled=True)
+        self.agent.snap = None
+        self.agent.shot = None
+        self.agent.last_hwnd = 0
+        self.chat_state.history.clear()
+        self.chat_ui.chat_id, self.chat_ui.chat_created, self.chat_ui.chat_sig = None, 0.0, ""
+        self.drop_copilot_chat()
+        if self.chat_state.chat_model is not None or self.chat_state.chat_effort is not None:   # (a new chat: the defaults)
+            self.chat_state.chat_effort = None
+            if self.chat_state.chat_model is not None:
+                self.chat_state.chat_model = None
+                self.model_status.override = None
+                self.model_status.ensure(force=True)
+            self.model_choice.update_model_chip()
+        self._sent = None
+        self._pending_calls.clear()
+        self._tool_round = 0
+        self._had_results = False
+        self._long_hint_shown = False
+        self._raw = ""
+        if self.chat_ui.chat is not None:
+            self.chat_ui.chat.reset()
+        log.info("new chat started")
+
+    def open_saved_chat(self, cid: str) -> None:
+        """Reopen a saved chat: what it showed, what the AI remembers, its model and effort."""
+        chat = self.chat_ui.ensure_chat()
+        if cid == self.chat_ui.chat_id:
+            chat.hide_history()
+            return
+        data = self.chat_ui.chats.load(cid)
+        if data is None:
+            chat.set_history(self.chat_ui.history_items(), self.chat_ui.chat_id)
+            chat.add("error", "That chat can't be opened any more - it was deleted or is damaged.")
+            return
+        self.new_chat()                                  # (stops what runs; the open chat stays saved)
+        self.chat_state.history[:] = [dict(m) for m in data.get("history") or [] if isinstance(m, dict) and m.get("role")]
+        self.chat_ui.chat_id, self.chat_ui.chat_created = cid, float(data.get("created") or time.time())
+        notes = []
+        tag = data.get("chat_model")
+        if isinstance(tag, str) and tag:
+            ext = external.parse(tag)
+            if (self.accounts.auth(ext[0]) if ext else models.find(tag) is not None and model_on_disk(tag)):
+                self.chat_state.chat_model = tag
+                self.model_status.override = tag
+                self.model_status.ensure(force=True)
+            else:
+                notes.append(f"It used {models.label(tag)}, which isn't available now - so it uses the default, "
+                             f"{models.label(self.cfg.model)}.")
+        eff = data.get("chat_effort")
+        self.chat_state.chat_effort = eff if eff in external.EFFORTS else None
+        self.model_choice.update_model_chip()
+        self._show_model_banner()
+        chat.load([(r, t) for r, t in data.get("msgs") or [] if isinstance(r, str) and isinstance(t, str)])
+        when = datetime.fromtimestamp(float(data.get("updated") or time.time()))
+        chat.add("info", f"🕘 Our chat from {when:%d %b %Y, %H:%M} - I remember it, just keep talking. "
+                         + " ".join(notes))
+        self.chat_ui.chat_sig = self.chat_ui.chat_signature()          # (only opened, not changed: it keeps its place)
+        log.info("saved chat %s reopened (%d messages)", cid, len(self.chat_state.history))
+
+    def set_auto_mode(self, on: bool) -> None:
+        self.saved.auto_mode = on
+        self._save()
+        if self.chat_ui.chat is not None:
+            self.chat_ui.chat.set_auto_mode(on)
+            self.chat_ui.chat.add("info", "⚡ Auto mode ON: I'll just do what you ask, no permission cards. "
+                                  "(Closing more than a few windows at once still asks.)" if on else
+                          "Auto mode OFF: I'll ask before doing things again 🐾")
+        log.info("chat auto mode %s", "on" if on else "off")
+
+    _CONTINUE_RE = re.compile(r"^\s*(?:(?:ok(?:ay)?|yes|ja|go|please|bitte)[\s,!.]*)*(?:continue|go on|keep going|"
+                              r"carry on|resume|proceed|weiter|mach weiter|weitermachen|fortfahren|los)"
+                              r"\b(?:(?![?]).){0,60}$", re.I)   # e.g. "continue with the plan", not questions
+
+    def on_user_message(self, text: str) -> None:
+        if self._local_command(text):
+            return
+        if self.copilot_stale:                  # (between tasks: nothing of it is running)
+            self.copilot_stale = False
+            self.drop_copilot_chat()
+        self.resume_after_switch = False
+        if self.chat_ui.chat is not None:
+            self.chat_ui.chat.drop_choice()                      # (a token-limit question nobody answered)
+        msg: dict[str, Any] = {"role": "user", "content": text}
+        if self._CONTINUE_RE.match(text) and self.chat_state.history:
+            msg["_continue"] = True   # same task: its original request stays at the start of the context
+        self.chat_state.history.append(msg)
+        self.reset_task_counters()
+        self.begin_task()
+        if getattr(self, "_forgotten", 0) > 0 and not getattr(self, "_long_hint_shown", False):
+            self._long_hint_shown = True
+            assert self.chat_ui.chat is not None
+            self.chat_ui.chat.add("info", "Psst, our chat is getting long, so I only remember the latest part. "
+                                  "Press ＋ (or Ctrl+N) for a fresh one 🐾")
+        self.request()
 
     # ---------------------------------------------------------------- memory
     def _ctx_budget(self) -> int:

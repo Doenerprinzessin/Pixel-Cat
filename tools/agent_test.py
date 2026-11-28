@@ -417,7 +417,7 @@ def main() -> int:  # noqa: C901 - a linear test script
         check("apps that need admin rights are detected", bool(a.get("_admin")) and a.get("_force_confirm")
               and a.get("_confirm") == "hard", tb.describe(spec, a))
         pet.chat_ui.open_chat()
-        pet.set_auto_mode(True)
+        pet.session.set_auto_mode(True)
         pet.session.begin_task()
         pet.session._pending_calls = [{"name": "open_app", "arguments": {"name": "registry editor"}}]
         pet.session._next_call()
@@ -427,7 +427,7 @@ def main() -> int:  # noqa: C901 - a linear test script
         if shown:
             chat._answer("no")   # never actually start it
         pet.session.end_task()
-        pet.set_auto_mode(False)
+        pet.session.set_auto_mode(False)
         chat.hide()
     except ToolError as exc:
         check("apps that need admin rights are detected", True, f"Registry Editor not in the Start menu here: {exc}")
@@ -459,7 +459,7 @@ def chat_test(pet, chat, app, pump, ed, ag) -> None:  # type: ignore[no-untyped-
     def converse(msg: str, ok_words: tuple[str, ...], timeout: float = 400) -> list[str]:
         n0 = len(chat.msgs)
         t0 = time.time()
-        pet._on_user_message(msg)
+        pet.session.on_user_message(msg)
         chat.add("user", msg)
         end = time.time() + timeout
         while time.time() < end:
@@ -516,7 +516,7 @@ def chat_test(pet, chat, app, pump, ed, ag) -> None:  # type: ignore[no-untyped-
     time.sleep(0.5)
     _in.write_clipboard(saved or [], private=False)
     _in.press_combo(_in.parse_combo("ctrl+home"))   # text cursor at the start, like after opening a file
-    pet.new_chat()
+    pet.session.new_chat()
     out = converse("There is a simple bug in the code in the window 'PixelCat Test Editor'. Find it and fix it.",
                    ("PixelCat Test Editor", "Test Editor"))
     st = ed.state(pump)

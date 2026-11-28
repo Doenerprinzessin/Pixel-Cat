@@ -140,7 +140,7 @@ def chat_part(pet, app) -> None:  # type: ignore[no-untyped-def]
     def converse(msg: str, timeout: float = 600) -> str:
         n0 = len(chat.msgs)
         t0 = time.time()
-        pet._on_user_message(msg)
+        pet.session.on_user_message(msg)
         end = time.time() + timeout
         while time.time() < end:
             app.processEvents()
@@ -162,7 +162,7 @@ def chat_part(pet, app) -> None:  # type: ignore[no-untyped-def]
     check("AI fixed the bug in the file with the file tools", "sort();" in text and "sort(;" not in text
           and text.startswith("const array = [1, 3, 7, 4, 6, 8, 10, 9, 2, 5]\n") and "edit_file" in calls)
     calls.clear()
-    pet.new_chat()
+    pet.session.new_chat()
     converse(f"Create a file called groceries.txt in {REL} with a shopping list of 5 items.")
     g = DIR / "groceries.txt"
     lines = [ln for ln in g.read_text(encoding="utf-8").splitlines() if ln.strip()] if g.exists() else []

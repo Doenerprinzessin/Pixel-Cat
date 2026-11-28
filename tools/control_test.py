@@ -147,7 +147,7 @@ def main() -> int:
 
         def converse(msg: str, approve: str = "yes", timeout: float = 150) -> list[str]:
             n0 = len(chat.msgs)
-            pet._on_user_message(msg)
+            pet.session.on_user_message(msg)
             end = time.time() + timeout
             while time.time() < end:
                 app.processEvents()
@@ -175,7 +175,7 @@ def main() -> int:
         print("  chat:", out, flush=True)
         check("auto-approved action ran without a card", bool(win32.user32.IsIconic(hA))
               and any("auto-approved" in line for line in out))
-        pet.set_auto_mode(True)
+        pet.session.set_auto_mode(True)
         cards_before = cards[0]
         out = converse("Close the app window 'PixelCat test window A'.")
         print("  chat:", out, flush=True)
@@ -183,7 +183,7 @@ def main() -> int:
         check("auto mode: AI closed the test window", not win32.user32.IsWindow(hA))
         check("auto mode: no permission card was shown", cards[0] == cards_before
               and any("(auto)" in line for line in out), f"cards={cards[0] - cards_before}")
-        pet.set_auto_mode(False)
+        pet.session.set_auto_mode(False)
 
     try:
         helper.stdin.write("quit\n")

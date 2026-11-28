@@ -253,7 +253,7 @@ def main() -> int:  # noqa: C901 - a linear test script
         f"#{i}" in out for i in ids), out[:90])
     out = tb.run(*tb.prepare("stop_waiting", {"id": ids[0]}))
     check("stop_waiting stops one", "Stopped" in out and len(pet.watches.active()) == 1, out[:80])
-    pet._on_user_message("/unwatch")
+    pet.session.on_user_message("/unwatch")
     check("/unwatch stops the rest", not pet.watches.active())
 
     # ---------------------------------------------------------------- wake-ups: queued, locked PC
@@ -330,7 +330,7 @@ def main() -> int:  # noqa: C901 - a linear test script
 
 
 def chat_part(pet, app, tag: str) -> None:  # type: ignore[no-untyped-def]  # noqa: C901
-    pet.new_chat()
+    pet.session.new_chat()
     pet.chat_ui.show_chat_quietly()   # no keyboard focus taken
     chat = pet.chat_ui.chat
     calls: list[tuple[str, dict]] = []
@@ -363,7 +363,7 @@ def chat_part(pet, app, tag: str) -> None:  # type: ignore[no-untyped-def]  # no
     def converse(msg: str, timeout: float = 600) -> str:
         n0 = len(chat.msgs)
         t0 = time.time()
-        pet._on_user_message(msg)
+        pet.session.on_user_message(msg)
         run_until(idle, timeout)
         print(f"  ({time.time() - t0:.0f}s) tools: {[c[0] for c in calls]}", flush=True)
         print("   ->", last_reply(n0)[:200].replace("\n", " / "), flush=True)
@@ -391,7 +391,7 @@ def chat_part(pet, app, tag: str) -> None:  # type: ignore[no-untyped-def]  # no
 
     # 2) do something after a delay (long task across time)
     calls.clear()
-    pet.new_chat()
+    pet.session.new_chat()
     note = DROP / "stretch.txt"
     t0 = time.time()
     converse(f"In 1 minute, create the file {REL}/stretch.txt with the text 'Time to stretch your legs'.")
@@ -405,7 +405,7 @@ def chat_part(pet, app, tag: str) -> None:  # type: ignore[no-untyped-def]  # no
 
     # 3) react to a new file
     calls.clear()
-    pet.new_chat()
+    pet.session.new_chat()
     converse(f"When a file called report.txt shows up in {REL}, read it and tell me the number in it.")
     check("AI: 'when a file shows up' starts a file watch", any(n == "wait_for" and a.get("event") == "file"
                                                                for n, a in calls), f"{[c for c in calls][:2]}")
@@ -418,7 +418,7 @@ def chat_part(pet, app, tag: str) -> None:  # type: ignore[no-untyped-def]  # no
 
     # 4) the user's real case: wait for a Teams message (no message is sent; the watch is checked and stopped)
     calls.clear()
-    pet.new_chat()
+    pet.session.new_chat()
     reply = converse("Wait for a Teams message to arrive and tell me who it's from.")
     wf = [a for n, a in calls if n == "wait_for"]
     check("AI: 'wait for a Teams message' really sets up a Teams notification watch",

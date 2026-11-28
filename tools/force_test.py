@@ -84,7 +84,7 @@ def main() -> int:
     # 1) with the confirmation card
     p1 = frozen_app("PixelCat frozen test app one", 700)
     check("test app is 'Not Responding'", pump(15, lambda: hung("PixelCat frozen test app one")))
-    pet._on_user_message("/force end PixelCat frozen test app one")
+    pet.session.on_user_message("/force end PixelCat frozen test app one")
     shown = pump(3, lambda: chat._confirm_cb is not None)
     card = chat.confirm_label.text() if shown else ""
     check("/force shows a confirmation card (auto mode off)", shown and "FORCE-END" in card, card[:90])
@@ -95,25 +95,25 @@ def main() -> int:
     # 2) auto mode: no card
     p2 = frozen_app("PixelCat frozen test app two", 1200)
     pump(7, lambda: hung("PixelCat frozen test app two"))
-    pet.set_auto_mode(True)
-    pet._on_user_message("/force kill the app PixelCat frozen test app two")
+    pet.session.set_auto_mode(True)
+    pet.session.on_user_message("/force kill the app PixelCat frozen test app two")
     check("auto mode: no card", chat._confirm_cb is None)
     check("auto mode: frozen app was force-ended", pump(5, lambda: p2.poll() is not None), chat.msgs[-1].text)
     # /force open uses admin rights: always a card, even in auto mode (answered NO - nothing starts)
-    pet._on_user_message("/force open terminal")
+    pet.session.on_user_message("/force open terminal")
     shown = chat._confirm_cb is not None
     check("/force open asks even in auto mode", shown and "administrator" in chat.confirm_label.text(),
           chat.confirm_label.text()[:100])
     if shown:
         chat._answer("no")
-    pet.set_auto_mode(False)
+    pet.session.set_auto_mode(False)
 
     # 3) safety
     n = len(chat.msgs)
-    pet._on_user_message("/force end csrss")
+    pet.session.on_user_message("/force end csrss")
     check("core Windows processes are refused", "core part of Windows" in chat.msgs[-1].text and len(chat.msgs) > n,
           chat.msgs[-1].text)
-    pet._on_user_message("/force end PixelCat")  # the cat itself must not end itself
+    pet.session.on_user_message("/force end PixelCat")  # the cat itself must not end itself
     check("the cat never force-ends itself", pet.own_pid in [p.pid for p in control.list_processes()])
     check("/force tools are hidden from the AI", "force_end" not in pet.session.toolbox.names()
           and all(s["function"]["name"] not in ("force_end", "run_as_admin") for s in pet.session.toolbox.schemas()))
@@ -124,7 +124,7 @@ def main() -> int:
         check("the AI cannot call force_end", True)
     spec, a = pet.session.toolbox.prepare("run_as_admin", {"name": "terminal"}, internal=True)
     check("/force open resolves the app (not started)", "terminal" in a["_label"], pet.session.toolbox.describe(spec, a))
-    pet._on_user_message("/force")
+    pet.session.on_user_message("/force")
     check("/force without target shows usage", "Usage" in chat.msgs[-1].text)
 
     for p in (p1, p2):

@@ -35,16 +35,17 @@ def made(qapp):  # type: ignore[no-untyped-def]
     def new_chat(req: Any, events: Any) -> FakeJob:
         jobs.append(FakeJob(req, events))
         return jobs[-1]
-    f = SimpleNamespace(chat=FakeChat(), saves=0, chat_state=ChatState())
+    f = SimpleNamespace(chat=FakeChat(), saves=0, chat_state=ChatState(), commands=[])
     accounts = SimpleNamespace(local=SimpleNamespace(info=SimpleNamespace(key="ollama"), new_chat=new_chat))
     x = SimpleNamespace()
     session = AgentSession(
-        f.chat_state, Config(), SavedState(), {}, accounts, x, x, x, x, x, x, x, x, x, x, x,  # type: ignore[arg-type]
+        f.chat_state, Config(), SavedState(), {}, accounts, x, x, x, x, x, x, x, x, x, x, x, x,  # type: ignore[arg-type]
         chat_ui=lambda: SimpleNamespace(chat=f.chat),  # type: ignore[arg-type, return-value]
         model_choice=lambda: SimpleNamespace(effective_model=lambda: "qwen3.5:9b"),  # type: ignore[arg-type, return-value]
         save=lambda: setattr(f, "saves", f.saves + 1), sync_tray=lambda: None, ext_gate=lambda p: True,
         credit_gate=lambda: True, copilot_credits=lambda n: None, copilot_quota=lambda: None,
-        limit_popup=lambda p, info: None)
+        limit_popup=lambda p, info: None, show_model_banner=lambda: None,
+        local_command=lambda text: (f.commands.append(text), text.startswith("/"))[1])
     session.toolbox = SimpleNamespace(names=lambda: [], schemas=lambda: [])  # type: ignore[assignment]
     session.agent = SimpleNamespace(cancel=threading.Event())  # type: ignore[assignment]
     session.esc_watch = SimpleNamespace(stop=lambda: None, start=lambda: None)  # type: ignore[assignment]
@@ -91,3 +92,19 @@ def test_an_answer_from_a_request_that_was_replaced_is_ignored(made) -> None:  #
     assert [m["role"] for m in f.chat_state.history] == ["user"] and f.saves == 0
     jobs[1].events.done("new answer", [])
     assert f.chat_state.history[-1]["content"] == "new answer" and not session.task_active
+
+
+def test_the_users_turn_skips_the_chats_own_commands_and_a_new_chat_forgets_the_running_one(made) -> None:  # type: ignore[no-untyped-def]
+    session, jobs, f = made
+    session.on_user_message("/new")
+    assert f.commands == ["/new"] and jobs == [] and f.chat_state.history == [] and not session.task_active
+    session.on_user_message("plan a trip")
+    session.on_user_message("ok, continue with it")
+    assert len(jobs) == 2 and session.task_active and f.chat_state.history[-1]["_continue"] is True
+    assert "_continue" not in f.chat_state.history[0] and ("drop_choice",) in f.chat.calls
+
+    session._raw, session._tool_round, session._had_results = "half an answer", 3, True
+    session.new_chat()
+    assert session.worker is None and not session.task_active and f.chat_state.history == []
+    assert (session._raw, session._tool_round, session._had_results, session._sent) == ("", 0, False, None)
+    assert ("reset",) in f.chat.calls and f.saves >= 1

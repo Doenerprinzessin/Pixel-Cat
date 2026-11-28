@@ -37,7 +37,6 @@ from ..ui.ball import BallOverlay
 from ..ui.dialogs import PixelDialog
 from ..ui.ledges import LedgeFinder
 from ..llm import external, models
-from ..llm.model_status import model_on_disk
 from ..ui import theme
 from ..ui.menu import PixelMenu
 from ..ui.overlay import CatOverlay
@@ -161,11 +160,12 @@ class PixelCatApp(QObject):
         self.session = AgentSession(   # the AI's turns: requests, tool rounds, tasks, watches and timers waking it up
             self.chat_state, cfg, saved, providers, self.accounts, self.creds, self.provider_settings, self.watches,
             self.brain, self.game, self.minigames, self.overlay, self.tray, self.platform.notifications,
-            self.platform.display, self.platform.folders, parent=self, chat_ui=lambda: self.chat_ui,
+            self.platform.display, self.platform.folders, self.model_status, parent=self, chat_ui=lambda: self.chat_ui,
             model_choice=lambda: self.model_choice, save=lambda: self.save(), sync_tray=lambda: self.world.sync_tray(),
             ext_gate=lambda p: self._ext_gate(p), credit_gate=lambda: self._credit_gate(),
             copilot_credits=lambda credits: self._on_copilot_credits(credits),
-            copilot_quota=lambda: self._copilot_quota(), limit_popup=lambda p, info: self._limit_popup(p, info))
+            copilot_quota=lambda: self._copilot_quota(), limit_popup=lambda p, info: self._limit_popup(p, info),
+            show_model_banner=lambda: self._show_model_banner(), local_command=lambda text: self._local_command(text))
         self.watches.fired.connect(self.session.on_watch_fired)
         self.watches.changed.connect(self.session.on_watches_changed)
         self.session.toolbox = ToolBox(cfg, AppHooks(
@@ -192,10 +192,11 @@ class PixelCatApp(QObject):
         self.chat_ui = ChatUI(   # the chat window and the saved chats (%APPDATA%\PixelCat\chats)
             self.chat_state, ChatStore(secrets=platform.secrets), saved, self.sprites, self.brain, self.overlay,
             self.world_state, self.world, self.watches, self.model_choice, self.model_status, self.platform.display,
-            parent=self, on_user_message=lambda text: self._on_user_message(text),
-            cancel_chat=lambda: self.session.cancel_chat(), new_chat=lambda: self.new_chat(),
-            set_auto_mode=lambda on: self.set_auto_mode(on), cancel_watch=lambda wid: self.session.cancel_watch(wid),
-            open_saved_chat=lambda cid: self.open_saved_chat(cid), save=lambda: self.save(),
+            parent=self, on_user_message=lambda text: self.session.on_user_message(text),
+            cancel_chat=lambda: self.session.cancel_chat(), new_chat=lambda: self.session.new_chat(),
+            set_auto_mode=lambda on: self.session.set_auto_mode(on),
+            cancel_watch=lambda wid: self.session.cancel_watch(wid),
+            open_saved_chat=lambda cid: self.session.open_saved_chat(cid), save=lambda: self.save(),
             show_model_banner=lambda: self._show_model_banner(), selftest=lambda: self.selftest)
 
         # overlay input -> brain
@@ -630,7 +631,7 @@ class PixelCatApp(QObject):
                     b.set_state(S.LOAFING, travel=False)
                 self.save()
             elif key == "automode":
-                self.set_auto_mode(not self.saved.auto_mode)
+                self.session.set_auto_mode(not self.saved.auto_mode)
             elif key == "autostart":
                 self.platform.autostart.set(not self.platform.autostart.enabled())
                 self.saved.autostart_asked = True
@@ -692,84 +693,6 @@ class PixelCatApp(QObject):
         self.brain.show_bubble("bubble_heart", 1.5)
 
     # ================================================================ chat
-    def new_chat(self) -> None:
-        """Forget the conversation (frees the model's context) and start fresh.  The one so far
-        stays in the chat history."""
-        self.save()
-        if self.session.worker is not None:
-            self.session.worker.cancel()
-            self.session.worker = None
-        self.session.end_task(cancelled=True)
-        self.session.agent.snap = None
-        self.session.agent.shot = None
-        self.session.agent.last_hwnd = 0
-        self.chat_state.history.clear()
-        self.chat_ui.chat_id, self.chat_ui.chat_created, self.chat_ui.chat_sig = None, 0.0, ""
-        self.session.drop_copilot_chat()
-        if self.chat_state.chat_model is not None or self.chat_state.chat_effort is not None:   # (a new chat: the defaults)
-            self.chat_state.chat_effort = None
-            if self.chat_state.chat_model is not None:
-                self.chat_state.chat_model = None
-                self.model_status.override = None
-                self.model_status.ensure(force=True)
-            self.model_choice.update_model_chip()
-        self.session._sent = None
-        self.session._pending_calls.clear()
-        self.session._tool_round = 0
-        self.session._had_results = False
-        self.session._long_hint_shown = False
-        self.session._raw = ""
-        if self.chat_ui.chat is not None:
-            self.chat_ui.chat.reset()
-        log.info("new chat started")
-
-    # ---------------------------------------------------------------- the chat history
-    def open_saved_chat(self, cid: str) -> None:
-        """Reopen a saved chat: what it showed, what the AI remembers, its model and effort."""
-        chat = self.chat_ui.ensure_chat()
-        if cid == self.chat_ui.chat_id:
-            chat.hide_history()
-            return
-        data = self.chat_ui.chats.load(cid)
-        if data is None:
-            chat.set_history(self.chat_ui.history_items(), self.chat_ui.chat_id)
-            chat.add("error", "That chat can't be opened any more - it was deleted or is damaged.")
-            return
-        self.new_chat()                                  # (stops what runs; the open chat stays saved)
-        self.chat_state.history[:] = [dict(m) for m in data.get("history") or [] if isinstance(m, dict) and m.get("role")]
-        self.chat_ui.chat_id, self.chat_ui.chat_created = cid, float(data.get("created") or time.time())
-        notes = []
-        tag = data.get("chat_model")
-        if isinstance(tag, str) and tag:
-            ext = external.parse(tag)
-            if (self.accounts.auth(ext[0]) if ext else models.find(tag) is not None and model_on_disk(tag)):
-                self.chat_state.chat_model = tag
-                self.model_status.override = tag
-                self.model_status.ensure(force=True)
-            else:
-                notes.append(f"It used {models.label(tag)}, which isn't available now - so it uses the default, "
-                             f"{models.label(self.cfg.model)}.")
-        eff = data.get("chat_effort")
-        self.chat_state.chat_effort = eff if eff in external.EFFORTS else None
-        self.model_choice.update_model_chip()
-        self._show_model_banner()
-        chat.load([(r, t) for r, t in data.get("msgs") or [] if isinstance(r, str) and isinstance(t, str)])
-        when = datetime.fromtimestamp(float(data.get("updated") or time.time()))
-        chat.add("info", f"🕘 Our chat from {when:%d %b %Y, %H:%M} - I remember it, just keep talking. "
-                         + " ".join(notes))
-        self.chat_ui.chat_sig = self.chat_ui.chat_signature()          # (only opened, not changed: it keeps its place)
-        log.info("saved chat %s reopened (%d messages)", cid, len(self.chat_state.history))
-
-    def set_auto_mode(self, on: bool) -> None:
-        self.saved.auto_mode = on
-        self.save()
-        if self.chat_ui.chat is not None:
-            self.chat_ui.chat.set_auto_mode(on)
-            self.chat_ui.chat.add("info", "⚡ Auto mode ON: I'll just do what you ask, no permission cards. "
-                                  "(Closing more than a few windows at once still asks.)" if on else
-                          "Auto mode OFF: I'll ask before doing things again 🐾")
-        log.info("chat auto mode %s", "on" if on else "off")
-
     _FORCE_RE = re.compile(r"^/force(?:\s+(?:(end task|end|kill|close|quit|stop|terminate)|(open|start|run|launch)))?"
                            r"(?:\s+(.*))?$", re.I | re.S)
 
@@ -835,10 +758,10 @@ class PixelCatApp(QObject):
             self._force_command(text)
             return True
         if cmd in ("/auto", "/auto on", "/auto off"):
-            self.set_auto_mode(cmd != "/auto off" and (cmd == "/auto on" or not self.saved.auto_mode))
+            self.session.set_auto_mode(cmd != "/auto off" and (cmd == "/auto on" or not self.saved.auto_mode))
             return True
         if cmd in ("/new", "/clear"):
-            self.new_chat()
+            self.session.new_chat()
             return True
         if cmd in ("/history", "/chats"):
             if not self.chat_ui.ensure_chat().history_shown:
@@ -927,32 +850,6 @@ class PixelCatApp(QObject):
                                   "'at 17:00 remind me and open Outlook'. Press Esc anywhere (or STOP) to stop me.")
             return True
         return False
-
-    _CONTINUE_RE = re.compile(r"^\s*(?:(?:ok(?:ay)?|yes|ja|go|please|bitte)[\s,!.]*)*(?:continue|go on|keep going|"
-                              r"carry on|resume|proceed|weiter|mach weiter|weitermachen|fortfahren|los)"
-                              r"\b(?:(?![?]).){0,60}$", re.I)   # e.g. "continue with the plan", not questions
-
-    def _on_user_message(self, text: str) -> None:
-        if self._local_command(text):
-            return
-        if self.session.copilot_stale:                  # (between tasks: nothing of it is running)
-            self.session.copilot_stale = False
-            self.session.drop_copilot_chat()
-        self.session.resume_after_switch = False
-        if self.chat_ui.chat is not None:
-            self.chat_ui.chat.drop_choice()                      # (a token-limit question nobody answered)
-        msg: dict[str, Any] = {"role": "user", "content": text}
-        if self._CONTINUE_RE.match(text) and self.chat_state.history:
-            msg["_continue"] = True   # same task: its original request stays at the start of the context
-        self.chat_state.history.append(msg)
-        self.session.reset_task_counters()
-        self.session.begin_task()
-        if getattr(self.session, "_forgotten", 0) > 0 and not getattr(self.session, "_long_hint_shown", False):
-            self.session._long_hint_shown = True
-            assert self.chat_ui.chat is not None
-            self.chat_ui.chat.add("info", "Psst, our chat is getting long, so I only remember the latest part. "
-                                  "Press ＋ (or Ctrl+N) for a fresh one 🐾")
-        self.session.request()
 
     def _on_model_status(self) -> None:
         if self.chat_ui.chat is not None:

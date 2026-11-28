@@ -922,7 +922,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
 
     def say(text: str) -> None:
         n = len(pet.popups.open)
-        pet._on_user_message(text)
+        pet.session.on_user_message(text)
         wait(lambda: (pet.session.worker is None and not pet.session.task_active) or chat.choice.isVisible() or len(pet.popups.open) > n)
 
     say("hi")
@@ -960,7 +960,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     saved.ext_usage["anthropic"] = {"start": X.period_start("day", datetime.now()).timestamp(), "used": 1000,
                                     "allowed": 1000}
     pet.chat_state.chat_model = None
-    pet._on_user_message("switch please")
+    pet.session.on_user_message("switch please")
     wait(lambda: chat.choice.isVisible())
     chat._choice_btns[0].click()
     shown = pet.model_menu.isVisible()
@@ -976,7 +976,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     # a provider's rate limit ------------------------------------------------------------------------------
     S["mode"] = "rate"
     n_pop = len(pet.popups.open)
-    pet._on_user_message("hello?")
+    pet.session.on_user_message("hello?")
     wait(lambda: len(pet.popups.open) > n_pop)
     pop = pet.popups.open[-1] if len(pet.popups.open) > n_pop else None
     text = pop.text.text() if pop is not None else ""

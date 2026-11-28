@@ -229,7 +229,7 @@ def main() -> int:
         if not want_chat:
             return
         pet.chat_ui.chat.msgs.clear()
-        pet._on_user_message("Please do a trick, and set a 1 minute timer called tea.")
+        pet.session.on_user_message("Please do a trick, and set a 1 minute timer called tea.")
 
     def s_chat_wait() -> None:
         if not want_chat:

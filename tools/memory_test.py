@@ -116,8 +116,8 @@ def main() -> int:
           and "THE GOAL" in str(ctx[0]["content"]), f"~{tokens} tokens")
     # "continue" after a pause resumes the same task
     h.append({"role": "assistant", "content": "I'm taking a breath here."})
-    pet._on_user_message = pet._on_user_message  # (real method used below via its regex)
-    h.append({"role": "user", "content": "continue", "_continue": bool(pet._CONTINUE_RE.match("continue"))})
+    pet.session.on_user_message = pet.session.on_user_message  # (real method used below via its regex)
+    h.append({"role": "user", "content": "continue", "_continue": bool(pet.session._CONTINUE_RE.match("continue"))})
     ctx = pet.session._context()
     check("'continue' keeps the original request at the start", "THE GOAL" in str(ctx[0]["content"])
           and any(m.get("content") == "continue" for m in ctx))
@@ -147,7 +147,7 @@ def main() -> int:
 
         def converse(msg: str, timeout: float = 300) -> str:
             n0 = len(chat.msgs)
-            pet._on_user_message(msg)
+            pet.session.on_user_message(msg)
             end = time.time() + timeout
             while time.time() < end:
                 app.processEvents()
@@ -205,7 +205,7 @@ def long_task(pet, app, check) -> None:  # type: ignore[no-untyped-def]
            + ". When all are written, click the Save button.")
     t0 = time.time()
     pet.session._sent = None
-    pet._on_user_message(msg)
+    pet.session.on_user_message(msg)
     paused = False
     end = time.time() + 900
     while time.time() < end:
@@ -219,7 +219,7 @@ def long_task(pet, app, check) -> None:  # type: ignore[no-untyped-def]
             if ("continue" in last.lower() or "taking a breath" in last.lower()) and not paused:
                 paused = True
                 print("  (paused once, saying continue:", last[:90], ")", flush=True)
-                pet._on_user_message("continue")
+                pet.session.on_user_message("continue")
                 continue
             break
         time.sleep(0.02)

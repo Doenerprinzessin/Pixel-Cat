@@ -198,7 +198,7 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     pet.chat_ui.chats = ChatStore(folder, secrets=pet.platform.secrets)
     chat = pet.chat_ui.ensure_chat()
     chat.hide_history()
-    pet.new_chat()
+    pet.session.new_chat()
     pet.chat_state.history[:] = [
         {"role": "user", "content": "Plan my trip to Rome please"},
         {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "look_at_screen", "arguments": {}}}],
@@ -226,7 +226,7 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
           and data.get("chat_effort") == "high" and [m[0] for m in data.get("msgs", [])] == ["user", "info", "cat"])
     pet.chat_ui.store_chat()
     check("an unchanged chat isn't written again", files[0].read_bytes() == raw)
-    pet.new_chat()
+    pet.session.new_chat()
     check("a new chat: the old one stays saved, the effort goes back to the default",
           pet.chat_state.history == [] and pet.chat_ui.chat_id is None and pet.chat_state.chat_effort is None and len(pet.chat_ui.chats.index()) == 1)
     chat.mousePressEvent(QMouseEvent(QMouseEvent.Type.MouseButtonPress, QPointF(chat._hist_rect().center()),
@@ -255,7 +255,7 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     idx = pet.chat_ui.chats.index()
     check("talking on: the same chat is updated, not a new one", len(idx) == 1 and idx[0].id == cid
           and idx[0].count == 2)
-    pet.new_chat()
+    pet.session.new_chat()
     pet.chat_state.history[:] = [{"role": "user", "content": "What's 2+2?"}, {"role": "assistant", "content": "4"}]
     chat.add("user", "What's 2+2?")
     chat.add("cat", "4")
@@ -274,7 +274,7 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     check("deleting the open chat starts a fresh one", pet.chat_ui.chats.index() == [] and pet.chat_state.history == []
           and pet.chat_ui.chat_id is None and chat.history_shown and "No saved chats yet" in chat.hist_view.toPlainText())
     for q in ("One?", "Two?"):
-        pet.new_chat()
+        pet.session.new_chat()
         pet.chat_state.history[:] = [{"role": "user", "content": q}]
         pet.chat_ui.store_chat()
     chat.show_history(pet.chat_ui.history_items(), pet.chat_ui.chat_id)
@@ -306,12 +306,12 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
                     "chat_model": "anthropic:claude-gone"})
     real_auth = pet.accounts.auth
     pet.accounts.auth = lambda p: ""                     # type: ignore[method-assign]   (nothing connected)
-    pet.open_saved_chat("20200102-000000-abcd")
+    pet.session.open_saved_chat("20200102-000000-abcd")
     pet.accounts.auth = real_auth                        # type: ignore[method-assign]
     check("a chat whose model isn't there any more opens with the default model (and says so)",
           pet.chat_state.chat_model is None and "isn't available" in chat.msgs[-1].text, chat.msgs[-1].text)
     pet.chat_ui.chats.delete_all()
-    pet.new_chat()
+    pet.session.new_chat()
 
     # ---- effort, from the chat's model button
     def effort_menu():  # type: ignore[no-untyped-def]
@@ -362,7 +362,7 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     pet.saved.ext_settings.pop("thinking")
     pet.saved.ext_settings.pop("effort")
     pet.chat_state.chat_model = None
-    pet.new_chat()
+    pet.session.new_chat()
     pet.cfg.model = real_model
     check("a new chat starts with the default effort", pet.chat_state.chat_effort is None)
     shutil.rmtree(folder, ignore_errors=True)

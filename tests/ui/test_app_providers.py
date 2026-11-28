@@ -580,7 +580,7 @@ def test_a_connected_external_model_for_this_chat(pet, app_env) -> None:  # type
     pet.model_choice.on_model_menu("chatmodel:anthropic:m1")
     assert pet.chat_state.chat_model == "anthropic:m1" and pet.model_status.override == "anthropic:m1"
     assert chat.model_btn.styleSheet() != "" and app_env.ensures[-1] is True
-    pet.new_chat()
+    pet.session.new_chat()
     assert pet.chat_state.chat_model is None and pet.model_status.override is None
 
 
