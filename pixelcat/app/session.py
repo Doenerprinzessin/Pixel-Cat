@@ -993,8 +993,12 @@ class AgentSession(QObject):
     def _grab_off_gui_thread(self, rect: tuple[int, int, int, int]) -> QImage:
         """``capture.grab(rect)`` on a worker thread while the GUI keeps running (ScreenCaptureKit answers
         asynchronously: waiting for it here would freeze the cat).  Its errors are raised here.  The user's
-        clicks and keys wait until it's done (no Stop or New Chat in the middle of a tool); if the task stops or
-        the cat quits meanwhile, it stops waiting."""
+        clicks and keys wait until it's done (no Stop or New Chat in the middle of a tool); if the task stopped or
+        the cat quit before, it doesn't capture, and if that happens meanwhile, it stops waiting."""
+        def stop_if_stopped() -> None:
+            if self.quitting or self.agent.cancel.is_set():
+                raise ToolError("stopped by the user")
+        stop_if_stopped()                                  # (no capture, and no Screen Recording prompt, after a stop)
         done = threading.Event()
         box: dict[str, Any] = {}
 
@@ -1008,11 +1012,11 @@ class AgentSession(QObject):
         threading.Thread(target=work, name="pixelcat-screenshot", daemon=True).start()
         end = time.monotonic() + SCREENSHOT_WAIT_S
         while not done.wait(0.01):
-            if self.quitting or self.agent.cancel.is_set():
-                raise ToolError("stopped by the user")
+            stop_if_stopped()
             if time.monotonic() > end:
                 raise OSError("the screen didn't answer in time")
             QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        stop_if_stopped()                                  # (a capture that answered right after a stop is dropped)
         if "error" in box:
             raise box["error"]
         return box["img"]

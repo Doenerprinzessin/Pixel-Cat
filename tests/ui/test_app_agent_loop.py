@@ -356,22 +356,39 @@ class SimpleQApp:
 @pytest.fixture
 def slow_mac_shot(loop, tmp_path):  # type: ignore[no-untyped-def]
     """take_screenshot as on macOS (the GUI runs while it waits for the capture), with a capture that answers only
-    when ``release`` is set (or after 5 s): ``(release, during)``; ``during`` runs on the GUI 50 ms into the wait."""
+    when ``release`` is set (or after 5 s).  ``during[0]`` runs on the GUI thread: with ``at = "wait"`` (default)
+    once the capture has started (posted from the capture's worker thread, so it runs inside the wait loop),
+    with ``at = "pre"`` 50 ms into the tool (in its pre-capture loop, before the capture starts)."""
     from types import SimpleNamespace
 
-    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
     from PySide6.QtGui import QImage
 
-    release, during = threading.Event(), []
+    class Relay(QObject):
+        fire = Signal()
+
+        @Slot()
+        def run(self) -> None:
+            ns.during[0]()
+
+    ns = SimpleNamespace(release=threading.Event(), finished=threading.Event(), during=[], at="wait", grabs=0,
+                         folder=tmp_path)
+    relay = Relay()                                       # (lives on the GUI thread)
+    relay.fire.connect(relay.run, Qt.ConnectionType.QueuedConnection)
 
     def grab(rect):  # type: ignore[no-untyped-def]
-        release.wait(5)
+        ns.grabs += 1
+        if ns.at == "wait":
+            relay.fire.emit()
+        ns.release.wait(5)
         img = QImage(4, 4, QImage.Format.Format_RGB32)
         img.fill(0)
+        ns.finished.set()
         return img
 
     def shot(a: dict[str, Any]) -> Any:
-        QTimer.singleShot(50, lambda: during[0]())
+        if ns.at == "pre":
+            QTimer.singleShot(50, lambda: ns.during[0]())
         return loop.session.tool_screenshot()
     s = loop.session
     s.display = SimpleNamespace(qt_logical=lambda: True, virtual_screen=lambda: (0, 0, 4, 4),
@@ -379,32 +396,66 @@ def slow_mac_shot(loop, tmp_path):  # type: ignore[no-untyped-def]
     s.capture = SimpleNamespace(grab=grab)
     s.folders = SimpleNamespace(known_folder=lambda name: tmp_path)
     loop.tb.add("take_screenshot", run=shot)
-    yield release, during
-    release.set()
+    yield ns
+    ns.release.set()
+
+
+def pngs(folder) -> list:  # type: ignore[no-untyped-def]
+    return list(folder.rglob("*.png"))
 
 
 def test_quitting_while_a_mac_screenshot_waits_shows_and_starts_nothing(loop, workers, slow_mac_shot) -> None:  # type: ignore[no-untyped-def]
     import time
 
-    release, during = slow_mac_shot
+    ns = slow_mac_shot
     loop.qapp = SimpleQApp()
-    during.append(loop.quit)
+    ns.during.append(loop.quit)
     ask(loop, "take a screenshot")
     t0 = time.monotonic()
     workers[0].events.done("", [call("take_screenshot")])
-    assert time.monotonic() - t0 < 2.0 and not release.is_set() and loop.qapp.quits == 1
+    assert time.monotonic() - t0 < 2.0 and ns.grabs == 1 and not ns.release.is_set() and loop.qapp.quits == 1
     assert not loop.overlay.isVisible() and not loop.chat_ui.chat.isVisible()
     assert len(workers) == 1 and "Screenshot saved" not in str(loop.chat_state.history)
+    assert not any("Screenshot saved" in m.text for m in loop.chat_ui.chat.msgs) and pngs(ns.folder) == []
+
+
+def test_a_stop_while_a_mac_screenshot_waits_ends_the_wait(loop, workers, slow_mac_shot) -> None:  # type: ignore[no-untyped-def]
+    ns = slow_mac_shot
+    ns.during.append(loop.session.cancel_chat)
+    ask(loop, "take a screenshot")
+    workers[0].events.done("", [call("take_screenshot")])
+    assert ns.grabs == 1 and not ns.release.is_set() and not ns.finished.is_set()
+    assert not loop.session.task_active and len(workers) == 1 and pngs(ns.folder) == []
     assert not any("Screenshot saved" in m.text for m in loop.chat_ui.chat.msgs)
 
 
 def test_a_new_chat_while_a_mac_screenshot_waits_gets_nothing_of_it(loop, workers, slow_mac_shot) -> None:  # type: ignore[no-untyped-def]
-    release, during = slow_mac_shot
-    during.append(lambda: (loop.session.new_chat(), release.set()))
+    ns = slow_mac_shot
+    ns.during.append(lambda: (loop.session.new_chat(), ns.release.set()))
     ask(loop, "take a screenshot")
     workers[0].events.done("", [call("take_screenshot")])
-    assert loop.chat_state.history == [] and len(workers) == 1 and not loop.session.task_active
+    assert ns.grabs == 1 and loop.chat_state.history == [] and len(workers) == 1 and not loop.session.task_active
+    assert not any("Screenshot saved" in m.text for m in loop.chat_ui.chat.msgs) and pngs(ns.folder) == []
+
+
+@pytest.mark.parametrize("how", ["quit", "stop"])
+def test_a_stop_or_quit_before_a_mac_screenshot_captures_nothing(loop, workers, slow_mac_shot, how) -> None:  # type: ignore[no-untyped-def]
+    ns = slow_mac_shot
+    ns.at = "pre"
+    ns.release.set()                                      # (a capture would answer at once)
+    if how == "quit":
+        loop.qapp = SimpleQApp()
+        ns.during.append(loop.quit)
+    else:
+        ns.during.append(loop.session.cancel_chat)
+    ask(loop, "take a screenshot")
+    workers[0].events.done("", [call("take_screenshot")])
+    assert ns.grabs == 0 and pngs(ns.folder) == [] and len(workers) == 1
     assert not any("Screenshot saved" in m.text for m in loop.chat_ui.chat.msgs)
+    if how == "stop":
+        assert not loop.session.task_active
+    else:
+        assert loop.qapp.quits == 1 and not loop.overlay.isVisible() and not loop.chat_ui.chat.isVisible()
 
 
 def test_a_new_message_after_a_stop_is_a_new_task(loop, workers) -> None:  # type: ignore[no-untyped-def]
