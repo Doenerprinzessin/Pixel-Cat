@@ -58,14 +58,14 @@ class FakeToolBox:
 def loop(pet, workers):  # type: ignore[no-untyped-def]
     tb = FakeToolBox()
     pet.toolbox = tb
-    pet.open_chat()
+    pet.chat_ui.open_chat()
     pet.tb = tb
     return pet
 
 
 def ask(pet, text: str) -> None:  # type: ignore[no-untyped-def]
-    pet.chat.input.setText(text)
-    pet.chat._send()
+    pet.chat_ui.chat.input.setText(text)
+    pet.chat_ui.chat._send()
 
 
 def call(name: str, **args: Any) -> dict[str, Any]:
@@ -87,12 +87,12 @@ def test_tool_call_then_result_then_final_answer(loop, workers) -> None:  # type
     second = workers[1].messages
     assert second[0]["role"] == "system" and [m["role"] for m in second[1:]] == ["user", "assistant", "tool"]
     assert second[-1] == {"role": "tool", "content": "ping done 1", "tool_name": "ping"}
-    assert any(m.role == "info" and m.text == "ping done 1" for m in loop.chat.msgs)
+    assert any(m.role == "info" and m.text == "ping done 1" for m in loop.chat_ui.chat.msgs)
     workers[1].events.done("All pinged.", [])
     assert not loop._task_active and loop.worker is None
     assert roles(loop) == ["user", "assistant", "tool", "assistant"]
     assert loop.chat_state.history[1]["tool_calls"] == [{"function": {"name": "ping", "arguments": {"n": 1}}}]
-    assert loop.chat.msgs[-1].text == "All pinged." and loop.chat.send_btn.text() == "SEND"
+    assert loop.chat_ui.chat.msgs[-1].text == "All pinged." and loop.chat_ui.chat.send_btn.text() == "SEND"
 
 
 def test_several_calls_in_one_reply_run_in_order_then_one_request(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -119,7 +119,7 @@ def test_tool_output_with_a_picture_keeps_only_the_newest(loop, workers) -> None
     tools = [m for m in loop.chat_state.history if m["role"] == "tool"]
     assert "images" not in tools[0] and tools[0]["content"] == "saw 1 (older screenshot removed)"
     assert tools[1]["images"] == ["img2"]
-    assert any(m.text == "👀 Looked" for m in loop.chat.msgs)
+    assert any(m.text == "👀 Looked" for m in loop.chat_ui.chat.msgs)
 
 
 def test_text_tool_protocol_puts_results_in_user_messages(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -142,7 +142,7 @@ def test_the_step_limit_pauses_the_task_and_continue_goes_on(loop, workers) -> N
     assert len(loop.tb.ran) == 3 and loop._tool_round == 3 and loop._task_active
     workers[-1].events.done("", [call("step", n=99)])
     assert len(loop.tb.ran) == 3 and not loop._task_active
-    assert "That was 3 steps in a row" in loop.chat.msgs[-1].text and len(workers) == 4
+    assert "That was 3 steps in a row" in loop.chat_ui.chat.msgs[-1].text and len(workers) == 4
     ask(loop, "continue")
     assert loop.chat_state.history[-1] == {"role": "user", "content": "continue", "_continue": True}
     assert loop._tool_round == 0 and loop._task_active and len(workers) == 5
@@ -171,7 +171,7 @@ def test_repeating_the_same_call_stops(loop, workers, name: str, repeats: int) -
     assert loop._task_active and len(loop.tb.ran) == repeats - 1
     workers[-1].events.done("", [call(name, n=1)])
     assert not loop._task_active and len(loop.tb.ran) == repeats - 1
-    assert "I keep doing the same thing" in loop.chat.msgs[-1].text
+    assert "I keep doing the same thing" in loop.chat_ui.chat.msgs[-1].text
 
 
 def test_a_tool_error_goes_back_to_the_model(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -182,7 +182,7 @@ def test_a_tool_error_goes_back_to_the_model(loop, workers) -> None:  # type: ig
     ask(loop, "poke")
     workers[0].events.done("", [call("poke", n=1)])
     assert loop.chat_state.history[-1]["content"] == "error: the window is gone" and loop._fail_streak == 1
-    assert loop.chat.msgs[-2].role == "error" and "poke didn't work: the window is gone" in loop.chat.msgs[-2].text
+    assert loop.chat_ui.chat.msgs[-2].role == "error" and "poke didn't work: the window is gone" in loop.chat_ui.chat.msgs[-2].text
     assert len(workers) == 2 and loop._task_active and workers[1].think is True      # (it thinks after a failure)
 
 
@@ -203,7 +203,7 @@ def test_failing_again_and_again_stops(loop, workers) -> None:  # type: ignore[n
         workers[-1].events.done("", [call("poke", n=i)])
     assert loop._fail_streak == 4 and loop._task_active
     workers[-1].events.done("", [call("poke", n=9)])
-    assert not loop._task_active and "Several steps in a row didn't work" in loop.chat.msgs[-1].text
+    assert not loop._task_active and "Several steps in a row didn't work" in loop.chat_ui.chat.msgs[-1].text
 
 
 def test_a_success_resets_the_failures(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -229,11 +229,11 @@ def test_an_action_is_asked_first_and_no_means_no(loop, workers) -> None:  # typ
     loop.tb.add("close", confirm="hard")
     ask(loop, "close it")
     workers[0].events.done("", [call("close", n=1)])
-    assert loop.tb.ran == [] and "use close?" in loop.chat.confirm_label.text()
-    assert not loop.chat.always_btn.isVisibleTo(loop.chat)               # (no ALWAYS for hard actions)
-    loop.chat.no_btn.click()
+    assert loop.tb.ran == [] and "use close?" in loop.chat_ui.chat.confirm_label.text()
+    assert not loop.chat_ui.chat.always_btn.isVisibleTo(loop.chat_ui.chat)               # (no ALWAYS for hard actions)
+    loop.chat_ui.chat.no_btn.click()
     assert loop.tb.ran == [] and loop.chat_state.history[-1]["content"] == "The user declined this action."
-    assert loop.chat.msgs[-2].text == "Okay, I won't use close." and len(workers) == 2
+    assert loop.chat_ui.chat.msgs[-2].text == "Okay, I won't use close." and len(workers) == 2
 
 
 def test_always_approves_the_whole_group(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -241,19 +241,19 @@ def test_always_approves_the_whole_group(loop, workers) -> None:  # type: ignore
     loop.tb.add("vol_down", confirm="soft", group="volume")
     ask(loop, "louder")
     workers[0].events.done("", [call("vol_up", n=1)])
-    loop.chat.always_btn.click()
+    loop.chat_ui.chat.always_btn.click()
     assert loop.saved.auto_approved_tools == ["volume"] and loop.tb.ran == [("vol_up", {"n": 1})]
     workers[1].events.done("", [call("vol_down", n=2)])
-    assert loop.chat._confirm_cb is None and loop.tb.ran[-1] == ("vol_down", {"n": 2})
-    assert loop.chat.msgs[-2].text == "vol_down done 2 (auto-approved)"
+    assert loop.chat_ui.chat._confirm_cb is None and loop.tb.ran[-1] == ("vol_down", {"n": 2})
+    assert loop.chat_ui.chat.msgs[-2].text == "vol_down done 2 (auto-approved)"
 
 
 def test_a_hidden_chat_comes_back_to_ask(loop, workers) -> None:  # type: ignore[no-untyped-def]
     loop.tb.add("close", confirm="hard")
     ask(loop, "close it")
-    loop.chat.hide()
+    loop.chat_ui.chat.hide()
     workers[0].events.done("", [call("close")])
-    assert loop.chat.isVisible() and loop.chat._confirm_cb is not None
+    assert loop.chat_ui.chat.isVisible() and loop.chat_ui.chat._confirm_cb is not None
 
 
 def test_auto_mode_acts_up_to_its_limit_then_asks(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -264,8 +264,8 @@ def test_auto_mode_acts_up_to_its_limit_then_asks(loop, workers) -> None:  # typ
     ask(loop, "go")
     workers[-1].events.done("", [call("click", n=0), call("act", n=1), call("act", n=2), call("act", n=3)])
     assert [r[1]["n"] for r in loop.tb.ran] == [0, 1, 2] and loop._auto_actions == 2      # (clicks don't count)
-    assert loop.chat._confirm_cb is not None
-    loop.chat.yes_btn.click()
+    assert loop.chat_ui.chat._confirm_cb is not None
+    loop.chat_ui.chat.yes_btn.click()
     assert [r[1]["n"] for r in loop.tb.ran] == [0, 1, 2, 3]
 
 
@@ -276,17 +276,17 @@ def test_auto_mode_also_does_hard_actions_but_never_forced_ones(loop, workers) -
     ask(loop, "go")
     workers[-1].events.done("", [call("close", n=1), call("run_box", n=2)])
     assert loop.tb.ran == [("close", {"n": 1})]
-    assert "(this can run commands, so I always ask)" in loop.chat.confirm_label.text()
-    assert not loop.chat.always_btn.isVisibleTo(loop.chat)
+    assert "(this can run commands, so I always ask)" in loop.chat_ui.chat.confirm_label.text()
+    assert not loop.chat_ui.chat.always_btn.isVisibleTo(loop.chat_ui.chat)
 
 
 # ---------------------------------------------------------------- cancelling
 def test_stop_while_the_model_is_answering(loop, workers) -> None:  # type: ignore[no-untyped-def]
     ask(loop, "long answer")
     workers[0].events.token("Once upon")
-    loop.chat.send_btn.click()                            # (it reads STOP)
+    loop.chat_ui.chat.send_btn.click()                            # (it reads STOP)
     assert workers[0].cancelled and not loop._task_active and loop.agent.cancel.is_set()
-    assert loop.chat.msgs[-1].text == "(stopped)"
+    assert loop.chat_ui.chat.msgs[-1].text == "(stopped)"
     workers[0].events.done("Once upon a time", [call("anything")])
     assert loop.chat_state.history[-1]["role"] == "user" and len(workers) == 1
 
@@ -295,17 +295,17 @@ def test_stop_while_a_card_asks(loop, workers) -> None:  # type: ignore[no-untyp
     loop.tb.add("close", confirm="hard")
     ask(loop, "close it")
     workers[0].events.done("", [call("close")])
-    cb = loop.chat._confirm_cb
+    cb = loop.chat_ui.chat._confirm_cb
     loop._on_escape()
-    assert not loop._task_active and loop.chat._confirm_cb is None and not loop.chat.confirm.isVisibleTo(loop.chat)
+    assert not loop._task_active and loop.chat_ui.chat._confirm_cb is None and not loop.chat_ui.chat.confirm.isVisibleTo(loop.chat_ui.chat)
     cb("yes")                                             # (a late answer does nothing)
     assert loop.tb.ran == [] and len(workers) == 1
 
 
 def test_escape_without_a_task_does_nothing(loop, workers) -> None:  # type: ignore[no-untyped-def]
-    n = len(loop.chat.msgs)
+    n = len(loop.chat_ui.chat.msgs)
     loop._on_escape()
-    assert len(loop.chat.msgs) == n
+    assert len(loop.chat_ui.chat.msgs) == n
 
 
 def test_stop_while_a_background_tool_runs(loop, workers, qtbot) -> None:  # type: ignore[no-untyped-def]
@@ -320,12 +320,12 @@ def test_stop_while_a_background_tool_runs(loop, workers, qtbot) -> None:  # typ
     workers[0].events.done("", [call("slow")])
     assert loop._tool_thread is not None and loop.esc_watch.active
     loop._cancel_chat()
-    assert not loop._task_active and not loop.esc_watch.active and loop.chat.msgs[-1].text == "(stopped)"
+    assert not loop._task_active and not loop.esc_watch.active and loop.chat_ui.chat.msgs[-1].text == "(stopped)"
     release.set()
     qtbot.waitUntil(lambda: loop._tool_thread is None and not loop._live_tools, timeout=3000)
     assert loop.chat_state.history[-1] == {"role": "tool", "content": "finally done", "tool_name": "slow"}
     assert len(workers) == 1                              # (the result is kept, nothing is asked any more)
-    assert not any(m.text == "finally done" for m in loop.chat.msgs)
+    assert not any(m.text == "finally done" for m in loop.chat_ui.chat.msgs)
 
 
 def test_a_background_tool_result_continues_the_task(loop, workers, qtbot) -> None:  # type: ignore[no-untyped-def]
@@ -342,7 +342,7 @@ def test_a_new_chat_stops_the_task_and_forgets_it(loop, workers) -> None:  # typ
     workers[0].events.done("", [call("close")])
     loop.new_chat()
     assert not loop._task_active and loop.chat_state.history == [] and loop._pending_calls == []
-    assert loop.chat._confirm_cb is None and loop.agent.cancel.is_set()
+    assert loop.chat_ui.chat._confirm_cb is None and loop.agent.cancel.is_set()
 
 
 def test_a_new_message_after_a_stop_is_a_new_task(loop, workers) -> None:  # type: ignore[no-untyped-def]

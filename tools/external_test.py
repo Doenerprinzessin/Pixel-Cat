@@ -917,8 +917,8 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     S["mode"] = "text"
     pet.accounts.ext_p("anthropic").update(limit=1000, maximum=2.0, period="day")
     saved.ext_usage["anthropic"] = {}
-    pet._show_chat_quietly()
-    chat = pet.chat
+    pet.chat_ui.show_chat_quietly()
+    chat = pet.chat_ui.chat
 
     def say(text: str) -> None:
         n = len(pet.popups.open)

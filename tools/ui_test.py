@@ -195,26 +195,26 @@ def main() -> int:
     def s_chat_open() -> None:
         fake_cursor[0] = None
         pet._on_menu("chat")
-        check("chat window opens", pet.chat is not None and pet.chat.isVisible())
-        ex = win32.get_exstyle(int(pet.chat.winId()))
+        check("chat window opens", pet.chat_ui.chat is not None and pet.chat_ui.chat.isVisible())
+        ex = win32.get_exstyle(int(pet.chat_ui.chat.winId()))
         check("chat not in taskbar", bool(ex & win32.WS_EX_TOOLWINDOW), hex(ex))
-        pet.chat.add("user", "show me python hello world")
-        pet.chat.add("cat", "Mrrrow~ here you go (=^･ω･^=)\n```python\nprint('hello world')\n```\nPurrr ✨")
-        pet.chat.ask_confirm("open the app 'notepad'?", lambda ans: check("confirm callback delivers answer", ans == "no"),
+        pet.chat_ui.chat.add("user", "show me python hello world")
+        pet.chat_ui.chat.add("cat", "Mrrrow~ here you go (=^･ω･^=)\n```python\nprint('hello world')\n```\nPurrr ✨")
+        pet.chat_ui.chat.ask_confirm("open the app 'notepad'?", lambda ans: check("confirm callback delivers answer", ans == "no"),
                              allow_always=True)
 
     def s_chat_shot() -> None:
-        pet.chat.grab().save(str(OUT / "chat.png"))
-        pet.chat._answer("no")
+        pet.chat_ui.chat.grab().save(str(OUT / "chat.png"))
+        pet.chat_ui.chat._answer("no")
         # New chat: click the + in the title bar
         pet.chat_state.history.extend([{"role": "user", "content": "old question"}, {"role": "assistant", "content": "old answer"}])
-        r = pet.chat._new_rect()
+        r = pet.chat_ui.chat._new_rect()
         pt = QPointF(r.center().x(), r.center().y())
-        ev = QMouseEvent(QMouseEvent.Type.MouseButtonPress, pt, pet.chat.mapToGlobal(pt), Qt.MouseButton.LeftButton,
+        ev = QMouseEvent(QMouseEvent.Type.MouseButtonPress, pt, pet.chat_ui.chat.mapToGlobal(pt), Qt.MouseButton.LeftButton,
                          Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
-        QApplication.sendEvent(pet.chat, ev)
-        check("new chat clears the conversation", pet.chat_state.history == [] and len(pet.chat.msgs) == 1
-              and pet.chat.msgs[0].role == "cat", f"history={len(pet.chat_state.history)} msgs={len(pet.chat.msgs)}")
+        QApplication.sendEvent(pet.chat_ui.chat, ev)
+        check("new chat clears the conversation", pet.chat_state.history == [] and len(pet.chat_ui.chat.msgs) == 1
+              and pet.chat_ui.chat.msgs[0].role == "cat", f"history={len(pet.chat_state.history)} msgs={len(pet.chat_ui.chat.msgs)}")
 
     def s_cpu_start() -> None:
         pet.brain.set_state(pet.brain.state.__class__.LOAFING, travel=False)
@@ -228,22 +228,22 @@ def main() -> int:
     def s_chat_real() -> None:
         if not want_chat:
             return
-        pet.chat.msgs.clear()
+        pet.chat_ui.chat.msgs.clear()
         pet._on_user_message("Please do a trick, and set a 1 minute timer called tea.")
 
     def s_chat_wait() -> None:
         if not want_chat:
             return
         deadline = time.time() + 150
-        while time.time() < deadline and (pet.worker is not None or pet.chat._busy or pet._pending_calls):
+        while time.time() < deadline and (pet.worker is not None or pet.chat_ui.chat._busy or pet._pending_calls):
             QApplication.processEvents()
             time.sleep(0.05)
-        texts = [m.text for m in pet.chat.msgs]
+        texts = [m.text for m in pet.chat_ui.chat.msgs]
         print("CHAT:", texts, flush=True)
-        check("ollama answered", any(m.role == "cat" and m.text.strip() for m in pet.chat.msgs))
-        check("cat_action tool ran", any(m.role == "info" and "ok: trick" in m.text for m in pet.chat.msgs))
-        check("set_timer tool ran", any(m.role == "info" and "tea" in m.text.lower() for m in pet.chat.msgs))
-        pet.chat.grab().save(str(OUT / "chat_real.png"))
+        check("ollama answered", any(m.role == "cat" and m.text.strip() for m in pet.chat_ui.chat.msgs))
+        check("cat_action tool ran", any(m.role == "info" and "ok: trick" in m.text for m in pet.chat_ui.chat.msgs))
+        check("set_timer tool ran", any(m.role == "info" and "tea" in m.text.lower() for m in pet.chat_ui.chat.msgs))
+        pet.chat_ui.chat.grab().save(str(OUT / "chat_real.png"))
 
     def s_done() -> None:
         failed = [r for r in results if not r[1]]

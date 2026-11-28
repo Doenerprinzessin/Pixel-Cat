@@ -153,7 +153,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     spec, a, out = start(event="notification", app="powershell", text=f"Anna {tag}", then="tell the user who wrote")
     check("a notification watch starts and reports back", isinstance(out, ToolOutput) and "Watching now" in out.text
           and len(pet.watches.active()) == 1, out.display if isinstance(out, ToolOutput) else str(out))
-    check("the chat shows what is being watched", pet.chat is None or bool(pet.chat._watch_items))
+    check("the chat shows what is being watched", pet.chat_ui.chat is None or bool(pet.chat_ui.chat._watch_items))
     spec, a, out2 = start(event="notification", app="PowerShell", text=f"anna {tag}", then="tell the user")
     check("the same watch twice (models sometimes repeat a call) is kept once",
           "Already watching" in out2.text and len(pet.watches.active()) == 1, out2.text[:70])
@@ -257,7 +257,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("/unwatch stops the rest", not pet.watches.active())
 
     # ---------------------------------------------------------------- wake-ups: queued, locked PC
-    pet._show_chat_quietly()   # no keyboard focus taken
+    pet.chat_ui.show_chat_quietly()   # no keyboard focus taken
     w = Watch(99, "time", "test", then="say hi", request="remind me")
     woken.clear()
     pet._task_active = True
@@ -331,8 +331,8 @@ def main() -> int:  # noqa: C901 - a linear test script
 
 def chat_part(pet, app, tag: str) -> None:  # type: ignore[no-untyped-def]  # noqa: C901
     pet.new_chat()
-    pet._show_chat_quietly()   # no keyboard focus taken
-    chat = pet.chat
+    pet.chat_ui.show_chat_quietly()   # no keyboard focus taken
+    chat = pet.chat_ui.chat
     calls: list[tuple[str, dict]] = []
     real_run = pet.toolbox.run
     pet.toolbox.run = lambda spec, a: (calls.append((spec.name, {k: v for k, v in a.items() if not k.startswith("_")})),

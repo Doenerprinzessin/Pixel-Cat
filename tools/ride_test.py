@@ -214,8 +214,8 @@ def main() -> int:  # noqa: C901 - a linear test script
     say(h, "quit", "")
     # ---------------------------------------------------------------- our own chat window
     pump(1.0)
-    pet._show_chat_quietly()                  # (shown without taking the keyboard)
-    chat = pet.chat
+    pet.chat_ui.show_chat_quietly()                  # (shown without taking the keyboard)
+    chat = pet.chat_ui.chat
     assert chat is not None
     chat_hwnd = int(chat.winId())
     win32.move_window(chat_hwnd, wx, wy, chat.width(), chat.height(), topmost=False)

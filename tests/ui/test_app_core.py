@@ -29,7 +29,7 @@ def _win(hwnd: int, rect: tuple[int, int, int, int], z: int = 0) -> WinInfo:
 def test_construction_wires_the_parts_without_starting_anything(pet, app_env) -> None:  # type: ignore[no-untyped-def]
     assert [m.device for m in pet.world_state.monitors] == ["TEST1"]
     assert pet.menu.title == "PIXEL CAT" and pet.model_menu.title == "MODEL FOR THIS CHAT"
-    assert pet.chat is None and pet.game_state.mini is None and pet.worker is None and pet.chat_state.history == []
+    assert pet.chat_ui.chat is None and pet.game_state.mini is None and pet.worker is None and pet.chat_state.history == []
     assert pet.brain.game is pet.game and pet.game.on_end == pet.minigames.game_ended
     assert not any(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer,
                                           pet.save_timer, pet.top_timer, pet.tray_timer, pet.quit_timer))
@@ -219,13 +219,13 @@ def test_a_new_window_next_to_the_cat_startles_it(started, app_env) -> None:  # 
 
 def test_hidden_during_fullscreen_apps_and_back(started, app_env) -> None:  # type: ignore[no-untyped-def]
     pet = started
-    pet._ensure_chat().show_near(pet.overlay.cat_rect(), pet.world_state.monitors[0].work, 2, activate=False)
+    pet.chat_ui.ensure_chat().show_near(pet.overlay.cat_rect(), pet.world_state.monitors[0].work, 2, activate=False)
     app_env.desktop.user_state = UserState.FULLSCREEN_APP
     pet.world.check_fullscreen()
-    assert pet.world_state.hidden_fullscreen and not pet.overlay.isVisible() and not pet.chat.isVisible()
+    assert pet.world_state.hidden_fullscreen and not pet.overlay.isVisible() and not pet.chat_ui.chat.isVisible()
     app_env.desktop.user_state = UserState.NORMAL
     pet.world.check_fullscreen()
-    assert not pet.world_state.hidden_fullscreen and pet.overlay.isVisible() and pet.chat.isVisible()
+    assert not pet.world_state.hidden_fullscreen and pet.overlay.isVisible() and pet.chat_ui.chat.isVisible()
     assert pet.errors == []
 
 
@@ -316,12 +316,12 @@ def test_save_writes_the_cats_state(pet, app_env) -> None:  # type: ignore[no-un
 def test_quit_saves_stops_and_hides_everything(pet, app_env) -> None:  # type: ignore[no-untyped-def]
     pet.start()
     pet.qapp = FakeQApp()
-    pet._ensure_chat().show()
+    pet.chat_ui.ensure_chat().show()
     pet.quit()
     assert pet._quitting and pet.qapp.quits == 1 and app_env.saved_states
     assert not any(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer,
                                           pet.save_timer))
-    assert not pet.overlay.isVisible() and not pet.chat.isVisible() and not pet.ball_win.isVisible()
+    assert not pet.overlay.isVisible() and not pet.chat_ui.chat.isVisible() and not pet.ball_win.isVisible()
     assert pet.agent.cancel.is_set() and pet.watches._stop.is_set() and pet.model_status._stop.is_set()
 
 

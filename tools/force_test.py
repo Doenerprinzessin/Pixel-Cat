@@ -58,8 +58,8 @@ def main() -> int:
                       providers=build_providers())
     pet.save = lambda: None
     pet.start()
-    pet.open_chat()
-    chat = pet.chat
+    pet.chat_ui.open_chat()
+    chat = pet.chat_ui.chat
     assert chat is not None
 
     def pump(seconds: float, until=None) -> bool:  # type: ignore[no-untyped-def]

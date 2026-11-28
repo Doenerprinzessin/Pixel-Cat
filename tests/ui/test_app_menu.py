@@ -296,11 +296,11 @@ def test_quiet_mode(pet, app_env) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_auto_mode(pet) -> None:  # type: ignore[no-untyped-def]
-    pet._ensure_chat()
+    pet.chat_ui.ensure_chat()
     pet._on_menu("automode")
-    assert pet.saved.auto_mode and pet.chat.auto_mode and "Auto mode ON" in pet.chat.msgs[-1].text
+    assert pet.saved.auto_mode and pet.chat_ui.chat.auto_mode and "Auto mode ON" in pet.chat_ui.chat.msgs[-1].text
     pet._on_menu("automode")
-    assert not pet.saved.auto_mode and "Auto mode OFF" in pet.chat.msgs[-1].text
+    assert not pet.saved.auto_mode and "Auto mode OFF" in pet.chat_ui.chat.msgs[-1].text
 
 
 def test_start_with_windows(pet, app_env) -> None:  # type: ignore[no-untyped-def]
@@ -340,10 +340,10 @@ def test_feed_and_find(pet) -> None:  # type: ignore[no-untyped-def]
                                                     ("font:clean", "ui_font", "clean")])
 def test_the_look(pet, app_env, key: str, attr: str, value: str) -> None:  # type: ignore[no-untyped-def]
     kind = key.split(":")[0]
-    pet._ensure_chat()
+    pet.chat_ui.ensure_chat()
     pet._on_menu(key)
     assert getattr(pet.saved, attr) == value and theme.choice(kind) == value and app_env.saved_states
-    assert pet.chat.u == theme.unit_for_dpi(pet.chat.dpi)
+    assert pet.chat_ui.chat.u == theme.unit_for_dpi(pet.chat_ui.chat.dpi)
 
 
 def test_a_style_change_refreshes_the_open_menu(pet) -> None:  # type: ignore[no-untyped-def]
@@ -362,11 +362,11 @@ def test_name(pet, app_env, monkeypatch) -> None:  # type: ignore[no-untyped-def
     dlg.field.setText("<b>Bad</b>")
     dlg._save()
     assert pet.saved.cat_name == "" and dlg.status.text()
-    pet._ensure_chat()
+    pet.chat_ui.ensure_chat()
     dlg.field.setText("  Mochi ")
     dlg._save()
     assert pet.saved.cat_name == "Mochi" and naming.custom() == "Mochi" and pet.menu.title == "MOCHI"
-    assert pet._copilot_stale and pet.chat._title_text() == "MOCHI CHAT"
+    assert pet._copilot_stale and pet.chat_ui.chat._title_text() == "MOCHI CHAT"
     pet.menus.set_cat_name("")
     assert pet.menu.title == "PIXEL CAT"
 
@@ -484,7 +484,7 @@ def test_a_failing_menu_action_is_logged_not_raised(pet, monkeypatch, caplog) ->
         called.append(True)
         raise RuntimeError("x")
 
-    monkeypatch.setattr(pet, "open_chat", boom)
+    monkeypatch.setattr(pet.chat_ui, "open_chat", boom)
     with caplog.at_level(logging.ERROR, logger="pixelcat.app"):
         pet._on_menu("chat")
     assert called == [True]

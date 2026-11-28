@@ -503,8 +503,8 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     check("picking a Copilot model makes it the default", pet.cfg.model == "copilot:fake-model"
           and X.label(pet.cfg.model) == "Fake Model (GitHub)")
     # chatting ---------------------------------------------------------------------------------------------
-    pet._show_chat_quietly()
-    chat = pet.chat
+    pet.chat_ui.show_chat_quietly()
+    chat = pet.chat_ui.chat
 
     def say(text: str) -> None:
         n = len(pet.popups.open)

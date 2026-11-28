@@ -365,7 +365,7 @@ def part_real() -> None:
     pet.save = lambda: None
     t0 = time.time()
     pet.start(warm_model=True)
-    chat = pet._ensure_chat()                    # not shown on screen
+    chat = pet.chat_ui.ensure_chat()                    # not shown on screen
     pump(15, lambda: pet.model_status.state == "loading")
     text = chat.model_bar.text() if not chat.model_bar.isHidden() else ""
     check("real: shortly after the cat starts, the model loads; the chat says so", pet.model_status.state == "loading"

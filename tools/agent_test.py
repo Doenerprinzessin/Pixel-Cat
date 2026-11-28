@@ -228,8 +228,8 @@ def main() -> int:  # noqa: C901 - a linear test script
           out.text.replace("\n", " | ")[:200])
 
     # ---------------------------------------------------------------- the chat window lying on top
-    pet.open_chat()
-    chat = pet.chat
+    pet.chat_ui.open_chat()
+    chat = pet.chat_ui.chat
     assert chat is not None
     pump(0.5)
     _, _, out = run("look_at_screen", target="PixelCat Test Editor")
@@ -300,7 +300,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     th = threading.Thread(target=lambda: box.append(_safe(lambda: ag.type(a['text'], a['_hwnd'], method='type'))))
     th.start()
     pump(0.6)
-    pet.open_chat()  # activates the chat window = another window comes to the front
+    pet.chat_ui.open_chat()  # activates the chat window = another window comes to the front
     chat.activateWindow()
     while th.is_alive():
         pump(0.02)
@@ -387,7 +387,7 @@ def main() -> int:  # noqa: C901 - a linear test script
         check("unknown element ids are rejected", True, str(exc))
 
     # ---------------------------------------------------------------- looking/reading never change anything
-    pet.open_chat()
+    pet.chat_ui.open_chat()
     chat.activateWindow()
     pump(0.5)
     fg_before = int(win32.user32.GetForegroundWindow() or 0)
@@ -416,7 +416,7 @@ def main() -> int:  # noqa: C901 - a linear test script
         spec, a = tb.prepare("open_app", {"name": "registry editor"})
         check("apps that need admin rights are detected", bool(a.get("_admin")) and a.get("_force_confirm")
               and a.get("_confirm") == "hard", tb.describe(spec, a))
-        pet.open_chat()
+        pet.chat_ui.open_chat()
         pet.set_auto_mode(True)
         pet._begin_task()
         pet._pending_calls = [{"name": "open_app", "arguments": {"name": "registry editor"}}]
@@ -453,7 +453,7 @@ def main() -> int:  # noqa: C901 - a linear test script
 def chat_test(pet, chat, app, pump, ed, ag) -> None:  # type: ignore[no-untyped-def]  # noqa: C901
     from pixelcat.adapters.windows import control, uia, win32
 
-    pet.open_chat()
+    pet.chat_ui.open_chat()
     cards = [0]
 
     def converse(msg: str, ok_words: tuple[str, ...], timeout: float = 400) -> list[str]:

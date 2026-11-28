@@ -430,7 +430,7 @@ def test_stopping_copilot_closes_its_session_and_stops_the_providers(pet, monkey
 
 # ---------------------------------------------------------------- limits while chatting
 def _task(pet) -> None:  # type: ignore[no-untyped-def]
-    pet._ensure_chat()
+    pet.chat_ui.ensure_chat()
     pet._begin_task()
 
 
@@ -442,10 +442,10 @@ def test_token_limit_gate(pet, p: str, used: int, status: str) -> None:  # type:
     assert pet.accounts.budget(p).status() == status
     assert pet._ext_gate(p) is (status == "ok")
     if status == "soft":
-        assert [b.text() for b in pet.chat._choice_btns] == ["SWITCH MODEL", "RAISE TO 1.5M", "STOP"]
-        assert "Token limit reached." in pet.chat.choice_label.text()
+        assert [b.text() for b in pet.chat_ui.chat._choice_btns] == ["SWITCH MODEL", "RAISE TO 1.5M", "STOP"]
+        assert "Token limit reached." in pet.chat_ui.chat.choice_label.text()
     elif status == "hard":
-        assert pet.popups.open[-1].title == "All tokens used" and pet.chat.msgs[-1].role == "error"
+        assert pet.popups.open[-1].title == "All tokens used" and pet.chat_ui.chat.msgs[-1].role == "error"
 
 
 def test_raising_the_token_limit_goes_on(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -454,9 +454,9 @@ def test_raising_the_token_limit_goes_on(pet, monkeypatch) -> None:  # type: ign
     _task(pet)
     pet.accounts.budget("anthropic").add(1_000_000)
     pet._ext_gate("anthropic")
-    pet.chat._choice_btns[1].click()
+    pet.chat_ui.chat._choice_btns[1].click()
     assert pet.accounts.budget("anthropic").allowed() == 1_500_000 and requests == [True]
-    assert "the Claude limit is 1.5M" in pet.chat.msgs[-1].text
+    assert "the Claude limit is 1.5M" in pet.chat_ui.chat.msgs[-1].text
 
 
 def test_switching_or_stopping_at_the_token_limit(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -466,7 +466,7 @@ def test_switching_or_stopping_at_the_token_limit(pet, monkeypatch) -> None:  # 
     pet._limit_answer("openai", "switch")
     assert pet._resume_after_switch and opened == [True]
     pet._limit_answer("openai", "stop")
-    assert not pet._task_active and "I stopped here" in pet.chat.msgs[-1].text
+    assert not pet._task_active and "I stopped here" in pet.chat_ui.chat.msgs[-1].text
 
 
 def test_copilot_credit_gate(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -475,8 +475,8 @@ def test_copilot_credit_gate(pet, monkeypatch) -> None:  # type: ignore[no-untyp
     _task(pet)
     pet._on_copilot_credits(5000)
     assert pet._credit_budget().used() == 5000 and not pet._credit_gate()
-    assert [b.text() for b in pet.chat._choice_btns] == ["SWITCH MODEL", "RAISE TO 7,500", "STOP"]
-    pet.chat._choice_btns[1].click()
+    assert [b.text() for b in pet.chat_ui.chat._choice_btns] == ["SWITCH MODEL", "RAISE TO 7,500", "STOP"]
+    pet.chat_ui.chat._choice_btns[1].click()
     assert pet._credit_budget().allowed() == 7500 and requests == [True]
 
 
@@ -489,7 +489,7 @@ def test_provider_limit_popups(pet, app_env, why: str, title: str, url) -> None:
     p = {"plan": "openai", "copilot": "copilot"}.get(why, "anthropic")
     pet._limit_popup(p, {"why": why})
     pop = pet.popups.open[-1]
-    assert pop.title == title and pet.chat.msgs[-1].role == "error"
+    assert pop.title == title and pet.chat_ui.chat.msgs[-1].role == "error"
     pop.ok.click()
     if url:
         assert app_env.opened_urls == [url]
@@ -512,9 +512,9 @@ def test_choosing_an_external_default_model_needs_a_connection(pet, app_env) -> 
 
 def test_choosing_a_local_model_that_isnt_downloaded_asks_first(pet, app_env) -> None:  # type: ignore[no-untyped-def]
     pet._on_menu("model:qwen3.5:9b")
-    assert pet.chat is not None and pet.chat.isVisible() and pet.cfg.model == "qwen3.5:35b-a3b"
-    assert "download Medium (9B) (6.6 GB) and make it the default model" in pet.chat.confirm_label.text()
-    pet.chat.yes_btn.click()
+    assert pet.chat_ui.chat is not None and pet.chat_ui.chat.isVisible() and pet.cfg.model == "qwen3.5:35b-a3b"
+    assert "download Medium (9B) (6.6 GB) and make it the default model" in pet.chat_ui.chat.confirm_label.text()
+    pet.chat_ui.chat.yes_btn.click()
     assert pet.cfg.model == "qwen3.5:9b" and "qwen3.5:9b" in pet.model_choice.download_ok
 
 
@@ -557,7 +557,7 @@ def test_default_effort_of_online_models_comes_from_settings(pet) -> None:  # ty
 
 
 def test_this_chats_model_and_effort(pet) -> None:  # type: ignore[no-untyped-def]
-    chat = pet._ensure_chat()
+    chat = pet.chat_ui.ensure_chat()
     assert chat.model_btn.text() == "35B"
     pet.model_choice.on_model_menu("chateffort:high")
     assert pet.chat_state.chat_effort == "high" and chat.model_btn.text() == "35B · HIGH"
@@ -571,7 +571,7 @@ def test_this_chats_model_and_effort(pet) -> None:  # type: ignore[no-untyped-de
 
 
 def test_a_connected_external_model_for_this_chat(pet, app_env) -> None:  # type: ignore[no-untyped-def]
-    chat = pet._ensure_chat()
+    chat = pet.chat_ui.ensure_chat()
     pet.model_choice.on_model_menu("chatmodel:anthropic:m1")
     assert pet.chat_state.chat_model is None and "aren't connected" in chat.msgs[-1].text
     pet.creds.set("anthropic_key", "k")
@@ -585,7 +585,7 @@ def test_a_connected_external_model_for_this_chat(pet, app_env) -> None:  # type
 
 
 def test_the_model_banner_for_a_chatgpt_plan(pet) -> None:  # type: ignore[no-untyped-def]
-    chat = pet._ensure_chat()
+    chat = pet.chat_ui.ensure_chat()
     pet.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r"})
     pet.accounts.ext_p("openai")["auth"] = "chatgpt"
     pet.cfg.model = "openai:m1"
@@ -622,7 +622,7 @@ def test_the_menu_popups_and_banner_tell_the_injected_description(make_app, sync
     assert [i.label for i in pet.model_choice.ext_chat_items()] == ["Zed models"]
     _task(pet)
     pet._limit_popup("openai", {"why": "rate"})
-    assert "ZedCo's rate limit" in pet.popups.open[-1].text.text() and "ZedCo's rate limit" in pet.chat.msgs[-1].text
+    assert "ZedCo's rate limit" in pet.popups.open[-1].text.text() and "ZedCo's rate limit" in pet.chat_ui.chat.msgs[-1].text
     pet._limit_popup("openai", {"why": "credits"})
     assert "Zed credits are gone." in pet.popups.open[-1].text.text()
     pet._limit_popup("openai", {"why": "plan"})
@@ -632,7 +632,7 @@ def test_the_menu_popups_and_banner_tell_the_injected_description(make_app, sync
     pet.accounts.ext_p("openai")["auth"] = "chatgpt"
     pet.cfg.model = "openai:m1"
     pet._show_model_banner()
-    assert "https://zed.example/usage" in pet.chat.model_bar.text()
+    assert "https://zed.example/usage" in pet.chat_ui.chat.model_bar.text()
     pet._ext_disconnect("openai", only_key=True)
     assert pet.popups.open[-1].title == "Zed" and pet.popups.open[-1].text.text().endswith("The Zed key is gone.</p>")
 

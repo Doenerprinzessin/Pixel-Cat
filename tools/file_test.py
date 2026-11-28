@@ -131,8 +131,8 @@ def main() -> int:  # noqa: C901 - a linear test script
 def chat_part(pet, app) -> None:  # type: ignore[no-untyped-def]
     js = DIR / "sort.js"
     js.write_text(BUGGY)
-    pet.open_chat()
-    chat = pet.chat
+    pet.chat_ui.open_chat()
+    chat = pet.chat_ui.chat
     calls: list[str] = []
     real_run = pet.toolbox.run
     pet.toolbox.run = lambda spec, a: (calls.append(spec.name), real_run(spec, a))[1]  # type: ignore[method-assign]

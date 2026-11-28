@@ -181,10 +181,10 @@ def app_checks() -> None:
         time.sleep(0.02)
     check("app, online mode: no local AI is started - the chat says how to connect one",
           pet.model_status.state == "online_only" and pet.model_status.banner() == ONLINE_ONLY)
-    pet._show_chat_quietly()
+    pet.chat_ui.show_chat_quietly()
     pet._on_user_message("hello")
     check("...a message gets that hint instead of waiting for a local AI", pet.worker is None
-          and not pet._task_active and ONLINE_ONLY in pet.chat.msgs[-1].text)
+          and not pet._task_active and ONLINE_ONLY in pet.chat_ui.chat.msgs[-1].text)
     items = {i.key: i for i in pet.menus.menu_items()}
     ai = next(c for c in items["settings"].children if c.key == "set_model")
     notes = {c.key: c.note for c in ai.children}
@@ -195,17 +195,17 @@ def app_checks() -> None:
     from pixelcat.settings import user_settings
     check("...picking a local model as the default switches back to a local AI",
           pet.cfg.ai_mode == "local" and user_settings().get("ai_mode") == "local")
-    pet.chat.hide()
+    pet.chat_ui.chat.hide()
     pet.chat_state.chat_model = None
     pet.cfg.model = "qwen3.5:35b-a3b"
-    pet._too_big_said = False
-    n = len(pet.chat.msgs)
-    pet.open_chat()
-    said = [m.text for m in pet.chat.msgs[n:]]
+    pet.chat_ui._too_big_said = False
+    n = len(pet.chat_ui.chat.msgs)
+    pet.chat_ui.open_chat()
+    said = [m.text for m in pet.chat_ui.chat.msgs[n:]]
     check("a model too big for this PC: not loaded at start, and the chat says what suits it better",
           pet.model_choice.model_fit("qwen3.5:35b-a3b") == "too_big" and any("too big for this PC" in t for t in said),
           said[-1][:80] if said else "")
-    pet.chat.hide()
+    pet.chat_ui.chat.hide()
 
 
 if __name__ == "__main__":

@@ -50,6 +50,7 @@ QT_ALLOWED = {
     "app/world.py": "the game loop's QObject (slots for the timers and the cat's mouse signals), the ui theme's unit",
     "app/menus.py": "the cat's menu (QObject: the overlay's menu signal), its colour swatches and pictures, a QTimer",
     "app/models_menu.py": "the chat's model menu and button (QObject: the menu's and the button's signals)",
+    "app/chat_ui.py": "the chat window (QObject: the window's signals), a QTimer after it opens",
     "ui": "the widgets: overlay, ball, menu, chat, dialogs, tray, theme, screen geometry",
     "games/qt_host.py": "the minigames' Qt window (the games themselves are plain Python)",
     "imaging.py": "picture helpers for the chat (QImage in, PNG bytes out)",

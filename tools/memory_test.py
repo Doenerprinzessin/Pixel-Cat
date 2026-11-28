@@ -141,8 +141,8 @@ def main() -> int:
         tool_log: list[str] = []
         real_run = pet.toolbox.run
         pet.toolbox.run = lambda spec, a: (tool_log.append(spec.name), real_run(spec, a))[1]  # type: ignore[method-assign]
-        pet.open_chat()
-        chat = pet.chat
+        pet.chat_ui.open_chat()
+        chat = pet.chat_ui.chat
         assert chat is not None
 
         def converse(msg: str, timeout: float = 300) -> str:
@@ -192,8 +192,8 @@ def long_task(pet, app, check) -> None:  # type: ignore[no-untyped-def]
     assert ed.stdout is not None and ed.stdin is not None
     ed.stdout.readline()
     pet.chat_state.history.clear()
-    pet.open_chat()
-    chat = pet.chat
+    pet.chat_ui.open_chat()
+    chat = pet.chat_ui.chat
     assert chat is not None
     calls: list[str] = []
     real_run = pet.toolbox.run

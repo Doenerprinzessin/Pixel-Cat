@@ -139,8 +139,8 @@ def main() -> int:
         inputs.write_clipboard(saved_clip, private=False)
 
     if "--chat" in sys.argv:
-        pet.open_chat()
-        chat = pet.chat
+        pet.chat_ui.open_chat()
+        chat = pet.chat_ui.chat
         assert chat is not None
 
         cards = [0]

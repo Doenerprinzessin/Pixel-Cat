@@ -220,7 +220,7 @@ def _close_all(pet: Any) -> None:
             th.wait(5000)                           # (a QThread destroyed while running aborts Python)
     for tm in pet.findChildren(type(pet.tick_timer)):
         tm.stop()
-    for w in [pet.chat, pet.menu, pet.model_menu, pet.overlay, pet.ball_win, pet.hud, *pet.popups.open,
+    for w in [pet.chat_ui.chat, pet.menu, pet.model_menu, pet.overlay, pet.ball_win, pet.hud, *pet.popups.open,
               pet.provider_settings.key_dialog, getattr(pet, "_dialog", None)]:
         try:
             if w is not None:
