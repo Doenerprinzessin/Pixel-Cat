@@ -7,6 +7,7 @@ prompt).  A test that needs one sets its own fake (``monkeypatch.setattr(_objc, 
 """
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 
 import pytest
@@ -17,6 +18,8 @@ from pixelcat.adapters.macos import _objc, permissions
 
 @pytest.fixture(autouse=True)
 def no_real_macos(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    if sys.platform != "darwin":    # the adapter's POSIX bits (fcntl, SIGKILL, euid, / paths) exist only on a Mac
+        pytest.skip("macOS adapter tests run on macOS")
     permissions.reset()
     if request.node.get_closest_marker("macos") or request.node.get_closest_marker("macos_live"):
         yield
