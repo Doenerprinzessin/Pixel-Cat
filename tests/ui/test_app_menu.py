@@ -5,6 +5,7 @@ The snapshot is what the refactor (provider branches out of app.py, app.py split
 controller / menus / provider settings / game loop) must keep exactly."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -443,13 +444,13 @@ def test_xp_per_play_is_capped(pet) -> None:  # type: ignore[no-untyped-def]
 def test_export_and_import_progress(make_app, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     src = make_app(SavedState(autostart_asked=True, xp=1234, best_round=9, plays=10))
     target = tmp_path / "mine"
-    monkeypatch.setattr(src, "_ask_file", lambda save, title, start: str(target))
+    monkeypatch.setattr(src.progress_io, "_ask_file", lambda save, title, start: str(target))
     src._on_menu("export")
     exported = Path(str(target) + persistence.EXPORT_EXT)
     assert exported.is_file() and src.popups.open[-1].title == "Progress exported"
 
     dst = make_app()
-    monkeypatch.setattr(dst, "_ask_file", lambda save, title, start: str(exported))
+    monkeypatch.setattr(dst.progress_io, "_ask_file", lambda save, title, start: str(exported))
     dst._on_menu("import")
     ask = dst.popups.open[-1]
     assert ask.title == "Import progress?" and "1234 XP" in ask.text.text()
@@ -463,24 +464,30 @@ def test_export_and_import_progress(make_app, tmp_path, monkeypatch) -> None:  #
 def test_import_of_a_broken_file_changes_nothing(pet, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     bad = tmp_path / "bad.pixelcat"
     bad.write_bytes(b"not a cat")
-    monkeypatch.setattr(pet, "_ask_file", lambda save, title, start: str(bad))
+    monkeypatch.setattr(pet.progress_io, "_ask_file", lambda save, title, start: str(bad))
     pet._on_menu("import")
     assert pet.popups.open[-1].title == "Import" and pet.saved.xp == 0
 
 
 def test_cancelled_file_dialogs_do_nothing(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(pet, "_ask_file", lambda save, title, start: "")
+    monkeypatch.setattr(pet.progress_io, "_ask_file", lambda save, title, start: "")
     pet._on_menu("export")
     pet._on_menu("import")
     assert pet.popups.open == []
 
 
-def test_a_failing_menu_action_is_logged_not_raised(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_a_failing_menu_action_is_logged_not_raised(pet, monkeypatch, caplog) -> None:  # type: ignore[no-untyped-def]
+    called: list[bool] = []
+
     def boom() -> None:
+        called.append(True)
         raise RuntimeError("x")
 
     monkeypatch.setattr(pet, "open_chat", boom)
-    pet._on_menu("chat")
+    with caplog.at_level(logging.ERROR, logger="pixelcat.app"):
+        pet._on_menu("chat")
+    assert called == [True]
+    assert any(r.name == "pixelcat.app" and r.getMessage() == "menu action chat failed" for r in caplog.records)
 
 
 def test_the_tray_uses_the_same_actions(pet) -> None:  # type: ignore[no-untyped-def]

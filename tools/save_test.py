@@ -192,8 +192,8 @@ def main() -> int:  # noqa: C901 - a linear test script
     pet = PixelCatApp(app, load_config(), st0, selftest=1, platform=build_platform(), providers=build_providers())
     asked: list[str] = []
     answer = [str(TEST / "from-app")]
-    pet._ask_file = lambda save, title, start: (asked.append(start), answer[0])[1]   # type: ignore[assignment]
-    pet.export_progress()
+    pet.progress_io._ask_file = lambda save, title, start: (asked.append(start), answer[0])[1]   # type: ignore[assignment]
+    pet.progress_io.export_progress()
     exp = TEST / "from-app.pixelcat"
     check("Export writes the file (in Documents by default, .pixelcat added)",
           exp.is_file() and persistence.read_export(exp)["xp"] == 150 and asked[0].endswith(".pixelcat"),
@@ -202,7 +202,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     big.game_plays = {"laser": 40}
     persistence.export_progress(big, TEST / "big.pixelcat")
     answer[0] = str(TEST / "big.pixelcat")
-    pet.import_progress()
+    pet.progress_io.import_progress()
     ask = [p for p in pet.popups.open if p.title == "Import progress?"]
     check("Import asks first (nothing changed yet)", bool(ask) and pet.saved.xp == 150)
     ask[-1]._finish(True)
@@ -219,10 +219,10 @@ def main() -> int:  # noqa: C901 - a linear test script
           and not disk.auto_mode)
     answer[0] = str(TEST / "edited.pixelcat")
     n = len(pet.popups.open)
-    pet.import_progress()
+    pet.progress_io.import_progress()
     check("importing an edited file: a message, nothing changes", len(pet.popups.open) == n + 1
           and pet.saved.xp == big.xp)
-    pet._tell_unreadable_save()
+    pet.progress_io.tell_unreadable_save()
     check("a save that can't be read: the cat says so (and how to import an export)",
           pet.popups.open[-1].title == "A fresh start" and "Import progress" in pet.popups.open[-1].text.text())
     items = {i.key: i for i in pet._menu_items()}

@@ -175,6 +175,7 @@ def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path, fake_pl
     from PySide6.QtGui import QDesktopServices, QGuiApplication
 
     import pixelcat.app.controller as app_mod
+    from pixelcat.app.progress_io import ProgressIO
     from pixelcat import persistence, settings
     from pixelcat.llm import model_status
     from pixelcat.sprites.library import SpriteLibrary
@@ -183,7 +184,7 @@ def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path, fake_pl
     env = AppEnv(desktop)
     monkeypatch.setattr(app_mod, "save_state", lambda st, *a, **k: env.saved_states.append(st))
     monkeypatch.setattr(persistence, "last_load", "fresh")            # (another test may have loaded a save)
-    monkeypatch.setattr(app_mod.PixelCatApp, "_documents", staticmethod(lambda: tmp_path / "Documents"))
+    monkeypatch.setattr(ProgressIO, "_documents", staticmethod(lambda: tmp_path / "Documents"))
     fake_platform.autostart.answers("enabled", lambda: desktop.autostart)
     fake_platform.autostart.answers("set", lambda on: (env.autostart_set.append(on), True)[1])
     monkeypatch.setattr(SpriteLibrary, "prewarm", lambda self, poses, scale: 0)     # (a 1 s warm-up cache)

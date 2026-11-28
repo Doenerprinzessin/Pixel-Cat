@@ -20,6 +20,11 @@ log = logging.getLogger("pixelcat.app")   # (the app's logger name; tests look f
 Anchor = Callable[[], tuple[Rect, Rect, int, int]]
 
 
+def paras(lines: list[str]) -> str:
+    """Popup text: one paragraph per line (already escaped)."""
+    return "".join(f"<p style='margin:0 0 6px 0'>{t}</p>" for t in lines)
+
+
 class _Later(QObject):
     """Hands what a background thread found to a callback on the GUI thread."""
 
