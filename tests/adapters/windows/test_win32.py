@@ -299,3 +299,4 @@ def test_declare_gives_handle_functions_pointer_sized_types(w32):
     assert u.GetWindowLongPtrW.restype is win32.ctypes.c_ssize_t
     assert w32.kernel32.CreateMutexW.restype is wintypes.HANDLE
     assert u.GetSystemMetrics.argtypes == [win32.ctypes.c_int] and u.GetSystemMetrics.restype is win32.ctypes.c_int
+    assert u.IsHungAppWindow.argtypes == [wintypes.HWND] and u.IsHungAppWindow.restype is wintypes.BOOL

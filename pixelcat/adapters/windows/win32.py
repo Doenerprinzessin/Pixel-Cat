@@ -86,7 +86,7 @@ def _declare() -> None:
     u = user32
     u.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
     u.EnumWindows.restype = wintypes.BOOL
-    for fn in (u.IsWindowVisible, u.IsIconic, u.IsZoomed, u.IsWindow):
+    for fn in (u.IsWindowVisible, u.IsIconic, u.IsZoomed, u.IsWindow, u.IsHungAppWindow):
         fn.argtypes = [wintypes.HWND]
         fn.restype = wintypes.BOOL
     if hasattr(u, "GetWindowLongPtrW"):
