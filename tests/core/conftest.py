@@ -23,7 +23,7 @@ import uuid
 
 import pytest
 
-from pixelcat import savecrypt
+from pixelcat import paths, savecrypt
 
 # ---------------------------------------------------------------- registry
 class _Key:
@@ -216,6 +216,7 @@ class FakeKnownFolders:
 @pytest.fixture
 def known_folders(monkeypatch: pytest.MonkeyPatch, fake_dll) -> FakeKnownFolders:  # type: ignore[no-untyped-def]
     fake = FakeKnownFolders(fake_dll)
+    monkeypatch.setattr(paths, "_known_cache", {})
     monkeypatch.setattr(ctypes, "windll", types.SimpleNamespace(shell32=fake.shell32, ole32=fake.ole32),
                         raising=False)
     return fake
@@ -228,6 +229,7 @@ def no_windll(monkeypatch: pytest.MonkeyPatch) -> None:
         def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
             raise OSError(126, "The specified module could not be found")
 
+    monkeypatch.setattr(paths, "_known_cache", {})
     monkeypatch.setattr(ctypes, "windll", _Broken(), raising=False)
 
 

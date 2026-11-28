@@ -4,12 +4,15 @@
   ``winreg`` so every ``pixelcat`` module imports (see that module).
 * Tests marked ``@pytest.mark.windows`` run only on Windows: they exercise the
   real Win32 / UI Automation / DPAPI / registry code.
-* Every test gets its own ``%APPDATA%``, ``%LOCALAPPDATA%`` and home folder, so
-  nothing touches the developer's real settings, saves or notes.
+* Every test gets its own ``%APPDATA%``, ``%LOCALAPPDATA%``, home folder, Known
+  Folders (Desktop, Documents ... answered from ``paths._known_cache``) and installer
+  root (``PIXELCAT_TEST_ROOT``), so nothing touches the developer's real settings,
+  saves, notes, Start menu or registry.
 * On Windows the shell resolves Known Folders (Desktop, Documents, Start menu ...)
   once per process from the environment and keeps the answer.  So they are resolved
   with the real profile before the environment is changed, and `windows` tests that
-  use the shell (shortcuts, Known Folders) ask for the ``real_profile`` fixture.
+  use the shell (shortcuts, Known Folders) ask for the ``real_profile`` fixture; those
+  tests only read the real profile.
 * Outgoing network connections are refused (localhost is allowed); mock HTTP.
 * Qt runs headless (``QT_QPA_PLATFORM=offscreen``) off Windows.
 """
@@ -17,6 +20,7 @@ from __future__ import annotations
 
 import locale
 import os
+import shutil
 import socket
 import sys
 import tempfile
@@ -97,6 +101,10 @@ import winshim  # noqa: E402
 winshim.install()
 
 
+def pytest_unconfigure(config: pytest.Config) -> None:
+    shutil.rmtree(_SESSION_ROOT, ignore_errors=True)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "windows: needs real Windows (Win32, UIA, DPAPI, registry)")
     config.addinivalue_line("markers", "qt: needs a QApplication (pytest-qt qapp/qtbot)")
@@ -121,8 +129,17 @@ def isolated_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         path.mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv(var, str(path))
     monkeypatch.delenv("OLLAMA_MODELS", raising=False)
+    # On Windows the shell would still answer with the developer's real Desktop, Documents,
+    # Pictures ..., so the Known Folders are answered from the cache, inside tmp_path.
     from pixelcat import paths
-    monkeypatch.setattr(paths, "_known_cache", {})
+    known = {}
+    for name in paths._KNOWN_FOLDER_IDS:
+        known[name] = home / name.capitalize()
+        known[name].mkdir()
+    monkeypatch.setattr(paths, "_known_cache", known)
+    # ... and the installer's layout() moves everything (Start menu, program folder,
+    # registry keys) under a test root instead of asking the shell.
+    monkeypatch.setenv("PIXELCAT_TEST_ROOT", str(tmp_path / "install-root"))
     return tmp_path
 
 
@@ -136,16 +153,29 @@ def c_locale() -> None:
 _real_connect = socket.socket.connect
 
 
-def _guarded_connect(self: socket.socket, address, *args, **kwargs):  # type: ignore[no-untyped-def]
+_real_connect_ex = socket.socket.connect_ex
+
+
+def _refuse_outside(address) -> None:  # type: ignore[no-untyped-def]
     host = address[0] if isinstance(address, tuple) else None
     if host is not None and host not in ("127.0.0.1", "::1", "localhost"):
         raise OSError(f"tests must not use the network (tried to reach {address!r})")
+
+
+def _guarded_connect(self: socket.socket, address, *args, **kwargs):  # type: ignore[no-untyped-def]
+    _refuse_outside(address)
     return _real_connect(self, address, *args, **kwargs)
+
+
+def _guarded_connect_ex(self: socket.socket, address, *args, **kwargs):  # type: ignore[no-untyped-def]
+    _refuse_outside(address)
+    return _real_connect_ex(self, address, *args, **kwargs)
 
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket.socket, "connect", _guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", _guarded_connect_ex)
 
 
 @pytest.fixture
@@ -154,8 +184,12 @@ def real_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     `windows` tests that use the shell: shortcuts and Known Folders resolve against the
     environment.  Such tests must only read the profile, or write to their own temp
     folders - never into these real ones."""
-    for var, value in REAL_PROFILE_ENV.items():
-        monkeypatch.setenv(var, value)
+    for var in _PROFILE_VARS:
+        if var in REAL_PROFILE_ENV:
+            monkeypatch.setenv(var, REAL_PROFILE_ENV[var])
+        else:
+            monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("PIXELCAT_TEST_ROOT", raising=False)
     from pixelcat import paths
     monkeypatch.setattr(paths, "_known_cache", {})
 
