@@ -1,5 +1,6 @@
-"""installer: layout, the Settings -> Apps entry, autostart, install/uninstall into temp
-folders, the AI part (AiPlan, setup_ai, download, signature check) and quiet mode."""
+"""pixelcat.adapters.windows.installer: layout, the Settings -> Apps entry, autostart,
+install/uninstall into temp folders, the AI part (AiPlan, setup_ai, download, signature
+check) and quiet mode."""
 from __future__ import annotations
 
 import os
@@ -12,11 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from pixelcat import __version__, installer, paths, persistence, settings
-from pixelcat.adapters.windows import elevation, hardware, registry, system
+from adapters.windows.fakes import FakeRegistry
+from fakes.secrets import FakeDpapi
+from pixelcat import __version__, paths, persistence, settings
+from pixelcat.adapters.windows import dpapi as windows_dpapi
+from pixelcat.adapters.windows import elevation, hardware, installer, registry, system
+from pixelcat.adapters.windows.installer import AiPlan, InstallError, Layout
 from pixelcat.adapters.windows.known_folders import shell_folder
 from pixelcat.adapters.windows.platform import WindowsSaveMarks, WindowsSecretStore
-from pixelcat.installer import AiPlan, InstallError, Layout
 from pixelcat.llm import external, model_status, models
 
 USER_PROGRAMS = "5CD7AEE2-2219-4A67-B85D-6C9CE15660CB"
@@ -34,6 +38,25 @@ def make_layout(root: Path, base_key: str = r"Software\PixelCatTests\Fake") -> L
     return Layout(root / "Programs" / "PixelCat", root / "StartMenu", root / "Desktop",
                   base_key + r"\Uninstall\PixelCat", base_key + r"\Run", root / "AppData" / "PixelCat",
                   root / "Local" / "PixelCat")
+
+
+@pytest.fixture
+def fake_winreg(monkeypatch: pytest.MonkeyPatch) -> FakeRegistry:
+    """An in-memory registry as ``sys.modules["winreg"]`` (the installer does ``import winreg``
+    inside its functions, so this also replaces the real one on Windows).  Overrides the
+    simpler ``fake_winreg`` of conftest.py: these tests need value types, ``DeleteKey`` and ``fail``."""
+    reg = FakeRegistry()
+    monkeypatch.setitem(sys.modules, "winreg", reg)
+    return reg
+
+
+@pytest.fixture
+def win_dpapi(monkeypatch: pytest.MonkeyPatch) -> FakeDpapi:
+    """A fake DPAPI behind the Windows adapter's own functions (the installer uses that adapter)."""
+    dpapi = FakeDpapi()
+    monkeypatch.setattr(windows_dpapi, "protect", dpapi.protect)
+    monkeypatch.setattr(windows_dpapi, "unprotect", dpapi.unprotect)
+    return dpapi
 
 
 @pytest.fixture

@@ -7,7 +7,8 @@ import types
 import pytest
 
 from fakes.platform import FakePlatform
-from pixelcat import bootstrap, installer, logsetup
+from pixelcat import bootstrap, logsetup
+from pixelcat.adapters.windows import installer
 
 
 @pytest.fixture

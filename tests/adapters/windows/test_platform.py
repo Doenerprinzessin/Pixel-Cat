@@ -8,10 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from adapters.windows.fakes import by_hwnd, enum_windows, out, raising
-from pixelcat import domain, installer
-from pixelcat.adapters.windows import (capture, control, dpapi, elevation, escwatch, hardware, inputs, known_folders,
-                                       ledges, monitors, notifications, platform, registry, system, uia, volume, win32,
-                                       windows)
+from pixelcat import domain
+from pixelcat.adapters.windows import (capture, control, dpapi, elevation, escwatch, hardware, inputs, installer,
+                                       known_folders, ledges, monitors, notifications, platform, registry, system, uia,
+                                       volume, win32, windows)
 from pixelcat.domain import AppWindow, KillPlan, UserState
 
 EV = threading.Event()

@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from pixelcat import installer, paths
+from pixelcat import paths
+from pixelcat.adapters.windows import installer
 from pixelcat.adapters.windows.platform import WindowsKnownFolders
 
 REAL = "C:\\Users\\Someone\\RealProfile"

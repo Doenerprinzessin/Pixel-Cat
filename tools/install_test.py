@@ -34,8 +34,8 @@ sys.path.insert(0, str(ROOT))
 
 import winreg  # noqa: E402
 
-from pixelcat import __version__, installer  # noqa: E402
-from pixelcat.adapters.windows import elevation, system  # noqa: E402
+from pixelcat import __version__  # noqa: E402
+from pixelcat.adapters.windows import elevation, installer, system  # noqa: E402
 from pixelcat.bootstrap import build_platform  # noqa: E402
 from pixelcat.persistence import load_state  # noqa: E402
 

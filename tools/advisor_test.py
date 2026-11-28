@@ -33,8 +33,7 @@ sys.path.insert(0, str(ROOT))
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from pixelcat import installer  # noqa: E402
-from pixelcat.adapters.windows import hardware  # noqa: E402
+from pixelcat.adapters.windows import hardware, installer  # noqa: E402
 from pixelcat.adapters.windows.hardware import Gpu, Hardware  # noqa: E402
 from pixelcat.llm import models  # noqa: E402
 

@@ -13,9 +13,8 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from . import (capture, control, dpapi, elevation, escwatch, hardware, inputs, known_folders, ledges, monitors,
-               notifications, registry, system, uia, volume, win32, windows)
-from ... import installer
+from . import (capture, control, dpapi, elevation, escwatch, hardware, inputs, installer, known_folders, ledges,
+               monitors, notifications, registry, system, uia, volume, win32, windows)
 from ...domain import (AppWindow, ClipboardKind, Element, ElementKinds, Hardware, KillPlan, Monitor, Snapshot,
                        UserState, WindowId, WinInfo)
 from ...ports import ClipboardBackup, EscapeWatcher, Keys, NotificationFeed, Platform, Rect

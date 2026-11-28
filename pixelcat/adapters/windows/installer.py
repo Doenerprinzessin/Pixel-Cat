@@ -32,8 +32,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from . import __version__
-from .adapters.windows import elevation, known_folders, system
+from ... import __version__
+from . import elevation, known_folders, system
 
 log = logging.getLogger(__name__)
 
@@ -249,8 +249,8 @@ def uninstall(lay: Layout, delete_data: bool) -> list[str]:
         if lay.data_dir.exists():
             left.append(str(lay.data_dir))
         else:
-            from .adapters.windows.platform import WindowsSaveMarks
-            from .persistence import forget_folder
+            from .platform import WindowsSaveMarks
+            from ...persistence import forget_folder
 
             forget_folder(lay.data_dir, WindowsSaveMarks())
         if lay.tools_dir is not None:
@@ -347,8 +347,8 @@ class AiPlan:
         return "online" if self.advice.online else self.advice.model.tag
 
     def choose(self, key: str) -> None:
-        from .llm import models
-        from .llm.model_status import model_on_disk
+        from ...llm import models
+        from ...llm.model_status import model_on_disk
 
         self.choice = key
         if models.find(key) is not None:
@@ -357,8 +357,8 @@ class AiPlan:
 
     def options(self) -> list[tuple[str, str]]:
         """(key, label) for the drop-down, the recommendation first."""
-        from .llm import models
-        from .llm.external import label as ext_label
+        from ...llm import models
+        from ...llm.external import label as ext_label
 
         out: list[tuple[str, str]] = []
         rec = self.recommended
@@ -373,8 +373,8 @@ class AiPlan:
         return out
 
     def _label(self, key: str, rec: bool) -> str:
-        from .llm import models
-        from .llm.model_status import model_on_disk
+        from ...llm import models
+        from ...llm.model_status import model_on_disk
 
         tag = " (recommended)" if rec else ""
         if key == "online":
@@ -389,7 +389,7 @@ class AiPlan:
 
     def describe(self, key: str | None = None) -> str:
         """The note under the drop-down for one option."""
-        from .llm import models
+        from ...llm import models
 
         key = key or self.choice or self.model
         adv = self.advice
@@ -412,7 +412,7 @@ class AiPlan:
                                                                        f"{m.name} {m.short} fits this PC.")
         else:
             head = f"{m.name} {m.short}."
-        from .llm.model_status import model_on_disk
+        from ...llm.model_status import model_on_disk
 
         ready = self.model_ready if m.tag == self.model else model_on_disk(m.tag)
         parts = [head]
@@ -424,7 +424,7 @@ class AiPlan:
 
 
 def _user_config(lay: Layout) -> dict[str, Any]:
-    from .settings import user_settings
+    from ...settings import user_settings
 
     try:
         return user_settings(lay.data_dir)
@@ -434,11 +434,11 @@ def _user_config(lay: Layout) -> dict[str, Any]:
 
 def ai_plan(lay: Layout, updating: bool | None = None) -> AiPlan:
     """What the AI part should do on this PC: looks at the hardware and recommends."""
-    from .adapters.windows.hardware import detect
-    from .llm import models
-    from .llm.external import parse
-    from .llm.model_status import find_ollama_app, model_on_disk
-    from .settings import Config
+    from .hardware import detect
+    from ...llm import models
+    from ...llm.external import parse
+    from ...llm.model_status import find_ollama_app, model_on_disk
+    from ...settings import Config
 
     hw = detect()
     adv = models.advise(hw)
@@ -508,8 +508,8 @@ def run_ollama_setup(path: Path) -> None:
 def _write_ai_settings(lay: Layout, plan: AiPlan) -> None:
     """What the cat should use: the chosen model, and on PCs where memory is tight the AI only
     loads when the chat needs it (and leaves again soon) - so the PC doesn't lag."""
-    from .llm import models
-    from .settings import Config, save_user_settings
+    from ...llm import models
+    from ...settings import Config, save_user_settings
 
     user = _user_config(lay)
     values: dict[str, Any] = {}
@@ -532,8 +532,8 @@ def _write_ai_settings(lay: Layout, plan: AiPlan) -> None:
 
 def _save_ai_choice(lay: Layout, plan: AiPlan) -> None:
     """The user agreed: the cat may download the model (written into the cat's protected save)."""
-    from .adapters.windows.platform import WindowsSaveMarks, WindowsSecretStore
-    from .persistence import load_state, save_state
+    from .platform import WindowsSaveMarks, WindowsSecretStore
+    from ...persistence import load_state, save_state
 
     secrets, marks = WindowsSecretStore(), WindowsSaveMarks()
     st = load_state(lay.data_dir, secrets=secrets, marks=marks)
@@ -547,8 +547,8 @@ def setup_ai(lay: Layout, plan: AiPlan, progress: Callable[[str], None], cancel:
     """Install Ollama if needed and let the cat download the model.  Returns a note for the user."""
     import tempfile
 
-    from .llm import models
-    from .llm.model_status import find_ollama_app
+    from ...llm import models
+    from ...llm.model_status import find_ollama_app
 
     finder = finder or find_ollama_app
     if plan.choice in ("keep", "none"):
@@ -626,7 +626,7 @@ def run_window(mode: str) -> int:
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
-    from .sprites.library import SpriteLibrary
+    from ...sprites.library import SpriteLibrary
 
     qapp = QApplication.instance() or QApplication(sys.argv[:1])
     qapp.setApplicationName("PixelCat Setup")
@@ -648,11 +648,11 @@ def _make_window_class():  # type: ignore[no-untyped-def]
     from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
                                    QWidget)
 
-    from .adapters.windows.monitors import enumerate_monitors
-    from .domain import primary
-    from .sprites.cat_art import Pose
-    from .sprites.library import render_text
-    from .ui import theme
+    from .monitors import enumerate_monitors
+    from ...domain import primary
+    from ...sprites.cat_art import Pose
+    from ...sprites.library import render_text
+    from ...ui import theme
 
     class _InstallerWindow(QWidget):
         def __init__(self, mode: str, lay: Layout, src: Path, sprites) -> None:  # type: ignore[no-untyped-def]
@@ -810,7 +810,7 @@ def _make_window_class():  # type: ignore[no-untyped-def]
                       if plan.hw is not None else "")
                 warn = ""
                 if plan.current and not plan.current_ok and plan.current != "online":
-                    from .llm import models as _m
+                    from ...llm import models as _m
                     cm = _m.find(plan.current)
                     if cm is not None and plan.hw is not None and _m.fit(cm, plan.hw) == "too_big":
                         warn = (f"<br><span style='color:{muted}'>{cm.name} {cm.short}, which the cat uses now, is "
