@@ -64,6 +64,7 @@ QT_ALLOWED = {
 # Core modules that don't import Qt themselves but load it through a module in QT_ALLOWED.
 QT_VIA = {
     "llm/tools.py": "uses llm/agent.py",
+    "app/commands.py": "uses llm/tools.py (ToolError, for /force)",
 }
 # Core files allowed to import a module whose name is only known at run time (path: reason).  None so far.
 DYNAMIC_IMPORTS_ALLOWED: dict[str, str] = {}

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -24,7 +23,7 @@ from ..engine.needs import Needs
 from ..engine.states import S
 from ..llm.model_status import ModelStatus
 from ..llm.qt_chat import QtNotifier
-from ..llm.tools import AppHooks, ToolBox, ToolError, ToolSpec
+from ..llm.tools import AppHooks, ToolBox
 from ..llm.watch import WatchManager
 from ..logsetup import RateLimitedLogger
 from ..persistence import SavedState, save_state
@@ -34,7 +33,7 @@ from ..sprites.library import SpriteLibrary
 from ..ui.ball import BallOverlay
 from ..ui.dialogs import PixelDialog
 from ..ui.ledges import LedgeFinder
-from ..llm import external, models
+from ..llm import external
 from ..ui import theme
 from ..ui.menu import PixelMenu
 from ..ui.overlay import CatOverlay
@@ -42,6 +41,7 @@ from ..ui.tray import Tray
 from ..games.qt_host import QtHost
 from .accounts import Accounts
 from .chat_ui import ChatUI
+from .commands import ChatCommands
 from .limits import Limits
 from .popups import Popups
 from .menus import Menus
@@ -165,7 +165,7 @@ class PixelCatApp(QObject):
             copilot_credits=lambda credits: self.limits.on_copilot_credits(credits),
             copilot_quota=lambda: self.limits.copilot_quota(), limit_popup=lambda p, info: self.limits.limit_popup(p, info),
             show_model_banner=lambda: self.limits.show_model_banner(),
-            local_command=lambda text: self._local_command(text))
+            local_command=lambda text: self.commands.local_command(text))
         self.watches.fired.connect(self.session.on_watch_fired)
         self.watches.changed.connect(self.session.on_watches_changed)
         self.session.toolbox = ToolBox(cfg, AppHooks(
@@ -202,6 +202,9 @@ class PixelCatApp(QObject):
         self.limits = Limits(   # the token and credit limits at request time, the limit popups, the model banner
             self.accounts, providers, self.creds, saved, self.popups, self.menu, self.model_status, self.session,
             self.chat_ui, self.model_choice, self.provider_settings, self.menus, save=lambda: self.save())
+        self.commands = ChatCommands(   # the chat's own commands (/new, /model, /force ...), never sent to the model
+            self.chat_state, cfg, saved, self.brain, self.watches, self.model_status, self.session, self.chat_ui,
+            self.model_choice, save=lambda: self.save())
 
         # overlay input -> brain
         ov = self.overlay
@@ -464,162 +467,3 @@ class PixelCatApp(QObject):
         self.host.ctx["fish_book"] = st.fish_book
         theme.configure(st.ui_style, st.ui_accent, st.ui_size, st.ui_font)
         self.brain.show_bubble("bubble_heart", 1.5)
-
-    # ================================================================ chat
-    _FORCE_RE = re.compile(r"^/force(?:\s+(?:(end task|end|kill|close|quit|stop|terminate)|(open|start|run|launch)))?"
-                           r"(?:\s+(.*))?$", re.I | re.S)
-
-    def _force_command(self, text: str) -> None:
-        """/force end <app>: end it like Task Manager. /force open <app>: run as admin.
-        Parsed here directly - the AI is never involved in /force."""
-        assert self.chat_ui.chat is not None
-        m = self._FORCE_RE.match(text.strip())
-        target = (m.group(3) or "").strip() if m else ""
-        target = re.sub(r"\s+(as|with)\s+(admin(istrator)?|force)$", "", target, flags=re.I)
-        target = re.sub(r"^(the\s+)?(app\s+)?", "", target, flags=re.I).strip().strip("\"'")
-        if not m or not target:
-            self.chat_ui.chat.add("info", "Usage: /force end <app> (like Task Manager's End task, e.g. /force end teams) "
-                                  "or /force open <app> (run as administrator).")
-            return
-        tool = "run_as_admin" if m.group(2) else "force_end"
-        try:
-            spec, args = self.session.toolbox.prepare(tool, {"name" if tool == "run_as_admin" else "target": target},
-                                              internal=True)
-        except ToolError as exc:
-            self.chat_ui.chat.add("error", f"🙀 {exc}")
-            return
-        # Ending your own non-admin app may run right away in auto mode; anything that uses
-        # admin rights (run as admin, or ending admin processes) is ALWAYS asked first.
-        if self.saved.auto_mode and tool == "force_end":
-            self._run_local(spec, args, auto=True)
-            return
-        self.chat_ui.chat.ask_confirm(self.session.toolbox.describe(spec, args) + "?",
-                              lambda ans, sp=spec, a=args: self._run_local(sp, a) if ans == "yes"
-                              else self.chat_ui.chat.add("info", "Okay, I won't."))
-
-    def _run_local(self, spec: ToolSpec, args: dict[str, Any], auto: bool = False) -> None:
-        assert self.chat_ui.chat is not None
-        try:
-            result = self.session.toolbox.run(spec, args)
-            self.chat_ui.chat.add("info", result + (" (auto)" if auto else ""))
-            self.brain.show_bubble("bubble_exclaim", 1.5)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("/force %s failed", spec.name)
-            self.chat_ui.chat.add("error", f"😿 {spec.name} failed: {exc}")
-            return
-        denied = args.get("_denied") or []
-        if denied:
-            self.chat_ui.chat.ask_confirm(f"{len(denied)} process(es) of {args['_plan'].label} can only be ended with "
-                                  "ADMIN RIGHTS. Use admin rights to end them (Windows will ask you too)?",
-                                  lambda ans, d=list(denied): self._force_admin(d, ans))
-
-    def _force_admin(self, denied: list[int], answer: str) -> None:
-        assert self.chat_ui.chat is not None
-        if answer != "yes":
-            self.chat_ui.chat.add("info", "Okay, no admin rights - those processes keep running.")
-            return
-        try:
-            self.chat_ui.chat.add("info", self.session.toolbox.force_end_admin(denied))
-        except Exception as exc:  # noqa: BLE001
-            log.exception("elevated force-end failed")
-            self.chat_ui.chat.add("error", f"😿 that didn't work: {exc}")
-
-    def _local_command(self, text: str) -> bool:
-        """Chat commands handled by the app itself (never sent to the model)."""
-        cmd = text.strip().lower()
-        if cmd == "/force" or cmd.startswith("/force "):
-            self._force_command(text)
-            return True
-        if cmd in ("/auto", "/auto on", "/auto off"):
-            self.session.set_auto_mode(cmd != "/auto off" and (cmd == "/auto on" or not self.saved.auto_mode))
-            return True
-        if cmd in ("/new", "/clear"):
-            self.session.new_chat()
-            return True
-        if cmd in ("/history", "/chats"):
-            if not self.chat_ui.ensure_chat().history_shown:
-                self.chat_ui.toggle_history()
-            return True
-        if cmd == "/effort" or cmd.startswith("/effort "):
-            assert self.chat_ui.chat is not None
-            arg = cmd[7:].strip()
-            arg = {"default": "", "normal": "medium", "med": "medium", "extra high": "xhigh", "extra": "xhigh",
-                   "x-high": "xhigh", "maximum": "max"}.get(arg, arg)
-            levels = self.model_choice.effort_levels()
-            if cmd == "/effort" or (arg and arg not in external.EFFORTS):
-                now = external.EFFORTS.get(self.chat_state.chat_effort or "", "") or \
-                    f"the default ({external.EFFORTS.get(self.model_choice.default_effort(), 'Medium')})"
-                pick = ", ".join(e for e in levels) if levels else "none - this model has no effort levels"
-                self.chat_ui.chat.add("info", f"This chat's effort: {now}. /effort LEVEL changes it for this chat "
-                                      f"({pick}), /effort default goes back. Or use the model button next to SEND.")
-            elif arg and levels is not None and arg not in levels:
-                self.chat_ui.chat.add("info", f"{models.label(self.model_choice.effective_model())} has these effort levels: "
-                                      f"{', '.join(levels)}.")
-            else:
-                self.model_choice.set_chat_effort(arg or None)
-            return True
-        if cmd == "/permissions":
-            allowed = ", ".join(self.saved.auto_approved_tools) or "none"
-            assert self.chat_ui.chat is not None
-            self.chat_ui.chat.add("info", f"Actions I may do without asking: {allowed}. Type /permissions reset to ask again every time.")
-            return True
-        if cmd == "/permissions reset":
-            self.saved.auto_approved_tools.clear()
-            self.save()
-            assert self.chat_ui.chat is not None
-            self.chat_ui.chat.add("info", "Okay! I'll ask before every action again 🐾")
-            return True
-        if cmd == "/model" or cmd.startswith("/model "):
-            assert self.chat_ui.chat is not None
-            arg = cmd[6:].strip()
-            if not arg:
-                self.chat_ui.chat.add("info", f"This chat uses {models.label(self.model_choice.effective_model())}. "
-                                      "Pick another for this chat with the model button next to SEND or /model NAME "
-                                      "(" + ", ".join(m.short for m in models.MODELS) + "); /model default goes back. "
-                                      "The default model is in Settings -> AI model.")
-            else:
-                self.model_choice.choose_chat_model(None if arg == "default" else arg)
-            return True
-        if cmd in ("/getmodel", "/get model", "/downloadmodel", "/download-model"):
-            assert self.chat_ui.chat is not None
-            if external.parse(self.cfg.model):
-                self.chat_ui.chat.add("info", f"The default model is {models.label(self.cfg.model)} - an online one, so "
-                                      "there's nothing to download.")
-                return True
-            self.saved.model_download_ok = True
-            self.save()
-            self.chat_ui.chat.add("info", f"Okay! I'll download the AI model {self.cfg.model} now - the bar above shows "
-                                  "how far it is. You can keep using your PC meanwhile.")
-            self.model_status.ensure(force=True)
-            return True
-        if cmd in ("/watches", "/watching", "/waits"):
-            assert self.chat_ui.chat is not None
-            act = self.watches.active()
-            self.chat_ui.chat.add("info", ("I'm watching for: " + "; ".join(f"#{w.id} {w.short()}" for w in act)
-                                   + ". /unwatch stops all, /unwatch <number> one.") if act else
-                          "I'm not watching anything right now.")
-            return True
-        if cmd == "/unwatch" or cmd.startswith("/unwatch "):
-            assert self.chat_ui.chat is not None
-            m = re.search(r"\d+", cmd)
-            gone = self.watches.cancel(int(m.group()) if m else None)
-            self.chat_ui.chat.add("info", ("Stopped watching for: " + "; ".join(w.short() for w in gone)) if gone else
-                          "Nothing to stop - I'm not watching that.")
-            return True
-        if cmd in ("/help", "/?"):
-            assert self.chat_ui.chat is not None
-            self.chat_ui.chat.add("info", "Commands: /new (fresh chat), /history (our earlier chats), /auto on|off "
-                                  "(no permission cards), "
-                                  "/force end <app> (like Task Manager), /force open <app> (as admin), "
-                                  "/watches, /unwatch, /model (AI model for this chat), /effort (how hard it "
-                                  "thinks, this chat), /getmodel (download "
-                                  "the AI model), /permissions, "
-                                  "/permissions reset. "
-                                  "Ask me to open, close, switch or minimize apps, search the web, control music, "
-                                  "take screenshots, set timers, check the system and more! I can also SEE your "
-                                  "screen and use apps for you (click, type, shortcuts) - e.g. 'open Notepad and "
-                                  "write a packing list'. I can also wait for things in the background - "
-                                  "'tell me when Anna writes on Teams', 'when the download is done, open it', "
-                                  "'at 17:00 remind me and open Outlook'. Press Esc anywhere (or STOP) to stop me.")
-            return True
-        return False

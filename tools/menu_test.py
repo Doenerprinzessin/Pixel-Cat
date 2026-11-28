@@ -263,7 +263,7 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     cid2 = pet.chat_ui.chat_id
     idx = pet.chat_ui.chats.index()
     check("a second chat: the newest first", [i.id for i in idx] == [cid2, cid])
-    pet._local_command("/history")
+    pet.commands.local_command("/history")
     chat._history_link(QUrl(f"del:{cid}"))
     asked = "delete?" in chat.hist_view.toPlainText() and len(pet.chat_ui.chats.index()) == 2
     chat._history_link(QUrl(f"del:{cid}:yes"))
@@ -354,9 +354,9 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     pet.saved.ext_settings["thinking"] = False
     pet.saved.ext_settings["effort"] = "low"
     base = pet.model_choice.ext_think_effort()
-    pet._local_command("/effort max")
+    pet.commands.local_command("/effort max")
     refused = pet.chat_state.chat_effort is None and "low, medium, high" in chat.msgs[-1].text
-    pet._local_command("/effort high")
+    pet.commands.local_command("/effort high")
     check("an online model gets this chat's effort (thinking on); /effort sets it, only to levels it has",
           base == (False, "low") and refused and pet.model_choice.ext_think_effort() == (True, "high"), chat.msgs[-1].text)
     pet.saved.ext_settings.pop("thinking")
