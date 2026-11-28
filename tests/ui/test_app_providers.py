@@ -217,7 +217,7 @@ def test_a_good_key_connects_the_provider(bg, monkeypatch, p: str, module: str) 
     assert bg.creds.get(f"{p}_key") == "sk-good" and bg._ext_auth(p) == "key"
     assert bg._ext_models(p) == MODELS and external.NAMES[f"{p}:m1"] == "Model One"
     assert not dlg.isVisible()
-    pop = bg._popups[-1]
+    pop = bg.popups.open[-1]
     assert pop.title.endswith("is connected") and "2 " in pop.text.text()
 
 
@@ -257,7 +257,7 @@ def test_copilot_without_its_runtime_offers_to_get_it(bg, monkeypatch) -> None: 
     monkeypatch.setattr(copilot_client, "runtime_path", lambda: None)
     monkeypatch.setattr(copilot_client, "install", lambda progress, cancel: (installs.append(True), "rt")[1])
     bg._on_menu("ext:key:copilot")
-    pop = bg._popups[-1]
+    pop = bg.popups.open[-1]
     assert pop.title == "GitHub Copilot" and "100 MB" in pop.text.text()
     pop.ok.click()
     assert installs == [True] and isinstance(bg._key_dialog, KeyDialog)
@@ -279,23 +279,23 @@ def test_chatgpt_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-unt
     bg.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r", "email": "cat@example.com"})
     bg._browser_done("openai", {"plan": True})
     assert bg._ext_auth("openai") == "chatgpt" and bg._ext_p("openai")["welcomed"]
-    assert bg._popups[-1].title == "Using your ChatGPT plan"
+    assert bg.popups.open[-1].title == "Using your ChatGPT plan"
     bg._browser_done("openai", {"plan": True})
-    assert bg._popups[-1].title == "ChatGPT is connected"
+    assert bg.popups.open[-1].title == "ChatGPT is connected"
 
 
 def test_chatgpt_sign_in_without_plan_usage(bg) -> None:  # type: ignore[no-untyped-def]
     bg._browser_done("openai", {"plan": False})
-    assert bg._popups[-1].title == "Signed in - but no plan usage" and bg._ext_auth("openai") == ""
+    assert bg.popups.open[-1].title == "Signed in - but no plan usage" and bg._ext_auth("openai") == ""
 
 
 def test_a_failed_or_cancelled_sign_in(bg) -> None:  # type: ignore[no-untyped-def]
     from pixelcat.adapters.llm import chatgpt_signin
 
     bg._browser_done("openai", chatgpt_signin.SignInError("cancelled"))
-    assert bg._popups == []
+    assert bg.popups.open == []
     bg._browser_done("openai", chatgpt_signin.SignInError("The browser closed"))
-    assert bg._popups[-1].title == "Sign in with ChatGPT" and "browser closed" in bg._popups[-1].text.text()
+    assert bg.popups.open[-1].title == "Sign in with ChatGPT" and "browser closed" in bg.popups.open[-1].text.text()
 
 
 def test_github_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -345,7 +345,7 @@ def test_a_failed_reload_says_why(bg, monkeypatch) -> None:  # type: ignore[no-u
     monkeypatch.setattr(openai_client, "list_models", fail)
     bg.creds.set("openai_key", "k")
     bg._on_menu("ext:refresh:openai")
-    assert bg._popups[-1].title == "Models" and "internet" in bg._popups[-1].text.text()
+    assert bg.popups.open[-1].title == "Models" and "internet" in bg.popups.open[-1].text.text()
 
 
 # ---------------------------------------------------------------- signing out
@@ -357,7 +357,7 @@ def test_removing_a_key_goes_back_to_the_default_model(bg, app_env) -> None:  # 
     bg._on_menu("ext:out:anthropic")
     assert bg.creds.get("anthropic_key") is None and bg._ext_auth("anthropic") == ""
     assert bg.cfg.model == "qwen3.5:35b-a3b" and ("model", "qwen3.5:35b-a3b") in app_env.user_settings
-    assert bg._popups[-1].text.text().endswith("The Anthropic API key is removed.</p>")
+    assert bg.popups.open[-1].text.text().endswith("The Anthropic API key is removed.</p>")
 
 
 def test_signing_out_of_anthropic(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -369,7 +369,7 @@ def test_signing_out_of_anthropic(bg, monkeypatch) -> None:  # type: ignore[no-u
     bg._ext_p("anthropic")["auth"] = "signin"
     bg._on_menu("ext:out:anthropic")
     assert bg._ext_auth("anthropic") == "" and calls == ["ant.exe"]
-    assert "Signed out of Anthropic." in bg._popups[-1].text.text()
+    assert "Signed out of Anthropic." in bg.popups.open[-1].text.text()
 
 
 def test_signing_out_of_chatgpt(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -380,7 +380,7 @@ def test_signing_out_of_chatgpt(bg, monkeypatch) -> None:  # type: ignore[no-unt
     bg._ext_p("openai")["auth"] = "chatgpt"
     bg._on_menu("ext:out:openai")
     assert bg._ext_p("openai")["auth"] == ""
-    assert [p.title for p in bg._popups] == ["Signed out", "ChatGPT"]          # (OpenAI couldn't confirm it)
+    assert [p.title for p in bg.popups.open] == ["Signed out", "ChatGPT"]          # (OpenAI couldn't confirm it)
 
 
 def test_signing_out_of_github_and_removing_the_token(bg) -> None:  # type: ignore[no-untyped-def]
@@ -394,7 +394,7 @@ def test_signing_out_of_github_and_removing_the_token(bg) -> None:  # type: igno
     assert "quota" not in s and s["login"] == "octocat" and bg.chat_model == "copilot:m1"
     bg._ext_disconnect("copilot", only_key=True)
     assert bg._ext_auth("copilot") == "" and "login" not in s and bg.chat_model is None
-    assert bg._popups[-1].text.text().endswith("The GitHub token is removed.</p>")
+    assert bg.popups.open[-1].text.text().endswith("The GitHub token is removed.</p>")
 
 
 class _Session:
@@ -445,7 +445,7 @@ def test_token_limit_gate(pet, p: str, used: int, status: str) -> None:  # type:
         assert [b.text() for b in pet.chat._choice_btns] == ["SWITCH MODEL", "RAISE TO 1.5M", "STOP"]
         assert "Token limit reached." in pet.chat.choice_label.text()
     elif status == "hard":
-        assert pet._popups[-1].title == "All tokens used" and pet.chat.msgs[-1].role == "error"
+        assert pet.popups.open[-1].title == "All tokens used" and pet.chat.msgs[-1].role == "error"
 
 
 def test_raising_the_token_limit_goes_on(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -488,7 +488,7 @@ def test_provider_limit_popups(pet, app_env, why: str, title: str, url) -> None:
     _task(pet)
     p = {"plan": "openai", "copilot": "copilot"}.get(why, "anthropic")
     pet._limit_popup(p, {"why": why})
-    pop = pet._popups[-1]
+    pop = pet.popups.open[-1]
     assert pop.title == title and pet.chat.msgs[-1].role == "error"
     pop.ok.click()
     if url:
@@ -622,11 +622,11 @@ def test_the_menu_popups_and_banner_tell_the_injected_description(make_app, sync
     assert [i.label for i in pet._ext_chat_items()] == ["Zed models"]
     _task(pet)
     pet._limit_popup("openai", {"why": "rate"})
-    assert "ZedCo's rate limit" in pet._popups[-1].text.text() and "ZedCo's rate limit" in pet.chat.msgs[-1].text
+    assert "ZedCo's rate limit" in pet.popups.open[-1].text.text() and "ZedCo's rate limit" in pet.chat.msgs[-1].text
     pet._limit_popup("openai", {"why": "credits"})
-    assert "Zed credits are gone." in pet._popups[-1].text.text()
+    assert "Zed credits are gone." in pet.popups.open[-1].text.text()
     pet._limit_popup("openai", {"why": "plan"})
-    pet._popups[-1].ok.click()
+    pet.popups.open[-1].ok.click()
     assert app_env.opened_urls[-1] == "https://zed.example/usage"
     pet.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r"})
     pet._ext_p("openai")["auth"] = "chatgpt"
@@ -634,7 +634,7 @@ def test_the_menu_popups_and_banner_tell_the_injected_description(make_app, sync
     pet._show_model_banner()
     assert "https://zed.example/usage" in pet.chat.model_bar.text()
     pet._ext_disconnect("openai", only_key=True)
-    assert pet._popups[-1].title == "Zed" and pet._popups[-1].text.text().endswith("The Zed key is gone.</p>")
+    assert pet.popups.open[-1].title == "Zed" and pet.popups.open[-1].text.text().endswith("The Zed key is gone.</p>")
 
 
 def test_a_provider_without_a_sign_in_offers_none(make_app) -> None:  # type: ignore[no-untyped-def]

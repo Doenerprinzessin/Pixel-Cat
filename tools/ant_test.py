@@ -301,39 +301,39 @@ def app_flow() -> None:
     T.install = fake_install
     opened: list[str] = []
     webbrowser.open = lambda url, *a, **k: (opened.append(url), APPROVE.write_text("ok"))
-    n = len(pet._popups)
+    n = len(pet.popups.open)
     pet._cli_signin("anthropic")
-    wait(lambda: len(pet._popups) > n)
-    ask = pet._popups[-1]
+    wait(lambda: len(pet.popups.open) > n)
+    ask = pet.popups.open[-1]
     text = ask.text.text()
     check("app: Sign in with Anthropic asks once, in plain words (helper, browser, Allow, billing, privacy)",
           ask.title == "Sign in with Anthropic" and "sign-in helper" in text and "Allow" in text
           and "Console" in text and "Anthropic" in text, text[:120])
     ask._finish(True)
     wait(lambda: pet._ext_auth("anthropic") == "signin" and pet._ext_models("anthropic"), 30)
-    connected = [p for p in pet._popups if p.title == "Claude is connected"]
+    connected = [p for p in pet.popups.open if p.title == "Claude is connected"]
     check("...one click: the helper is fetched, the browser opens, and Claude is connected with its models",
           installs == [1] and opened and pet._ext_auth("anthropic") == "signin"
           and [m["id"] for m in pet._ext_models("anthropic")] == ["claude-sonnet-5-5"] and bool(connected)
           and S["auth"][-1] == "Bearer tok-from-ant", f"{installs} {opened[:1]} {pet._ext_auth('anthropic')}")
-    for p in list(pet._popups):
+    for p in list(pet.popups.open):
         try:
             p._finish(False)
         except RuntimeError:
             pass
-    n = len(pet._popups)
+    n = len(pet.popups.open)
     pet._cli_signin("anthropic")
-    wait(lambda: len(pet._popups) > n)
-    again = pet._popups[-1].text.text() if len(pet._popups) > n else ""
+    wait(lambda: len(pet.popups.open) > n)
+    again = pet.popups.open[-1].text.text() if len(pet.popups.open) > n else ""
     check("...next time (helper already here) it doesn't mention fetching it", "sign-in helper" not in again
           and "Allow" in again)
-    pet._popups[-1]._finish(False)
+    pet.popups.open[-1]._finish(False)
     (FAKE / "logged_out").unlink(missing_ok=True)
     pet._ext_disconnect("anthropic")
     wait(lambda: (FAKE / "logged_out").exists() and not T.signin_dir().exists())
     check("app: Sign out signs Pixel Cat's profile out and forgets it", pet._ext_auth("anthropic") == ""
           and (FAKE / "logged_out").exists() and not T.signin_dir().exists())
-    for p in list(pet._popups):
+    for p in list(pet.popups.open):
         try:
             p._finish(False)
         except RuntimeError:

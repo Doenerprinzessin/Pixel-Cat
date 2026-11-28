@@ -43,6 +43,7 @@ QT = {"PySide6", "shiboken6", "shibokensupport"}   # shibokensupport: embedded i
 # Where Qt belongs (core files or packages).  Every other core module may use Qt in type hints only.
 QT_ALLOWED = {
     "app/controller.py": "the application: QApplication, the windows, timers and the tray",
+    "app/popups.py": "the popup windows, and a Qt signal that brings background results to the GUI thread",
     "ui": "the widgets: overlay, ball, menu, chat, dialogs, tray, theme, screen geometry",
     "games/qt_host.py": "the minigames' Qt window (the games themselves are plain Python)",
     "imaging.py": "picture helpers for the chat (QImage in, PNG bytes out)",

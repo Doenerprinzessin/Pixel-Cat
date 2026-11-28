@@ -163,12 +163,12 @@ def main() -> int:  # noqa: C901 - a linear test script
         ex = win32.get_exstyle(pet.overlay.hwnd())
         check(f"{key}: the cat is back to normal and on top again", brain.state != S.GAME and brain.mode != "fixed"
               and brain.game is pet.game and pet.overlay.raise_on_move and bool(ex & win32.WS_EX_TOPMOST))
-        pops = [p for p in pet._popups if p.isVisible()]
+        pops = [p for p in pet.popups.open if p.isVisible()]
         if game.t >= 8 and pops:
             ex = win32.get_exstyle(int(pops[-1].winId()))
             check(f"{key}: a result window with the XP (it doesn't take the focus)", saved.xp > xp0
                   and bool(ex & win32.WS_EX_NOACTIVATE), f"+{saved.xp - xp0} XP")
-        for p in list(pet._popups):
+        for p in list(pet.popups.open):
             p._finish(True)
         pump(0.3)
 
@@ -176,7 +176,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     # ---------------------------------------------------------------- the first-time explanation
     pet._on_menu("game:laser")
     pump(0.5)
-    pops = [p for p in pet._popups if p.isVisible()]
+    pops = [p for p in pet.popups.open if p.isVisible()]
     ex = win32.get_exstyle(int(pops[0].winId())) if pops else 0
     check("first time: the explanation window shows (and doesn't take the focus)", bool(pops) and pet.mini is None
           and bool(ex & win32.WS_EX_NOACTIVATE) and pops[0].title == "Laser pointer")

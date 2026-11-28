@@ -395,7 +395,7 @@ def test_locked_skins_hats_and_games_do_nothing(pet) -> None:  # type: ignore[no
 
 def test_a_new_game_is_explained_first(pet) -> None:  # type: ignore[no-untyped-def]
     pet._on_menu("game:laser")
-    pop = pet._popups[-1]
+    pop = pet.popups.open[-1]
     assert pop.title == "Laser pointer" and pop.kind == "tutorial" and pet.mini is None
     pop.answered.emit(False)
     assert pet.mini is None and "laser" not in pet.saved.tutorials_seen
@@ -404,7 +404,7 @@ def test_a_new_game_is_explained_first(pet) -> None:  # type: ignore[no-untyped-
 def test_a_minigame_starts_and_stops(pet) -> None:  # type: ignore[no-untyped-def]
     pet.start()
     pet._on_menu("game:laser")
-    pet._popups[-1].ok.click()
+    pet.popups.open[-1].ok.click()
     assert pet.saved.tutorials_seen == ["laser"] and pet._mini_active() and pet._running_game() == "laser"
     assert find(pet._menu_items(), "stopgame").label == "Stop Laser pointer"
     for _ in range(5):
@@ -417,10 +417,10 @@ def test_a_minigame_starts_and_stops(pet) -> None:  # type: ignore[no-untyped-de
 def test_ball_game_over_gives_xp_and_keeps_the_record(pet) -> None:  # type: ignore[no-untyped-def]
     pet._game_ended(3)
     assert (pet.saved.plays, pet.saved.best_round, pet.game.best, pet.saved.xp) == (1, 3, 3, 25 + 36)
-    pop = pet._popups[-1]
+    pop = pet.popups.open[-1]
     assert "caught the ball 3 times" in pop.text.text() and "+61 XP" in pop.text.text()
     pet._game_ended(5)
-    assert pet.saved.best_round == 5 and "New record: 5 catches!" in pet._popups[-1].text.text()
+    assert pet.saved.best_round == 5 and "New record: 5 catches!" in pet.popups.open[-1].text.text()
     pet._game_ended(0)
     assert pet.saved.plays == 3
 
@@ -428,7 +428,7 @@ def test_ball_game_over_gives_xp_and_keeps_the_record(pet) -> None:  # type: ign
 def test_an_unlock_offers_to_use_it(pet) -> None:  # type: ignore[no-untyped-def]
     pet.saved.xp = progress.xp_to_reach(2) - 1
     pet._award("ball", "Play ball", 50, "ok", "")
-    pop = pet._popups[-1]
+    pop = pet.popups.open[-1]
     assert progress.REWARDS[0] == ("hat", "party")
     assert "Stage 2! New hat: " in pop.text.text() and pop.ok.text() == "PUT IT ON" and pop.no.text() == "LATER"
     pop.ok.click()
@@ -446,16 +446,16 @@ def test_export_and_import_progress(make_app, tmp_path, monkeypatch) -> None:  #
     monkeypatch.setattr(src, "_ask_file", lambda save, title, start: str(target))
     src._on_menu("export")
     exported = Path(str(target) + persistence.EXPORT_EXT)
-    assert exported.is_file() and src._popups[-1].title == "Progress exported"
+    assert exported.is_file() and src.popups.open[-1].title == "Progress exported"
 
     dst = make_app()
     monkeypatch.setattr(dst, "_ask_file", lambda save, title, start: str(exported))
     dst._on_menu("import")
-    ask = dst._popups[-1]
+    ask = dst.popups.open[-1]
     assert ask.title == "Import progress?" and "1234 XP" in ask.text.text()
     ask.ok.click()
     assert (dst.saved.xp, dst.saved.best_round, dst.game.best) == (1234, 9, 9)
-    assert any(p.title == "Progress loaded" for p in dst._popups)
+    assert any(p.title == "Progress loaded" for p in dst.popups.open)
     backups = list((paths.data_dir() / "progress-backups").glob("*"))
     assert len(backups) == 1
 
@@ -465,14 +465,14 @@ def test_import_of_a_broken_file_changes_nothing(pet, tmp_path, monkeypatch) -> 
     bad.write_bytes(b"not a cat")
     monkeypatch.setattr(pet, "_ask_file", lambda save, title, start: str(bad))
     pet._on_menu("import")
-    assert pet._popups[-1].title == "Import" and pet.saved.xp == 0
+    assert pet.popups.open[-1].title == "Import" and pet.saved.xp == 0
 
 
 def test_cancelled_file_dialogs_do_nothing(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(pet, "_ask_file", lambda save, title, start: "")
     pet._on_menu("export")
     pet._on_menu("import")
-    assert pet._popups == []
+    assert pet.popups.open == []
 
 
 def test_a_failing_menu_action_is_logged_not_raised(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]

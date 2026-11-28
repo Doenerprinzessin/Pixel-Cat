@@ -219,7 +219,7 @@ def _close_all(pet: Any) -> None:
             th.wait(5000)                           # (a QThread destroyed while running aborts Python)
     for tm in pet.findChildren(type(pet.tick_timer)):
         tm.stop()
-    for w in [pet.chat, pet.menu, pet.model_menu, pet.overlay, pet.ball_win, pet.hud, *pet._popups,
+    for w in [pet.chat, pet.menu, pet.model_menu, pet.overlay, pet.ball_win, pet.hud, *pet.popups.open,
               getattr(pet, "_key_dialog", None), getattr(pet, "_dialog", None)]:
         try:
             if w is not None:
@@ -279,7 +279,7 @@ def sync_background():  # type: ignore[no-untyped-def]
             except Exception as exc:  # noqa: BLE001 - handed to cb like the real one
                 res = exc
             cb(res)
-        pet._in_background = run
+        pet.popups.in_background = run
     return install
 
 

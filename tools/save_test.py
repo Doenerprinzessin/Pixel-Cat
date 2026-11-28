@@ -203,7 +203,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     persistence.export_progress(big, TEST / "big.pixelcat")
     answer[0] = str(TEST / "big.pixelcat")
     pet.import_progress()
-    ask = [p for p in pet._popups if p.title == "Import progress?"]
+    ask = [p for p in pet.popups.open if p.title == "Import progress?"]
     check("Import asks first (nothing changed yet)", bool(ask) and pet.saved.xp == 150)
     ask[-1]._finish(True)
     app.processEvents()
@@ -218,18 +218,18 @@ def main() -> int:  # noqa: C901 - a linear test script
           len(backups) == 1 and persistence.read_export(backups[0])["xp"] == 150 and disk.xp == big.xp
           and not disk.auto_mode)
     answer[0] = str(TEST / "edited.pixelcat")
-    n = len(pet._popups)
+    n = len(pet.popups.open)
     pet.import_progress()
-    check("importing an edited file: a message, nothing changes", len(pet._popups) == n + 1
+    check("importing an edited file: a message, nothing changes", len(pet.popups.open) == n + 1
           and pet.saved.xp == big.xp)
     pet._tell_unreadable_save()
     check("a save that can't be read: the cat says so (and how to import an export)",
-          pet._popups[-1].title == "A fresh start" and "Import progress" in pet._popups[-1].text.text())
+          pet.popups.open[-1].title == "A fresh start" and "Import progress" in pet.popups.open[-1].text.text())
     items = {i.key: i for i in pet._menu_items()}
     sub = [c for c in items["settings"].children if c.key == "progress"]
     check("Menu > Settings > Your progress: Export and Import",
           bool(sub) and [c.key for c in sub[0].children] == ["export", "import"])
-    for p in list(pet._popups):
+    for p in list(pet.popups.open):
         p.close()
     clear_reg()
     failed = [r for r in results if not r[1]]

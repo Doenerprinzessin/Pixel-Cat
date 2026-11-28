@@ -851,11 +851,11 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     check("key dialog: a wrong key is refused in the dialog; a good one is checked, kept, the models loaded",
           "wasn't accepted" in refused and pet.creds.get("anthropic_key") == "sk-ant-good"
           and pet._ext_auth("anthropic") == "key" and len(pet._ext_models("anthropic")) == 2, refused)
-    for p in list(pet._popups):
+    for p in list(pet.popups.open):
         try:
             p._finish(False)                         # (answered: the app forgets it too)
         except RuntimeError:
-            pet._popups.remove(p) if p in pet._popups else None
+            pet.popups.open.remove(p) if p in pet.popups.open else None
     # the menu ---------------------------------------------------------------------------------------
     items = {i.key: i for i in pet._menu_items()}
     ai = next(c for c in items["settings"].children if c.key == "set_model")
@@ -921,9 +921,9 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     chat = pet.chat
 
     def say(text: str) -> None:
-        n = len(pet._popups)
+        n = len(pet.popups.open)
         pet._on_user_message(text)
-        wait(lambda: (pet.worker is None and not pet._task_active) or chat.choice.isVisible() or len(pet._popups) > n)
+        wait(lambda: (pet.worker is None and not pet._task_active) or chat.choice.isVisible() or len(pet.popups.open) > n)
 
     say("hi")
     used1 = pet._budget("anthropic").used()
@@ -946,10 +946,10 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     wait(lambda: not pet._task_active)
     check("...asked again - raising goes up to the maximum (2k)", labels[1:2] == ["RAISE TO 2K"]
           and pet._budget("anthropic").used() == 2400, str(labels))
-    n_pop = len(pet._popups)
+    n_pop = len(pet.popups.open)
     say("even more")
-    wait(lambda: len(pet._popups) > n_pop)
-    pop = pet._popups[-1] if len(pet._popups) > n_pop else None
+    wait(lambda: len(pet.popups.open) > n_pop)
+    pop = pet.popups.open[-1] if len(pet.popups.open) > n_pop else None
     text = pop.text.text() if pop is not None else ""
     check("all tokens used: a popup says when the limit resets", pop is not None and pop.title == "All tokens used"
           and "resets" in text and "tomorrow at 00:00" in text, text[:160])
@@ -975,10 +975,10 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     pet.model_menu.close()
     # a provider's rate limit ------------------------------------------------------------------------------
     S["mode"] = "rate"
-    n_pop = len(pet._popups)
+    n_pop = len(pet.popups.open)
     pet._on_user_message("hello?")
-    wait(lambda: len(pet._popups) > n_pop)
-    pop = pet._popups[-1] if len(pet._popups) > n_pop else None
+    wait(lambda: len(pet.popups.open) > n_pop)
+    pop = pet.popups.open[-1] if len(pet.popups.open) > n_pop else None
     text = pop.text.text() if pop is not None else ""
     check("the provider's rate limit: a popup with when it lifts", pop is not None and pop.title == "Rate limit reached"
           and "lifts" in text and "today at" in text, text[:160])
@@ -1019,9 +1019,9 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     pet.creds.set("chatgpt", None)
     pet._ext_p("openai").pop("auth", None)
     S["refuse_codes"] = 1
-    n_pop = len(pet._popups)
+    n_pop = len(pet.popups.open)
     pet._browser_start("openai")
-    wait_pop = pet._popups[-1] if len(pet._popups) > n_pop else None
+    wait_pop = pet.popups.open[-1] if len(pet.popups.open) > n_pop else None
     seen: set[str] = set()
 
     def signed() -> bool:
@@ -1033,9 +1033,9 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     wait(signed, 30)
     check("menu sign-in with ChatGPT: 'Finish in your browser' while it runs (and why it asks twice), then signed in",
           wait_pop is not None and wait_pop.title == "Finish in your browser" and any("One more step" in t for t in seen)
-          and pet._ext_auth("openai") == "chatgpt" and wait_pop not in pet._popups, f"{len(seen)} texts")
+          and pet._ext_auth("openai") == "chatgpt" and wait_pop not in pet.popups.open, f"{len(seen)} texts")
     S["refuse_codes"] = 0
-    for p in list(pet._popups):
+    for p in list(pet.popups.open):
         try:
             p._finish(False)
         except RuntimeError:
@@ -1044,21 +1044,21 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     pet.creds.set("chatgpt", None)
     pet._ext_p("openai").pop("auth", None)
     S["error_page"] = True
-    n_auth, n_pop = len(S["authorize"]), len(pet._popups)
+    n_auth, n_pop = len(S["authorize"]), len(pet.popups.open)
     pet._browser_start("openai")
     wait(lambda: len(S["authorize"]) > n_auth, 10)
-    first = pet._popups[-1] if len(pet._popups) > n_pop else None
+    first = pet.popups.open[-1] if len(pet.popups.open) > n_pop else None
     S["error_page"] = False
     if first is not None:
         first._finish(True)                             # START OVER
     wait(lambda: pet._ext_auth("openai") == "chatgpt", 30)
     qs = S["authorize"][n_auth:]
-    left = [p.title for p in pet._popups if p.title in ("Finish in your browser", "Sign in with ChatGPT")]
+    left = [p.title for p in pet.popups.open if p.title in ("Finish in your browser", "Sign in with ChatGPT")]
     check("START OVER (OpenAI showed an error page): a fresh sign-in starts and finishes; no stray popups",
           first is not None and first.title == "Finish in your browser" and len(qs) == 2
           and all(q["client_id"] == "dynamic_agent_client" for q in qs) and pet._ext_auth("openai") == "chatgpt"
           and not left, f"{len(qs)} authorizations, left {left}")
-    for p in list(pet._popups):
+    for p in list(pet.popups.open):
         try:
             p._finish(False)
         except RuntimeError:
@@ -1074,11 +1074,11 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
           chat.model_bar.isVisible() and "Using ChatGPT plan" in chat.model_bar.text()
           and "chatgpt.com/settings/usage" in chat.model_bar.text() and chat.model_btn.text() == "GPT-6.1",
           chat.model_btn.text())
-    for p in list(pet._popups):
+    for p in list(pet.popups.open):
         try:
             p._finish(False)                         # (answered: the app forgets it too)
         except RuntimeError:
-            pet._popups.remove(p) if p in pet._popups else None
+            pet.popups.open.remove(p) if p in pet.popups.open else None
     chat.hide()
 
 

@@ -55,10 +55,11 @@ from ..ui.overlay import CatOverlay
 from ..ui.tray import Tray
 from .. import games as minigames
 from ..games.base import MiniGame
-from ..games.qt_host import PopupWin, QtHost, art_pixmap
+from ..games.qt_host import QtHost, art_pixmap
 from ..sprites import hats as hat_art
 from . import context
 from .geometry import rect_gap
+from .popups import Popups
 
 log = logging.getLogger("pixelcat.app")   # (the name it had as pixelcat/app.py; tests look for it)
 
@@ -82,22 +83,6 @@ class ToolThread(QThread):
         except Exception as exc:  # noqa: BLE001 - reported to the chat
             out = exc
         self.output.emit(out)
-
-
-class _Later(QObject):
-    """Hands what a background thread found to a callback on the GUI thread."""
-
-    ran = Signal(object, object)
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.ran.connect(self._run)
-
-    def _run(self, cb: Any, result: Any) -> None:
-        try:
-            cb(result)
-        except Exception:  # noqa: BLE001
-            log.exception("background result handler failed")
 
 
 class PixelCatApp(QObject):
@@ -151,7 +136,6 @@ class PixelCatApp(QObject):
         self._under_t = 0.0
         self._ledge_quick = 2
         self._own_hwnds: set[int] = set()
-        self._popups: list[PopupWin] = []
         self.host = QtHost(self.brain, self.sprites, self._game_windows, self.scale_for,
                            self.t.min_surface_len, on_world=self._rebuild_world, work_area=self._game_work,
                            ui_unit=self._game_unit, cat_hwnd=self.overlay.hwnd, on_hud_close=self.stop_minigame,
@@ -172,7 +156,8 @@ class PixelCatApp(QObject):
         self._chat_sig = ""                              # what was saved last (unchanged: not written again)
         self._download_ok: set[str] = set()              # models the user said yes to downloading
         self.creds = external.Credentials(secrets=platform.secrets)  # API keys and sign-ins (keys.dat, encrypted)
-        self._later = _Later()
+        self.popups = Popups(self.sprites, self.platform.windows, anchor=lambda: self._popup_anchor(),
+                             hidden=lambda: self.hidden_fullscreen)   # popups next to the cat, background work
         self._resume_after_switch = False                # token limit: go on once another model is picked
         self._ext_notes: set[str] = set()
         self._signin_cancel: threading.Event | None = None
@@ -341,7 +326,7 @@ class PixelCatApp(QObject):
                 tm.stop()
             self.agent.cancel.set()
             self.stop_minigame()
-            for pop in list(self._popups):
+            for pop in list(self.popups.open):
                 pop.close()
             self.esc_watch.stop()
             self.watches.stop()
@@ -432,7 +417,7 @@ class PixelCatApp(QObject):
     def _own_surfaces(self) -> set[int]:
         """Our own windows the cat may sit on: the chat, the menu, popups."""
         out: set[int] = set()
-        for w in [self.chat, self.menu, self.model_menu, *self._popups]:
+        for w in [self.chat, self.menu, self.model_menu, *self.popups.open]:
             try:
                 if w is not None and w.isVisible():
                     out.add(int(w.winId()))
@@ -584,7 +569,7 @@ class PixelCatApp(QObject):
             self.overlay.hide()
             self.ball_win.hide()          # the game waits; the ball comes back with the cat
             self.host.set_hidden(True)
-            for pop in self._popups:
+            for pop in self.popups.open:
                 pop.hide()
             self._chat_was_visible = self.chat is not None and self.chat.isVisible()
             if self._chat_was_visible and self.chat is not None:
@@ -592,7 +577,7 @@ class PixelCatApp(QObject):
         else:
             self.overlay.reshow()
             self.host.set_hidden(False)
-            for pop in self._popups:
+            for pop in self.popups.open:
                 pop.show()
             if self._chat_was_visible and self.chat is not None:
                 self.chat.show()
@@ -1025,16 +1010,6 @@ class PixelCatApp(QObject):
                 QTimer.singleShot(0, self._request)
 
     # ---------------------------------------------------------------- external AI models
-    def _in_background(self, fn: Any, cb: Any) -> None:
-        """Run ``fn`` in a thread; ``cb(result or exception)`` on the GUI thread."""
-        def work() -> None:
-            try:
-                res = fn()
-            except Exception as exc:  # noqa: BLE001 - handed to cb
-                res = exc
-            self._later.ran.emit(cb, res)
-        threading.Thread(target=work, name="pixelcat-ext", daemon=True).start()
-
     def _ext_p(self, p: str) -> dict[str, Any]:
         return self.saved.ext_settings.setdefault(p, {})
 
@@ -1346,7 +1321,7 @@ class PixelCatApp(QObject):
                 if isinstance(q, dict):
                     self._ext_p(cp)["quota"] = q
                 self._apply_credit_limit(v, dlg)
-            self._in_background(lambda: prov.quota(self.creds, auth, start=True), got)
+            self.popups.in_background(lambda: prov.quota(self.creds, auth, start=True), got)
             return
         self._apply_credit_limit(v, dlg)
 
@@ -1383,7 +1358,7 @@ class PixelCatApp(QObject):
             if isinstance(res, Exception):
                 log.warning("couldn't load the %s models: %s", p, res)
                 if announce:
-                    self._popup("Models", self._paras([html.escape(prov.key_problem(res))]), "OK")
+                    self.popups.popup("Models", self._paras([html.escape(prov.key_problem(res))]), "OK")
                 return
             self._set_ext_models(p, res)
             log.info("%s: %d models", p, len(res))
@@ -1391,12 +1366,12 @@ class PixelCatApp(QObject):
                 self.menu.refresh(self._menu_items())
             if after is not None:
                 after()
-        self._in_background(work, got)
+        self.popups.in_background(work, got)
 
     def _ext_connected(self, p: str) -> None:
         prov = self.providers[p].info
         n = len(self._ext_models(p))
-        pop = self._popup(f"{prov.brand} is connected", self._paras([
+        pop = self.popups.popup(f"{prov.brand} is connected", self._paras([
             f"{n} {prov.brand} models are ready." if n else f"{prov.brand} is ready.",
             f"Pick one in Settings &gt; AI model &gt; External AI models &gt; {prov.brand} &gt; Model - or just for "
             "one chat, with the button next to SEND."]), "PICK A MODEL", "LATER")
@@ -1458,13 +1433,13 @@ class PixelCatApp(QObject):
             except RuntimeError:
                 pass
             self._ext_connected(p)
-        self._in_background(work, got)
+        self.popups.in_background(work, got)
 
     def _cli_signin(self, p: str) -> None:
         """Sign in with Anthropic: one click - Pixel Cat gets Anthropic's sign-in helper if it
         isn't here yet, then the browser opens and the user only signs in there."""
         signin = self.providers[p].signin()
-        self._in_background(signin.find, lambda exe: self._cli_signin_ask(p, exe))
+        self.popups.in_background(signin.find, lambda exe: self._cli_signin_ask(p, exe))
 
     def _cli_signin_ask(self, p: str, exe: Any) -> None:
         have = isinstance(exe, str)
@@ -1477,7 +1452,7 @@ class PixelCatApp(QObject):
         lines += ["This uses your Claude Console account (platform.claude.com) - the API is paid there, separately "
                   "from a claude.ai subscription.",
                   "Chats with Claude go to Anthropic, including what my tools read (screenshots, files, window text)."]
-        pop = self._popup("Sign in with Anthropic", self._paras(lines), "SIGN IN", "CANCEL")
+        pop = self.popups.popup("Sign in with Anthropic", self._paras(lines), "SIGN IN", "CANCEL")
         pop.answered.connect(lambda ok, e=exe: self._cli_go(p, e if isinstance(e, str) else None) if ok else None)
 
     def _cli_go(self, p: str, exe: str | None) -> None:
@@ -1489,13 +1464,13 @@ class PixelCatApp(QObject):
         if exe is not None:
             self._cli_login(p, exe, cancel)
             return
-        pop = self._popup("Sign in with Anthropic", self._paras(["Getting Anthropic's sign-in helper…"]), "CANCEL")
+        pop = self.popups.popup("Sign in with Anthropic", self._paras(["Getting Anthropic's sign-in helper…"]), "CANCEL")
         pop.answered.connect(lambda _ok: cancel.set())
         self._ant_pop = pop
 
         def progress(done: int, total: int) -> None:
-            self._later.ran.emit(self._cli_progress, (done, total))
-        self._in_background(lambda: signin.install(progress, cancel),
+            self.popups.later.ran.emit(self._cli_progress, (done, total))
+        self.popups.in_background(lambda: signin.install(progress, cancel),
                             lambda res, c=cancel: self._cli_installed(p, res, c))
 
     def _cli_progress(self, value: Any) -> None:
@@ -1509,26 +1484,14 @@ class PixelCatApp(QObject):
         except RuntimeError:
             self._ant_pop = None
 
-    def _dismiss(self, pop: Any) -> None:
-        """Close a popup nobody answered (it was only showing progress)."""
-        if pop is None:
-            return
-        try:
-            pop._done = True
-            pop.close()
-        except RuntimeError:
-            pass
-        if pop in self._popups:
-            self._popups.remove(pop)
-
     def _cli_installed(self, p: str, res: Any, cancel: threading.Event) -> None:
-        self._dismiss(getattr(self, "_ant_pop", None))
+        self.popups.dismiss(getattr(self, "_ant_pop", None))
         self._ant_pop = None
         if cancel.is_set():
             return
         if isinstance(res, Exception):
             msg = self.providers[p].error_text(res, f"That didn't work ({res}).")
-            pop = self._popup("Sign in with Anthropic", self._paras([html.escape(msg),
+            pop = self.popups.popup("Sign in with Anthropic", self._paras([html.escape(msg),
                               "You can also use an API key instead - that needs nothing else."]), "API KEY", "CLOSE")
             pop.answered.connect(lambda ok: self._ask_key(p) if ok else None)
             return
@@ -1543,29 +1506,29 @@ class PixelCatApp(QObject):
         def open_url(url: str) -> None:
             opened.append(url)
             webbrowser.open(url)
-        pop = self._popup("Finish in your browser", self._paras([
+        pop = self.popups.popup("Finish in your browser", self._paras([
             "Anthropic's sign-in page is open in your browser. Sign in, pick your organization and click "
             "<b>Allow</b> - I notice it by myself.",
             "No page? Click OPEN AGAIN."]), "OPEN AGAIN", "CANCEL")
         pop.answered.connect(lambda ok: (webbrowser.open(opened[-1]) if opened else None) if ok else cancel.set())
         self._ant_wait_pop = pop
-        self._in_background(lambda: signin.login(exe, open_url, cancel),
+        self.popups.in_background(lambda: signin.login(exe, open_url, cancel),
                             lambda res, c=cancel: self._cli_signed_in(p, res, c))
 
     def _cli_signed_in(self, p: str, res: Any, cancel: threading.Event) -> None:
-        self._dismiss(getattr(self, "_ant_wait_pop", None))
+        self.popups.dismiss(getattr(self, "_ant_wait_pop", None))
         self._ant_wait_pop = None
         if isinstance(res, Exception):
             if not cancel.is_set():
                 msg = self.providers[p].error_text(res, f"The sign-in didn't work ({res}).")
-                self._popup("Sign in with Anthropic", self._paras([html.escape(msg)]), "OK")
+                self.popups.popup("Sign in with Anthropic", self._paras([html.escape(msg)]), "OK")
             return
         self._ext_p(p)["auth"] = "signin"
         self.save()
         self._ext_load_models(p, announce=True, after=lambda: self._ext_connected(p))
 
     def _browser_signin(self, p: str) -> None:
-        pop = self._popup("Sign in with ChatGPT", self._paras([
+        pop = self.popups.popup("Sign in with ChatGPT", self._paras([
             "Your browser opens OpenAI's sign-in. Once you allow it there, chats with OpenAI models use your "
             "ChatGPT plan instead of API credits.",
             "When OpenAI asks for an account or workspace, pick your <b>personal</b> one with ChatGPT Plus or Pro - "
@@ -1581,7 +1544,7 @@ class PixelCatApp(QObject):
             self._signin_cancel.set()
         ev = threading.Event()
         self._signin_cancel = ev
-        pop = self._popup("Finish in your browser", self._paras([
+        pop = self.popups.popup("Finish in your browser", self._paras([
             "OpenAI's sign-in is open in your browser. Pick your personal ChatGPT account and allow Pixel Cat - "
             "I notice it by myself.",
             "OpenAI shows an error instead (for example about a workspace)? Close that page and click START OVER."]),
@@ -1590,8 +1553,8 @@ class PixelCatApp(QObject):
         self._gpt_wait_pop = pop
 
         def again() -> None:                         # (from the sign-in thread)
-            self._later.ran.emit(self._browser_again, None)
-        self._in_background(lambda: signin.sign_in(self.creds, cancel=ev, again=again),
+            self.popups.later.ran.emit(self._browser_again, None)
+        self.popups.in_background(lambda: signin.sign_in(self.creds, cancel=ev, again=again),
                             lambda res, pp=pop, e=ev: self._browser_done(p, res, pp, e))
 
     def _browser_restart(self, p: str) -> None:
@@ -1611,7 +1574,7 @@ class PixelCatApp(QObject):
             pass
 
     def _browser_done(self, p: str, res: Any, pop: Any = None, ev: threading.Event | None = None) -> None:
-        self._dismiss(pop)
+        self.popups.dismiss(pop)
         if self._gpt_wait_pop is pop:
             self._gpt_wait_pop = None
         if ev is not None and ev is not self._signin_cancel:
@@ -1619,11 +1582,11 @@ class PixelCatApp(QObject):
         if isinstance(res, Exception):
             msg = self.providers[p].error_text(res, f"The sign-in didn't work ({res}).")
             if "cancelled" not in msg:
-                self._popup("Sign in with ChatGPT", self._paras([html.escape(msg)]), "OK")
+                self.popups.popup("Sign in with ChatGPT", self._paras([html.escape(msg)]), "OK")
             return
         s = self._ext_p(p)
         if not res.get("plan"):
-            self._popup("Signed in - but no plan usage", self._paras([
+            self.popups.popup("Signed in - but no plan usage", self._paras([
                 "You're signed in, but using your ChatGPT plan wasn't allowed, so OpenAI models can't run on it yet.",
                 "Sign in again and allow it - or use an API key instead."]), "OK")
             return
@@ -1636,7 +1599,7 @@ class PixelCatApp(QObject):
             if not first:
                 self._ext_connected(p)
                 return
-            pop = self._popup("Using your ChatGPT plan", self._paras([
+            pop = self.popups.popup("Using your ChatGPT plan", self._paras([
                 "Chats with OpenAI models now use your ChatGPT plan's usage. ChatGPT's settings show how much I "
                 "used and let you cap it - the Manage usage link above the chat's input takes you there.",
                 f"{len(self._ext_models(p))} models are ready - pick one in Settings &gt; AI model &gt; "
@@ -1661,36 +1624,36 @@ class PixelCatApp(QObject):
             if ready is True:
                 then()
                 return
-            pop = self._popup("GitHub Copilot", self._paras([
+            pop = self.popups.popup("GitHub Copilot", self._paras([
                 "For Copilot models I first get GitHub's Copilot runtime (about 100 MB) from GitHub's official release "
                 "page - the download is checked against GitHub's checksums. No admin rights, nothing else changes on "
                 "your PC.",
                 "Chats with Copilot models go to GitHub, including what my tools read (screenshots, files, window "
                 "text), and use your Copilot plan's AI credits."]), "GET IT", "CANCEL")
             pop.answered.connect(lambda ok: self._runtime_install(p, then) if ok else None)
-        self._in_background(prov.runtime_ready, got)
+        self.popups.in_background(prov.runtime_ready, got)
 
     def _runtime_install(self, p: str, then: Any) -> None:
         prov = self.providers[p]
         cancel = threading.Event()
-        pop = self._popup("GitHub Copilot", self._paras(["Getting GitHub's Copilot runtime…"]), "CANCEL")
+        pop = self.popups.popup("GitHub Copilot", self._paras(["Getting GitHub's Copilot runtime…"]), "CANCEL")
         pop.answered.connect(lambda _ok: cancel.set())
         self._cop_pop = pop
 
         def progress(done: int, total: int) -> None:
-            self._later.ran.emit(self._runtime_progress, (done, total))
+            self.popups.later.ran.emit(self._runtime_progress, (done, total))
 
         def finished(res: Any) -> None:
-            self._dismiss(self._cop_pop)
+            self.popups.dismiss(self._cop_pop)
             self._cop_pop = None
             if cancel.is_set():
                 return
             if isinstance(res, Exception):
                 msg = prov.error_text(res, f"That didn't work ({res}).")
-                self._popup("GitHub Copilot", self._paras([html.escape(msg)]), "OK")
+                self.popups.popup("GitHub Copilot", self._paras([html.escape(msg)]), "OK")
                 return
             then()
-        self._in_background(lambda: prov.install_runtime(progress, cancel), finished)
+        self.popups.in_background(lambda: prov.install_runtime(progress, cancel), finished)
 
     def _runtime_progress(self, value: Any) -> None:
         pop = self._cop_pop
@@ -1728,10 +1691,10 @@ class PixelCatApp(QObject):
             self._ext_connected(p)
             if prov.info.credits:
                 self._copilot_quota(force=True)
-        self._in_background(lambda: prov.check_key(key), got)
+        self.popups.in_background(lambda: prov.check_key(key), got)
 
     def _device_signin(self, p: str) -> None:
-        pop = self._popup("Sign in with GitHub", self._paras([
+        pop = self.popups.popup("Sign in with GitHub", self._paras([
             "Your browser opens GitHub with a short code: enter it there and allow Pixel Cat. That's all - I notice "
             "it by myself.",
             "Copilot models then use your Copilot plan's AI credits. If your Copilot comes from work, your "
@@ -1748,8 +1711,8 @@ class PixelCatApp(QObject):
         self._signin_cancel = ev
 
         def show_code(code: str, uri: str) -> None:      # (from the sign-in thread)
-            self._later.ran.emit(self._device_code, (code, uri, ev))
-        self._in_background(lambda: signin.sign_in(self.creds, show_code, ev),
+            self.popups.later.ran.emit(self._device_code, (code, uri, ev))
+        self.popups.in_background(lambda: signin.sign_in(self.creds, show_code, ev),
                             lambda res, e=ev: self._device_done(p, res, e))
 
     def _device_code(self, value: Any) -> None:
@@ -1759,7 +1722,7 @@ class PixelCatApp(QObject):
         if ev.is_set():
             return
         QGuiApplication.clipboard().setText(code)
-        pop = self._popup("Finish in your browser", self._paras([
+        pop = self.popups.popup("Finish in your browser", self._paras([
             f"Enter this code on GitHub: <b>{html.escape(code)}</b> (it's copied - just paste it), then allow Pixel "
             "Cat. I notice it by myself.",
             "No page? Click OPEN AGAIN."]), "OPEN AGAIN", "CANCEL")
@@ -1768,14 +1731,14 @@ class PixelCatApp(QObject):
         webbrowser.open(uri)
 
     def _device_done(self, p: str, res: Any, ev: threading.Event) -> None:
-        self._dismiss(self._gh_wait_pop)
+        self.popups.dismiss(self._gh_wait_pop)
         self._gh_wait_pop = None
         if ev is not self._signin_cancel:
             return                                       # (an attempt that was started over)
         if isinstance(res, Exception):
             msg = self.providers[p].error_text(res, f"The sign-in didn't work ({res}).")
             if "cancelled" not in msg:
-                self._popup("Sign in with GitHub", self._paras([html.escape(msg)]), "OK")
+                self.popups.popup("Sign in with GitHub", self._paras([html.escape(msg)]), "OK")
             return
         s = self._ext_p(p)
         s["auth"], s["login"] = "signin", res.get("login", "")
@@ -1851,7 +1814,7 @@ class PixelCatApp(QObject):
                 self.save()
                 if self.menu.isVisible():
                     self.menu.refresh(self._menu_items())
-        self._in_background(lambda: prov.quota(self.creds, auth, start=force), got)
+        self.popups.in_background(lambda: prov.quota(self.creds, auth, start=force), got)
 
     def _copilot_chat(self, p: str) -> Any:
         if self._copilot is None:
@@ -1895,13 +1858,13 @@ class PixelCatApp(QObject):
             s["auth"] = ""
             msg = prov.signed_out
             if prov.signin_kind == "browser":
-                self._in_background(lambda: signin.sign_out(self.creds), lambda ok: None if ok is True else self._popup(
+                self.popups.in_background(lambda: signin.sign_out(self.creds), lambda ok: None if ok is True else self.popups.popup(
                     "Signed out", self._paras(["OpenAI couldn't confirm the sign-out. To be sure, disconnect Pixel Cat "
                                                "in ChatGPT's settings (Connected apps)."]), "OK"))
             elif prov.signin_kind == "device":
                 signin.sign_out(self.creds)              # (quick: it forgets the token)
             else:
-                self._in_background(lambda: signin.sign_out(self.creds), lambda _r: None)
+                self.popups.in_background(lambda: signin.sign_out(self.creds), lambda _r: None)
         else:
             return
         if prov.credits:
@@ -1918,7 +1881,7 @@ class PixelCatApp(QObject):
                 self.chat_model = None
                 self.model_status.override = None
                 self._update_model_chip()
-        self._popup(prov.brand, self._paras([msg]), "OK")
+        self.popups.popup(prov.brand, self._paras([msg]), "OK")
 
     def _ext_chat_items(self) -> list[MenuItem]:
         """The chat's model menu: the connected providers' models."""
@@ -2099,7 +2062,7 @@ class PixelCatApp(QObject):
         log.info("%s limit (%s) - task paused", p, why)
         if self.chat is not None:
             self.chat.add("error", re.sub(r"<[^>]+>", "", " ".join(lines)))
-        pop = self._popup(title, self._paras(lines), ok, "OK")
+        pop = self.popups.popup(title, self._paras(lines), ok, "OK")
 
         def answer(yes: bool) -> None:
             if yes and url:
@@ -2261,12 +2224,12 @@ class PixelCatApp(QObject):
         self._begin_game(key)
 
     def _show_tutorial(self, key: str) -> None:
-        for pop in list(self._popups):
+        for pop in list(self.popups.open):
             if getattr(pop, "kind", "") == "tutorial":
                 pop.close()
-                self._popups.remove(pop)
+                self.popups.open.remove(pop)
         text = "".join(f"<p style='margin:0 0 6px 0'>{html.escape(t)}</p>" for t in minigames.tutorial(key))
-        pop = self._popup(minigames.title(key), text, "LET'S PLAY!", "NOT NOW", self._game_picture(key))
+        pop = self.popups.popup(minigames.title(key), text, "LET'S PLAY!", "NOT NOW", self._game_picture(key))
         pop.kind = "tutorial"  # type: ignore[attr-defined]
         pop.answered.connect(lambda ok, k=key: self._tutorial_answer(k, ok))
 
@@ -2288,16 +2251,10 @@ class PixelCatApp(QObject):
             log.exception("no picture for %s", key)
             return None
 
-    def _popup(self, title: str, text: str, ok: str, cancel: str | None = None,
-               picture: QPixmap | None = None) -> PopupWin:
-        pop = PopupWin(self.sprites, title, text, ok, cancel, picture, windows=self.platform.windows)
-        self._popups.append(pop)
-        pop.answered.connect(lambda _ok, pp=pop: self._popups.remove(pp) if pp in self._popups else None)
+    def _popup_anchor(self) -> tuple[Any, tuple[int, int, int, int], int, int]:
+        """Where a popup shows: next to the cat, on the cat's monitor."""
         mon = self._cat_monitor()
-        pop.show_near(self.overlay.cat_rect(), mon.work, self.ui_unit(mon), mon.dpi)
-        if self.hidden_fullscreen:
-            pop.hide()
-        return pop
+        return self.overlay.cat_rect(), mon.work, self.ui_unit(mon), mon.dpi
 
     def _begin_game(self, key: str) -> None:
         if self.hidden_fullscreen or not progress.is_unlocked(self.saved.xp, "game", key):
@@ -2403,7 +2360,7 @@ class PixelCatApp(QObject):
             if kind == "game" and picture is None:
                 picture = self._game_picture(k)
         text = "".join(f"<p style='margin:0 0 5px 0'>{ln}</p>" for ln in lines)
-        pop = self._popup(title, text, ok, cancel, picture)
+        pop = self.popups.popup(title, text, ok, cancel, picture)
         if unlocks and cancel:
             n, kind, k = unlocks[-1]
             pop.answered.connect(lambda yes, kd=kind, kk=k: self._use_unlock(kd, kk) if yes else None)
@@ -2472,12 +2429,12 @@ class PixelCatApp(QObject):
             persistence.export_progress(self.saved, path)
         except OSError as e:
             log.exception("export failed")
-            self._popup("Export", self._paras([f"Couldn't save it there ({html.escape(e.strerror or str(e))})."]),
+            self.popups.popup("Export", self._paras([f"Couldn't save it there ({html.escape(e.strerror or str(e))})."]),
                         "OK")
             return
         log.info("progress exported to %s", path)
         stage = progress.state(self.saved.xp).stage
-        self._popup("Progress exported", self._paras([
+        self.popups.popup("Progress exported", self._paras([
             f"Cat Pass stage {stage}, your skins, hats and records are saved in",
             f"<b>{html.escape(str(path))}</b>",
             "Load it on any PC with Import progress. Editing the file makes it unreadable."]), "NICE!")
@@ -2491,11 +2448,11 @@ class PixelCatApp(QObject):
         try:
             data = persistence.read_export(Path(name))
         except persistence.SaveError as e:
-            self._popup("Import", self._paras([html.escape(str(e))]), "OK")
+            self.popups.popup("Import", self._paras([html.escape(str(e))]), "OK")
             return
         st = self.saved
         now, new = progress.state(st.xp).stage, progress.state(data["xp"]).stage
-        pop = self._popup("Import progress?", self._paras([
+        pop = self.popups.popup("Import progress?", self._paras([
             f"Now: Cat Pass stage {now} ({st.xp} XP).",
             f"In the file: stage {new} ({data['xp']} XP).",
             "Loading it replaces your Cat Pass, skins, hats, records and look. Chat settings and auto mode "
@@ -2513,7 +2470,7 @@ class PixelCatApp(QObject):
             persistence.export_progress(self.saved, backup)
         except OSError as e:
             log.exception("couldn't back up the progress before importing")
-            self._popup("Import", self._paras([
+            self.popups.popup("Import", self._paras([
                 f"Nothing changed: the current progress couldn't be backed up first "
                 f"({html.escape(e.strerror or str(e))})."]), "OK")
             return
@@ -2521,7 +2478,7 @@ class PixelCatApp(QObject):
         self._show_progress()
         self.save()
         log.info("progress imported: %d XP (the old one is in %s)", self.saved.xp, backup)
-        self._popup("Progress loaded", self._paras([
+        self.popups.popup("Progress loaded", self._paras([
             f"Cat Pass stage {progress.state(self.saved.xp).stage}. Welcome back!",
             f"The progress you had before is in <b>{html.escape(str(backup))}</b>."]), "NICE!")
         if self.menu.isVisible():
@@ -2544,7 +2501,7 @@ class PixelCatApp(QObject):
         self.brain.show_bubble("bubble_heart", 1.5)
 
     def _tell_unreadable_save(self) -> None:
-        self._popup("A fresh start", self._paras([
+        self.popups.popup("A fresh start", self._paras([
             "The cat couldn't read its save: it was changed by hand, or it's from another Windows account or PC.",
             "If you exported your progress, load it with Menu &gt; Settings &gt; Your progress &gt; Import progress.",
             "The old file is kept in the PixelCat folder, just in case."]), "OK")

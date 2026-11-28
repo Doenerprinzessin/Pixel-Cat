@@ -507,10 +507,10 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     chat = pet.chat
 
     def say(text: str) -> None:
-        n = len(pet._popups)
+        n = len(pet.popups.open)
         pet._on_user_message(text)
         wait(lambda: (pet.worker is None and not pet._task_active) or chat.choice.isVisible()
-             or chat._confirm_cb is not None or len(pet._popups) > n, 90)
+             or chat._confirm_cb is not None or len(pet.popups.open) > n, 90)
 
     S["script"] = [reply("Meow, hi!")]
     say("hi")
@@ -571,10 +571,10 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     # the plan's allowance used up -------------------------------------------------------------------------------
     pet._ext_p("copilot")["credit_limit"] = 0
     S["script"] = [reply("allowance", status=402)] * 6
-    n_pop = len(pet._popups)
+    n_pop = len(pet.popups.open)
     pet._on_user_message("one more?")
-    wait(lambda: len(pet._popups) > n_pop, 120)
-    pop = pet._popups[-1] if len(pet._popups) > n_pop else None
+    wait(lambda: len(pet.popups.open) > n_pop, 120)
+    pop = pet.popups.open[-1] if len(pet.popups.open) > n_pop else None
     text = pop.text.text() if pop is not None else ""
     check("Copilot's own allowance used up: a popup that says when it resets", pop is not None
           and pop.title == "Copilot allowance used up" and "Dec 1" in text, text[:160])

@@ -24,7 +24,7 @@ def bg(pet, sync_background):  # type: ignore[no-untyped-def]
 
 def _titles(pet) -> list[str]:  # type: ignore[no-untyped-def]
     out = []
-    for p in pet._popups:
+    for p in pet.popups.open:
         try:
             out.append(p.title)
         except RuntimeError:
@@ -49,7 +49,7 @@ def test_anthropic_sign_in(bg, app_env, monkeypatch, have_helper: bool) -> None:
     monkeypatch.setattr(ant_tool, "login", login)
     monkeypatch.setattr(anthropic_client, "list_models", lambda creds, auth="key": MODELS)
     bg._on_menu("ext:signin:anthropic")
-    ask = bg._popups[-1]
+    ask = bg.popups.open[-1]
     assert ask.title == "Sign in with Anthropic" and ("15 MB" in ask.text.text()) is (not have_helper)
     ask.ok.click()
     assert steps == ([] if have_helper else ["install"]) + ["login ant.exe"]
@@ -67,8 +67,8 @@ def test_anthropic_helper_download_fails(bg, monkeypatch) -> None:  # type: igno
     monkeypatch.setattr(ant_tool, "find", lambda: None)
     monkeypatch.setattr(ant_tool, "install", fail)
     bg._on_menu("ext:signin:anthropic")
-    bg._popups[-1].ok.click()
-    pop = bg._popups[-1]
+    bg.popups.open[-1].ok.click()
+    pop = bg.popups.open[-1]
     assert "The download was damaged." in pop.text.text() and pop.ok.text() == "API KEY"
     assert bg._ext_auth("anthropic") == ""
 
@@ -86,8 +86,8 @@ def test_github_sign_in(bg, app_env, monkeypatch) -> None:  # type: ignore[no-un
     monkeypatch.setattr(copilot_client, "list_models", lambda creds, auth: MODELS)
     monkeypatch.setattr(copilot_client, "quota", lambda creds, auth, start=False: None)
     bg._device_signin("copilot")
-    assert bg._popups[-1].title == "Sign in with GitHub"
-    bg._popups[-1].ok.click()
+    assert bg.popups.open[-1].title == "Sign in with GitHub"
+    bg.popups.open[-1].ok.click()
     assert app_env.clipboard.text() == "ABCD-1234" and app_env.opened_urls == ["https://github.com/login/device"]
     assert bg._ext_auth("copilot") == "signin" and bg._ext_p("copilot")["login"] == "octocat"
     assert _titles(bg)[-1] == "Copilot is connected"
@@ -104,8 +104,8 @@ def test_chatgpt_sign_in(bg, monkeypatch) -> None:  # type: ignore[no-untyped-de
     monkeypatch.setattr(chatgpt_signin, "sign_in", sign_in)
     monkeypatch.setattr(openai_client, "list_models", lambda creds, auth: MODELS)
     bg._on_menu("ext:signin:openai")
-    assert bg._popups[-1].title == "Sign in with ChatGPT"
-    bg._popups[-1].ok.click()
+    assert bg.popups.open[-1].title == "Sign in with ChatGPT"
+    bg.popups.open[-1].ok.click()
     assert bg._ext_auth("openai") == "chatgpt" and _titles(bg)[-1] == "Using your ChatGPT plan"
 
 
@@ -185,8 +185,8 @@ def test_a_too_long_request_is_shortened_and_sent_again(pet, claude) -> None:  #
 def test_a_provider_limit_pauses_the_task(pet, claude) -> None:  # type: ignore[no-untyped-def]
     _say(pet, "hi")
     claude[-1].limit("rate", None)
-    assert pet._popups[-1].title == "Rate limit reached" and pet._task_active
-    pet._popups[-1].no.click()
+    assert pet.popups.open[-1].title == "Rate limit reached" and pet._task_active
+    pet.popups.open[-1].no.click()
     assert not pet._task_active
 
 
