@@ -168,7 +168,7 @@ def test_the_table_covers_every_port_method(plat):  # type: ignore[no-untyped-de
     translated = {("display", "user_state"), ("input", "set_passthrough_until"), ("input", "holding"),
                   ("clipboard", "has"), ("accessibility", "snapshot"), ("apps", "open_settings"),
                   ("save_marks", "is_marked"), ("save_marks", "mark"), ("save_marks", "forget"),
-                  ("display", "qt_logical"), ("apps", "editor_command")}
+                  ("display", "qt_logical"), ("apps", "editor_command"), ("capture", "quiet")}
     public = {(port, name) for port in vars(plat) if port not in ("name", "profile")
               for name in dir(getattr(plat, port)) if not name.startswith("_") and name != "instance"}
     assert public == {(d[0], d[1]) for d in DELEGATES} | translated

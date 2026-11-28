@@ -11,7 +11,6 @@ import pytest
 from pixelcat import ports
 from pixelcat.adapters import llm, null
 from pixelcat.adapters.llm import anthropic_client, copilot_client, ollama_client, openai_client, signin
-from pixelcat.adapters.macos import capture
 from pixelcat.adapters.macos import escwatch as mac_escwatch
 from pixelcat.adapters.macos import notifications as mac_notifications
 from pixelcat.adapters.macos import platform as macos
@@ -83,12 +82,7 @@ def test_implements_every_member(port, impl):  # type: ignore[no-untyped-def]
                                                                                  notifications.__name__)],
                          ids=lambda x: getattr(x, "__qualname__", ""))
 def test_adds_no_public_methods(port, impl):  # type: ignore[no-untyped-def]
-    assert set(_members(impl)) - OPTIONAL.get(impl, set()) <= set(_members(port))
-
-
-# extras the core looks up with getattr where only one system has them (the Mac capture's quiet(): pictures nobody
-# asked for must not ask for Screen Recording - agent._fingerprint)
-OPTIONAL = {capture.MacCapture: {"quiet"}}
+    assert set(_members(impl)) <= set(_members(port))
 
 
 @pytest.mark.parametrize(("build", "index"), [(windows.build, 0), (null.build, 1), (macos.build, 2)],

@@ -166,8 +166,9 @@ class PixelCatApp(QObject):
         self.session = AgentSession(   # the AI's turns: requests, tool rounds, tasks, watches and timers waking it up
             self.chat_state, cfg, saved, providers, self.accounts, self.provider_settings, self.watches,
             self.brain, self.game, self.minigames, self.overlay, self.tray, self.platform.notifications,
-            self.platform.display, self.platform.folders, self.model_status, parent=self, chat_ui=lambda: self.chat_ui,
-            model_choice=lambda: self.model_choice, save=lambda: self.save(), sync_tray=lambda: self.world.sync_tray(),
+            self.platform.display, self.platform.capture, self.platform.folders, self.model_status, parent=self,
+            chat_ui=lambda: self.chat_ui, model_choice=lambda: self.model_choice, save=lambda: self.save(),
+            sync_tray=lambda: self.world.sync_tray(),
             ext_gate=lambda p: self.limits.ext_gate(p), credit_gate=lambda: self.limits.credit_gate(),
             copilot_credits=lambda credits: self.limits.on_copilot_credits(credits),
             copilot_quota=lambda: self.limits.copilot_quota(), limit_popup=lambda p, info: self.limits.limit_popup(p, info),

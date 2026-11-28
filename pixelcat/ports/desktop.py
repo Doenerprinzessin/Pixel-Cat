@@ -347,6 +347,12 @@ class CapturePort(Protocol):
         """The screen in ``rect`` as an RGB32 image for the ledge finder; None if it can't."""
         ...
 
+    def quiet(self) -> AbstractContextManager[None]:
+        """While inside (on this thread), a picture that needs a permission the cat doesn't have raises
+        PermissionNeeded at once instead of asking the user for it (pictures nobody asked for); a no-op where
+        pictures need no permission (Windows)."""
+        ...
+
 
 class SystemPort(Protocol):
     """This PC, and this running copy of the cat."""

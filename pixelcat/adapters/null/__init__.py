@@ -282,6 +282,9 @@ class NullCapture:
     def snapshot(self, rect: Rect) -> QImage | None:
         return None
 
+    def quiet(self) -> AbstractContextManager[None]:
+        return nullcontext()
+
 
 class NullSystem:
     @property

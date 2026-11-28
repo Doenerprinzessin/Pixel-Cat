@@ -28,7 +28,7 @@ import logging
 import re as _re
 import threading
 import time
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Iterator
 
@@ -232,11 +232,10 @@ class DesktopAgent:
 
     def _fingerprint(self, hwnd: int) -> bytes | None:
         """Small grayscale picture of the window, to notice whether anything changed (None: no picture).  Nobody
-        asked for this picture, so it never asks the user for a permission: a capture with ``quiet()`` (macOS)
-        raises PermissionNeeded at once instead (noted in ``_no_pictures``); Windows' capture has no ``quiet``."""
-        quiet = getattr(self._cap, "quiet", None)
+        asked for this picture, so it never asks the user for a permission: inside the capture's ``quiet()`` a
+        missing permission (macOS) raises PermissionNeeded at once instead (noted in ``_no_pictures``)."""
         try:
-            with quiet() if quiet is not None else nullcontext():
+            with self._cap.quiet():
                 img, _r = self._window_image(hwnd)
         except PermissionNeeded:
             self._no_pictures = True

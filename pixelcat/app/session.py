@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from ..llm.watch import Watch, WatchManager
     from ..persistence import SavedState
     from ..ports import ModelProvider
-    from ..ports.desktop import DisplayPort, EscapeWatcher, NotificationPort
+    from ..ports.desktop import CapturePort, DisplayPort, EscapeWatcher, NotificationPort
     from ..ports.storage import KnownFolders
     from ..settings import Config
     from ..ui.overlay import CatOverlay
@@ -88,7 +88,7 @@ class AgentSession(QObject):
     def __init__(self, chat_state: ChatState, cfg: Config, saved: SavedState, providers: Mapping[str, ModelProvider],
                  accounts: Accounts, provider_settings: ProviderSettings, watches: WatchManager,
                  brain: Brain, game: BallGame, minigames: Minigames, overlay: CatOverlay, tray: Tray,
-                 notifications: NotificationPort, display: DisplayPort, folders: KnownFolders,
+                 notifications: NotificationPort, display: DisplayPort, capture: CapturePort, folders: KnownFolders,
                  model_status: ModelStatus, *,
                  parent: QObject | None = None, chat_ui: Callable[[], ChatUI], model_choice: Callable[[], ModelChoice],
                  save: Callable[[], None], sync_tray: Callable[[], None], ext_gate: Callable[[str], bool],
@@ -111,6 +111,7 @@ class AgentSession(QObject):
         self.tray = tray
         self.notifications = notifications
         self.display = display
+        self.capture = capture
         self.folders = folders
         self.model_status = model_status
         self._chat_ui = chat_ui
@@ -997,7 +998,7 @@ class AgentSession(QObject):
                 # macOS: Qt's grabWindow would quietly give the wallpaper alone without Screen Recording. The
                 # capture port asks for it (PermissionNeeded, shown as the tool's error) and grabs all monitors
                 # in points, as the agent's screenshots (the picture is as big as the desktop in points).
-                img = self.agent._cap.grab(self.display.virtual_screen())
+                img = self.capture.grab(self.display.virtual_screen())
                 if img.isNull():
                     raise OSError("could not capture the screen")
             else:

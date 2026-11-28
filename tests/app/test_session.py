@@ -39,7 +39,7 @@ def made(qapp):  # type: ignore[no-untyped-def]
     accounts = SimpleNamespace(local=SimpleNamespace(info=SimpleNamespace(key="ollama"), new_chat=new_chat))
     x = SimpleNamespace()
     session = AgentSession(
-        f.chat_state, Config(), SavedState(), {}, accounts, x, x, x, x, x, x, x, x, x, x, x,  # type: ignore[arg-type]
+        f.chat_state, Config(), SavedState(), {}, accounts, x, x, x, x, x, x, x, x, x, x, x, x,  # type: ignore[arg-type]
         chat_ui=lambda: SimpleNamespace(chat=f.chat),  # type: ignore[arg-type, return-value]
         model_choice=lambda: SimpleNamespace(effective_model=lambda: "qwen3.5:9b"),  # type: ignore[arg-type, return-value]
         save=lambda: setattr(f, "saves", f.saves + 1), sync_tray=lambda: None, ext_gate=lambda p: True,
@@ -136,7 +136,7 @@ def shooting(made, tmp_path):  # type: ignore[no-untyped-def]
     session.display = SimpleNamespace(qt_logical=lambda: True, virtual_screen=lambda: (-100, 0, 1728, 1117))
     session.folders = SimpleNamespace(known_folder=lambda name: tmp_path)
     session.overlay = SimpleNamespace(hide=lambda: f.shown.append("hide"), reshow=lambda: f.shown.append("reshow"))
-    session.agent = SimpleNamespace(cancel=threading.Event(), _cap=f.cap)  # type: ignore[assignment]
+    session.capture = f.cap  # type: ignore[assignment]
     return session, f
 
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 import importlib
 import os
 import threading
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Callable
@@ -285,6 +285,9 @@ class WindowsCapture:
 
     def excluding(self, pid: int) -> AbstractContextManager[None]:
         return capture.excluding(pid)
+
+    def quiet(self) -> AbstractContextManager[None]:
+        return nullcontext()
 
     def snapshot(self, rect: Rect) -> QImage | None:
         return ledges.grab(rect)
