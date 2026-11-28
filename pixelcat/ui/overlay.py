@@ -20,6 +20,7 @@ from ..engine.brain import Brain
 from ..ports import InputPort, WindowPort
 from ..settings import Tuning
 from ..sprites.library import CatFrame, SpriteLibrary
+from .geometry import paint_ratio
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class CatOverlay(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
                             | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowDoesNotAcceptFocus
                             | Qt.WindowType.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -137,7 +139,7 @@ class CatOverlay(QWidget):
     def paintEvent(self, _ev: QPaintEvent) -> None:
         p = QPainter(self)
         try:
-            dpr = self.devicePixelRatioF()
+            dpr = paint_ratio(self)
             if abs(dpr - 1.0) > 1e-3:
                 p.scale(1 / dpr, 1 / dpr)  # paint in physical pixels
             p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)

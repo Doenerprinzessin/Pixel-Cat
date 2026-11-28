@@ -176,6 +176,20 @@ def test_paints_the_ball_trail_effects_and_banner(ballwin: BallOverlay, game) ->
     assert len(ballwin._text) == 2 and ballwin._cache
 
 
+def test_paints_full_size_on_a_retina_screen_when_qt_is_logical(ballwin: BallOverlay, game) -> None:  # type: ignore[no-untyped-def]
+    from pixelcat.ui import geometry
+
+    game.start()
+    game.fx.clear()
+    ballwin.sync(2)
+    plain = _opaque(ballwin.grab().toImage())
+    ballwin.devicePixelRatioF = lambda: 2.0           # a Retina screen
+    halved = _opaque(ballwin.grab().toImage())
+    geometry.set_qt_logical(True)
+    assert _opaque(ballwin.grab().toImage()) == plain > halved
+    assert ballwin.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
+
+
 def test_ball_pixmaps_are_cached_and_the_cache_is_bounded(ballwin: BallOverlay) -> None:
     a = ballwin._ball_pm("yarn", 0, 0)
     assert ballwin._ball_pm("yarn", 0, 0) is a

@@ -121,6 +121,14 @@ def test_pixel_dialog_paints(track) -> None:  # type: ignore[no-untyped-def]
     assert img.pixelColor(img.width() // 2, img.height() // 2).alpha() > 0
 
 
+@pytest.mark.parametrize("make", [lambda: PixelDialog("t", "x"), lambda: KeyDialog("t", "x", "p", has_key=False),
+                                  lambda: AmountDialog("t", "x", "p"), lambda: NameDialog("t", "x", "Cat", 12)])
+def test_dialogs_stay_shown_on_macos_while_another_app_is_active(track, make) -> None:  # type: ignore[no-untyped-def]
+    from PySide6.QtCore import Qt
+
+    assert track(make()).testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
+
+
 @pytest.fixture
 def key_dialog(track):  # type: ignore[no-untyped-def]
     dlg = KeyDialog("Claude API key", "Paste it", "sk-ant-...", has_key=True)

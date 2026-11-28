@@ -363,6 +363,35 @@ def test_effect_windows_paint_and_fade_away(qt_world: World, ports, sprite_lib, 
     assert not fx.isVisible() and not fx._t.isActive()
 
 
+def test_effect_windows_paint_full_size_on_a_retina_screen_when_qt_is_logical(qt_world: World,
+                                                                              sprite_lib) -> None:
+    from pixelcat.ui import geometry
+
+    fx = qh.FxWin(300, 400, SCALE, "star", 8, None, sprites=sprite_lib, windows=qt_world.host.windows)
+    fx._step()
+    plain = opaque(paint(fx))
+    fx.devicePixelRatioF = lambda: 2.0                # a Retina screen
+    halved = opaque(paint(fx))
+    geometry.set_qt_logical(True)
+    assert opaque(paint(fx)) == plain > halved
+
+
+def test_game_windows_stay_shown_on_macos_while_another_app_is_active(qt_world: World, sprite_lib,
+                                                                      qapp) -> None:
+    w, host = qt_world, qt_world.host
+    g = w.start("mice")
+    for _ in range(5):
+        w.step(g, (900, 1400))
+    qapp.processEvents()
+    host.hud_set("Mouse hunt", "You 0 : 0")
+    made = [*windows_of(host), host.hud, qh.FxWin(300, 400, SCALE, "star", 8, None, sprites=sprite_lib,
+                                                   windows=host.windows),
+            qh.PopupWin(sprite_lib, "Unlocked!", "A hat", "Wear it", windows=host.windows)]
+    assert len(made) > 3
+    assert all(win.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow) for win in made)
+    g.stop()
+
+
 # ------------------------------------------------------------------ the score panel
 def test_hud_sits_centred_at_the_top_of_the_work_area(qt_world: World, ports) -> None:
     hud = qt_world.host.hud

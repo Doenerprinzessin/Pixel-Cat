@@ -22,7 +22,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWi
 from ..ports import InputPort, WindowPort
 from ..sprites.library import SpriteLibrary, canvas_to_image, scaled_pixmap
 from ..ui import theme
-from ..ui.geometry import Rect, phys_to_qt, place_near
+from ..ui.geometry import Rect, paint_ratio, phys_to_qt, place_near
 from . import art
 from .base import Host, Prop, Sprite
 
@@ -47,6 +47,7 @@ def art_pixmap(key: str, s: int) -> tuple[QPixmap, QImage]:
 def _tool_window(w: QWidget) -> None:
     w.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint
                      | Qt.WindowType.WindowDoesNotAcceptFocus | Qt.WindowType.NoDropShadowWindowHint)
+    w.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
     w.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
     w.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
     w.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -135,7 +136,7 @@ class SpriteWin(QWidget):
 
     def paintEvent(self, _e: QPaintEvent) -> None:
         p = QPainter(self)
-        dpr = self.devicePixelRatioF()
+        dpr = paint_ratio(self)
         if abs(dpr - 1) > 1e-3:
             p.scale(1 / dpr, 1 / dpr)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
@@ -279,7 +280,7 @@ class FxWin(QWidget):
 
     def paintEvent(self, _e: QPaintEvent) -> None:
         p = QPainter(self)
-        dpr = self.devicePixelRatioF()
+        dpr = paint_ratio(self)
         if abs(dpr - 1) > 1e-3:
             p.scale(1 / dpr, 1 / dpr)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
@@ -407,6 +408,7 @@ class PopupWin(QWidget):
         self._windows = windows
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
                             | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)   # never takes the keyboard

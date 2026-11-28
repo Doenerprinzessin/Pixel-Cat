@@ -240,3 +240,17 @@ def test_paints_the_cat_and_its_effects(overlay: CatOverlay, brain) -> None:  # 
     brain.yarn = Yarn()
     busy = _opaque(overlay.grab().toImage())
     assert busy > plain
+
+
+def test_paints_full_size_on_a_retina_screen_when_qt_is_logical(overlay: CatOverlay) -> None:  # type: ignore[no-untyped-def]
+    from pixelcat.ui import geometry
+
+    plain = _opaque(overlay.grab().toImage())
+    overlay.devicePixelRatioF = lambda: 2.0          # a Retina screen (macOS reports dpr 2 even unscaled)
+    halved = _opaque(overlay.grab().toImage())        # physical pixels (Windows): the painter undoes the 2
+    geometry.set_qt_logical(True)                     # macOS: the platform's points are Qt's, Cocoa scales
+    assert _opaque(overlay.grab().toImage()) == plain > halved
+
+
+def test_stays_shown_on_macos_while_another_app_is_active(overlay: CatOverlay) -> None:  # type: ignore[no-untyped-def]
+    assert overlay.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)

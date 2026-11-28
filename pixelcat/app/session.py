@@ -988,21 +988,29 @@ class AgentSession(QObject):
             for _ in range(3):
                 QApplication.processEvents()
                 QThread.msleep(70)
-            screens = QGuiApplication.screens()
-            rects = []
-            for sc in screens:
-                g = sc.geometry()
-                d = sc.devicePixelRatio()
-                rects.append(QRect(g.x(), g.y(), int(g.width() * d), int(g.height() * d)))
-            union = rects[0]
-            for r in rects[1:]:
-                union = union.united(r)
-            img = QImage(union.width(), union.height(), QImage.Format.Format_RGB32)
-            img.fill(QColor(0, 0, 0))
-            p = QPainter(img)
-            for sc, r in zip(screens, rects):
-                p.drawPixmap(QPoint(r.x() - union.x(), r.y() - union.y()), sc.grabWindow(0))
-            p.end()
+            if self.display.qt_logical():
+                # macOS: Qt's grabWindow would quietly give the wallpaper alone without Screen Recording. The
+                # capture port asks for it (PermissionNeeded, shown as the tool's error) and grabs all monitors
+                # in points, as the agent's screenshots (the picture is as big as the desktop in points).
+                img = self.agent._cap.grab(self.display.virtual_screen())
+                if img.isNull():
+                    raise OSError("could not capture the screen")
+            else:
+                screens = QGuiApplication.screens()
+                rects = []
+                for sc in screens:
+                    g = sc.geometry()
+                    d = sc.devicePixelRatio()
+                    rects.append(QRect(g.x(), g.y(), int(g.width() * d), int(g.height() * d)))
+                union = rects[0]
+                for r in rects[1:]:
+                    union = union.united(r)
+                img = QImage(union.width(), union.height(), QImage.Format.Format_RGB32)
+                img.fill(QColor(0, 0, 0))
+                p = QPainter(img)
+                for sc, r in zip(screens, rects):
+                    p.drawPixmap(QPoint(r.x() - union.x(), r.y() - union.y()), sc.grabWindow(0))
+                p.end()
             if not img.save(str(out)):
                 raise OSError(f"could not save {out}")
         finally:

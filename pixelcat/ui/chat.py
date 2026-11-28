@@ -130,6 +130,7 @@ class ChatWindow(QWidget):
         self.setWindowTitle("Pixel Cat Chat")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
                             | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.sprites = sprites
         self.u = 2

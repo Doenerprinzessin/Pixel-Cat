@@ -58,6 +58,13 @@ def test_starts_with_the_greeting_at_its_usual_size(chat: ChatWindow) -> None:
     assert [(m.role, m.text) for m in chat.msgs] == [("cat", GREETING)]
     assert "Mrrrow" in _shown(chat) and "🐱 cat" in _shown(chat)
     assert (chat.width(), chat.height()) == (350, 450)
+
+
+@pytest.mark.qt
+def test_stays_shown_on_macos_while_another_app_is_active(chat: ChatWindow) -> None:
+    from PySide6.QtCore import Qt
+
+    assert chat.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
     assert chat.input.placeholderText() == "Talk to the cat… (Ctrl+N: new chat)"
     assert chat._title_text() == "MEOW CHAT"
     assert chat.send_btn.text() == "SEND"

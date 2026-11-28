@@ -108,3 +108,59 @@ def test_the_users_turn_skips_the_chats_own_commands_and_a_new_chat_forgets_the_
     assert session.worker is None and not session.task_active and f.chat_state.history == []
     assert (session._raw, session._tool_round, session._had_results, session._sent) == ("", 0, False, None)
     assert ("reset",) in f.chat.calls and f.saves >= 1
+
+
+class _Capture:
+    """The capture port's grab: a picture as big as the rect (points), or the given error."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error, self.rects = error, []
+
+    def grab(self, rect):  # type: ignore[no-untyped-def]
+        from PySide6.QtGui import QColor, QImage
+
+        self.rects.append(rect)
+        if self.error is not None:
+            raise self.error
+        img = QImage(rect[2] - rect[0], rect[3] - rect[1], QImage.Format.Format_RGB32)
+        img.fill(QColor(10, 20, 30))
+        return img
+
+
+@pytest.fixture
+def shooting(made, tmp_path):  # type: ignore[no-untyped-def]
+    """``(session, f)`` ready for take_screenshot on macOS: Qt logical, all monitors span (-100,0)-(1728,1117)
+    in points, Pictures is ``tmp_path``; ``f.cap`` is the capture port, ``f.shown`` the overlay's hide/reshow."""
+    session, _jobs, f = made
+    f.cap, f.shown = _Capture(), []
+    session.display = SimpleNamespace(qt_logical=lambda: True, virtual_screen=lambda: (-100, 0, 1728, 1117))
+    session.folders = SimpleNamespace(known_folder=lambda name: tmp_path)
+    session.overlay = SimpleNamespace(hide=lambda: f.shown.append("hide"), reshow=lambda: f.shown.append("reshow"))
+    session.agent = SimpleNamespace(cancel=threading.Event(), _cap=f.cap)  # type: ignore[assignment]
+    return session, f
+
+
+def test_a_screenshot_on_macos_goes_through_the_capture_port_in_points(shooting, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from PySide6.QtGui import QImage
+
+    session, f = shooting
+    out = session.tool_screenshot()
+    saved = list((tmp_path / "PixelCat Screenshots").glob("screenshot_*.png"))
+    assert out == f"Screenshot saved to {saved[0]}." and f.cap.rects == [(-100, 0, 1728, 1117)]
+    assert QImage(str(saved[0])).size().toTuple() == (1828, 1117) and f.shown == ["hide", "reshow"]
+
+
+def test_a_screenshot_on_macos_without_screen_recording_says_where_to_allow_it(shooting, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from PySide6.QtGui import QImage
+
+    from pixelcat.domain.permissions import PermissionNeeded
+
+    session, f = shooting
+    f.cap.error = PermissionNeeded("screen_recording", "Allow Screen Recording for Pixel Cat in System Settings.")
+    with pytest.raises(PermissionNeeded, match="Allow Screen Recording"):
+        session.tool_screenshot()
+    assert f.shown == ["hide", "reshow"] and not list((tmp_path / "PixelCat Screenshots").glob("*.png"))
+    f.cap.error = None
+    f.cap.grab = lambda rect: QImage()                # nothing captured
+    with pytest.raises(OSError, match="could not capture the screen"):
+        session.tool_screenshot()
