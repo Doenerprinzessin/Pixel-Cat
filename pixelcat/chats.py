@@ -203,6 +203,8 @@ class ChatStore:
 
     def delete_all(self) -> int:
         items = self.index()
+        if self.locked:                  # (the index can't be written: every chat stays)
+            raise SecretStoreUnavailable("the saved chats couldn't be opened this run - not deleting them")
         for i in items:
             self._remove(i.id)
         self._write_index([])

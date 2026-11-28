@@ -121,6 +121,24 @@ def test_the_saved_chats_list_shows_model_names_and_deleting_the_open_one_starts
     assert ui.chat.lists[-1] == ([], ui.chat_id)  # type: ignore[union-attr]
 
 
+@pytest.mark.parametrize("op", ["one", "all"])
+def test_deleting_with_a_locked_secret_store_keeps_the_open_chat(tmp_path: Path, op: str) -> None:
+    from pixelcat.domain.secrets import SecretStoreUnavailable
+
+    ui, f = make(tmp_path)
+    ui.chat = FakeWindow()  # type: ignore[assignment]
+    ui.chat.history_shown = True  # type: ignore[union-attr]
+    f.chat_state.history[:] = [{"role": "user", "content": "keep me"}]
+    ui.store_chat()
+    cid = ui.chat_id
+    f.dpapi.unprotect_error = SecretStoreUnavailable("the keychain is locked")
+    ui._delete_saved_chat(cid) if op == "one" else ui._delete_all_chats()  # type: ignore[arg-type]
+    assert ui.chat_id == cid and f.chat_state.history and f.calls == []
+    assert [m.role for m in ui.chat.msgs].count("error") == 1 and ui.chat.lists == [([], cid)]  # type: ignore[union-attr]
+    f.dpapi.unprotect_error = None
+    assert [i.id for i in ChatStore(tmp_path / "chats", secrets=f.dpapi).index()] == [cid]
+
+
 def test_a_resized_chat_opens_like_that_next_time(tmp_path: Path) -> None:
     ui, f = make(tmp_path)
     ui._save_chat_layout()                            # (no window: nothing to keep)

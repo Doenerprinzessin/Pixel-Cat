@@ -239,14 +239,28 @@ def test_a_secret_store_that_cant_protect_locks_the_store(store: ChatStore, dpap
     assert store.locked and files(store) == before
 
 
-def test_deleting_with_a_locked_secret_store_keeps_the_chat(store: ChatStore, dpapi) -> None:  # type: ignore[no-untyped-def]
+@pytest.mark.parametrize("op", ["delete", "delete_all"])
+def test_deleting_with_a_locked_secret_store_keeps_the_chat(store: ChatStore, dpapi, op: str) -> None:  # type: ignore[no-untyped-def]
     for n in (1, 2):
         store.save(chat(n))
     before = files(store)
     dpapi.unprotect_error = SecretStoreUnavailable("the keychain is locked")
     with pytest.raises(SecretStoreUnavailable):
-        store.delete(cid(1))
+        store.delete(cid(1)) if op == "delete" else store.delete_all()
     assert store.locked and files(store) == before
+
+
+def test_delete_all_after_a_failed_write_keeps_every_chat(store: ChatStore, dpapi) -> None:  # type: ignore[no-untyped-def]
+    store.save(chat(1))
+    dpapi.protect_error = SecretStoreUnavailable("the keychain is locked")
+    with pytest.raises(SecretStoreUnavailable):
+        store.save(chat(2))
+    before = files(store)
+    dpapi.protect_error = None                         # (the index still reads: the list stays browsable)
+    assert [i.id for i in store.index()] == [cid(1)]
+    with pytest.raises(SecretStoreUnavailable):
+        store.delete_all()
+    assert files(store) == before
 
 
 def test_default_folder_is_in_the_data_dir(dpapi) -> None:  # type: ignore[no-untyped-def]

@@ -694,3 +694,18 @@ def test_a_provider_without_a_sign_in_offers_none(make_app) -> None:  # type: ig
     keys = [k.key for k in pet.provider_settings.provider_menu("anthropic").children]
     assert "ext:key:anthropic" in keys and not [k for k in keys if k.startswith("ext:signin:")]
     assert "ext:signin:openai" in [k.key for k in pet.provider_settings.provider_menu("openai").children]
+
+
+def test_start_over_with_a_locked_secret_store_says_why_and_doesnt_restart(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from types import SimpleNamespace
+
+    from pixelcat.app import provider_settings
+    from pixelcat.domain.secrets import SecretStoreUnavailable
+
+    def locked(creds):  # type: ignore[no-untyped-def]
+        raise SecretStoreUnavailable(-25308, "the Keychain can't be used right now (reading the data key): locked")
+    timers: list[tuple] = []
+    monkeypatch.setattr(bg.provider_settings.providers["openai"], "signin", lambda: SimpleNamespace(start_over=locked))
+    monkeypatch.setattr(provider_settings, "QTimer", SimpleNamespace(singleShot=lambda *a: timers.append(a)))
+    bg.provider_settings._browser_restart("openai")
+    assert timers == [] and "Keychain can&#x27;t be used right now" in bg.popups.open[-1].text.text()

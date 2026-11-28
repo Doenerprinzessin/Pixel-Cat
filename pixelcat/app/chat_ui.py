@@ -201,9 +201,19 @@ class ChatUI(QObject):
         self._save()                                      # (the open chat is in the list, up to date)
         chat.show_history(self.history_items(), self.chat_id)
 
+    def _locked_not_deleted(self) -> None:
+        """A delete the locked chat store refused: the chats and the open chat stay as they are."""
+        self._tell_locked()
+        if self.chat is not None and self.chat.history_shown:
+            self.chat.set_history(self.history_items(), self.chat_id)
+
     def _delete_saved_chat(self, cid: str) -> None:
         try:
             self.chats.delete(cid)
+        except SecretStoreUnavailable as e:
+            log.warning("saved chat %s not deleted: %s", cid, e)
+            self._locked_not_deleted()
+            return
         except Exception:  # noqa: BLE001
             log.exception("couldn't delete chat %s", cid)
         if cid == self.chat_id:                         # the open one: it goes, a fresh chat starts
@@ -216,6 +226,10 @@ class ChatUI(QObject):
     def _delete_all_chats(self) -> None:
         try:
             n = self.chats.delete_all()
+        except SecretStoreUnavailable as e:
+            log.warning("the chat history wasn't deleted: %s", e)
+            self._locked_not_deleted()
+            return
         except Exception:  # noqa: BLE001
             log.exception("couldn't delete the chat history")
             n = 0

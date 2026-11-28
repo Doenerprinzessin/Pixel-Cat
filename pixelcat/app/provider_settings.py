@@ -643,7 +643,9 @@ class ProviderSettings(QObject):
 
     def _browser_restart(self, p: str) -> None:
         """START OVER: a fresh registration, with OpenAI's account/workspace picker."""
-        self.providers[p].signin().start_over(self.accounts.creds)
+        signin = self.providers[p].signin()
+        if not self._keys_changed(self.providers[p].info.brand, lambda: signin.start_over(self.accounts.creds)):
+            return
         log.info("ChatGPT sign-in: starting over")
         QTimer.singleShot(700, self, lambda: self._browser_start(p))   # (the old attempt lets go of its port first)
 
