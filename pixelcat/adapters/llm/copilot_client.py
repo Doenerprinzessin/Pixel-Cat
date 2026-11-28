@@ -61,8 +61,7 @@ class CopilotError(Exception):
 
 # ------------------------------------------------------------------ where things live
 def tools_dir() -> Path:
-    base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    return base / "PixelCat" / "tools" / "copilot"
+    return paths.local_data_dir() / "PixelCat" / "tools" / "copilot"
 
 
 def home_dir() -> Path:

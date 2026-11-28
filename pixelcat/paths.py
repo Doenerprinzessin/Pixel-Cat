@@ -31,12 +31,30 @@ def config_candidates() -> list[Path]:
     return out
 
 
+def _default_base() -> Path:
+    """Where the per-user app data goes when %APPDATA% isn't set (it always is on Windows)."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support"
+    return Path.home() / "AppData" / "Roaming"
+
+
 def data_dir() -> Path:
-    """``%APPDATA%/PixelCat`` - created on demand."""
-    base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+    """``%APPDATA%/PixelCat`` (macOS: ``~/Library/Application Support/PixelCat``) - created on demand."""
+    base = os.environ.get("APPDATA") or str(_default_base())
     path = Path(base) / "PixelCat"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def local_data_dir() -> Path:
+    """``%LOCALAPPDATA%`` (macOS: ``~/Library/Application Support``), the base for big machine-local
+    things such as downloaded tools - callers add their ``PixelCat/...`` subfolder.  Not created here."""
+    base = os.environ.get("LOCALAPPDATA")
+    if base:
+        return Path(base)
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support"
+    return Path.home() / "AppData" / "Local"
 
 
 def log_file() -> Path:

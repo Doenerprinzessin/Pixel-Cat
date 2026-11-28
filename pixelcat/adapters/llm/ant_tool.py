@@ -1,10 +1,12 @@
 """Anthropic's sign-in helper (``ant``, Anthropic's command-line tool), set up in one click.
 
-* Download: the latest Windows build from Anthropic's official GitHub releases
+* Download: the latest Windows (or macOS) build from Anthropic's official GitHub releases
   (github.com/anthropics/anthropic-cli).  It is used only if its SHA-256 matches the one
   GitHub publishes for the file *and* the one in the release's checksums file (ant.exe has
   no Windows code signature, so that is the check).  Only ant.exe is unpacked, into
   %LOCALAPPDATA%\\PixelCat\\tools\\ant - no installer, no admin rights, nothing on the PATH.
+  On macOS the binary is ``ant`` (in ~/Library/Application Support/PixelCat/tools/ant), made
+  executable after unpacking; the sign-in folder and its token files are readable by the user only.
 * Sign-in: ``ant auth login`` runs hidden and Pixel Cat opens the sign-in page in the
   browser; when the user has approved it there, ant gets the answer on this PC by itself
   (no code to paste).  The sign-in is Pixel Cat's own: ant runs with ANTHROPIC_CONFIG_DIR
@@ -22,6 +24,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -40,7 +43,7 @@ RELEASES = "https://api.github.com/repos/anthropics/anthropic-cli/releases/lates
 DOWNLOAD_PREFIX = "https://github.com/anthropics/anthropic-cli/releases/download/"
 ALLOWED_HOSTS = {"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
 MAX_ZIP = 200 * 1024 * 1024
-NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)   # 0 off Windows: POSIX refuses any other flags
 _lock = threading.Lock()
 
 
@@ -48,9 +51,16 @@ class AntError(Exception):
     """The message is for the user."""
 
 
+def _macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def _exe_name() -> str:
+    return "ant" if _macos() else "ant.exe"
+
+
 def tool_path() -> Path:
-    base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    return base / "PixelCat" / "tools" / "ant" / "ant.exe"
+    return paths.local_data_dir() / "PixelCat" / "tools" / "ant" / _exe_name()
 
 
 def signin_dir() -> Path:
@@ -74,8 +84,9 @@ def _is_ant(exe: str) -> bool:
 
 def find() -> str | None:
     """Pixel Cat's own copy, else one the user already has (not Apache Ant, same name)."""
-    spots = [str(tool_path()), shutil.which("ant"), str(Path.home() / "go" / "bin" / "ant.exe"),
-             str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "ant" / "ant.exe")]
+    exe = _exe_name()
+    spots = [str(tool_path()), shutil.which("ant"), str(Path.home() / "go" / "bin" / exe),
+             str(paths.local_data_dir() / "Programs" / "ant" / exe)]
     for exe in dict.fromkeys(s for s in spots if s and Path(s).is_file()):
         if _is_ant(exe):
             return exe
@@ -89,7 +100,7 @@ def _check_url(url: str) -> None:
 
 
 def latest() -> dict[str, Any]:
-    """The newest release's Windows build for this PC: name, url, size, sha256."""
+    """The newest release's build for this PC (Windows, or macOS on a Mac): name, url, size, sha256."""
     try:
         r = requests.get(RELEASES, headers={"Accept": "application/vnd.github+json", "User-Agent": "PixelCat"},
                          timeout=20)
@@ -100,10 +111,11 @@ def latest() -> dict[str, Any]:
         raise AntError("Anthropic's download page didn't answer properly - try again later.")
     version = str(rel.get("tag_name", "")).lstrip("v")
     assets = {a.get("name"): a for a in rel.get("assets") or [] if isinstance(a, dict)}
-    name = f"ant_{version}_windows_{_arch()}.zip"
+    name = f"ant_{version}_{'macos' if _macos() else 'windows'}_{_arch()}.zip"
     asset = assets.get(name)
     if not version or asset is None:
-        raise AntError("There's no Windows version of Anthropic's sign-in helper right now.")
+        raise AntError(f"There's no {'Mac' if _macos() else 'Windows'} version of Anthropic's sign-in helper "
+                       "right now.")
     url = str(asset.get("browser_download_url", ""))
     if not url.startswith(DOWNLOAD_PREFIX):
         raise AntError("The download didn't come from Anthropic's GitHub page, so I stopped.")
@@ -131,7 +143,7 @@ def latest() -> dict[str, Any]:
 
 
 def install(progress: Callable[[int, int], None] | None = None, cancel: threading.Event | None = None) -> str:
-    """Download, check and unpack ant.exe; returns its path."""
+    """Download, check and unpack ant.exe (macOS: ant); returns its path."""
     with _lock:
         rel = latest()
         dest = tool_path()
@@ -160,13 +172,15 @@ def install(progress: Callable[[int, int], None] | None = None, cancel: threadin
             if h.hexdigest() != rel["sha256"]:
                 raise AntError("The download doesn't match Anthropic's checksum, so I threw it away.")
             with zipfile.ZipFile(zpath) as z:
-                members = [i for i in z.infolist() if Path(i.filename).name.lower() == "ant.exe" and not i.is_dir()]
+                members = [i for i in z.infolist() if Path(i.filename).name.lower() == _exe_name() and not i.is_dir()]
                 if len(members) != 1 or members[0].file_size > MAX_ZIP:
                     raise AntError("The download didn't contain the sign-in helper.")
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                tmp = dest.with_name("ant.exe.tmp")
+                tmp = dest.with_name(dest.name + ".tmp")
                 with z.open(members[0]) as src, open(tmp, "wb") as out:
                     shutil.copyfileobj(src, out)
+                if os.name != "nt":
+                    os.chmod(tmp, 0o755)
             os.replace(tmp, dest)
         except OSError as e:
             raise AntError(f"I couldn't save the sign-in helper ({e.strerror or e}).") from e
@@ -191,6 +205,7 @@ def login(exe: str, open_url: Callable[[str], Any], cancel: threading.Event | No
     """``ant auth login`` without a window: the sign-in page opens in the browser, ant waits
     for the answer on this PC.  Raises AntError if it doesn't finish."""
     signin_dir().mkdir(parents=True, exist_ok=True)
+    _private(signin_dir())
     proc = subprocess.Popen([exe, "auth", "login", "--no-browser", "--callback-port", "0", "--timeout",
                              f"{int(timeout)}s"], env=_env(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
@@ -221,7 +236,23 @@ def login(exe: str, open_url: Callable[[str], Any], cancel: threading.Event | No
         last = next((ln for ln in reversed(lines) if ln.strip()), "")
         log.warning("ant auth login ended with %s: %s", proc.returncode, last[:200])
         raise AntError("The sign-in didn't finish" + (f" ({last[:120]})." if last else "."))
+    _private(signin_dir())
     log.info("signed in with Anthropic (Pixel Cat's own profile)")
+
+
+def _private(d: Path) -> None:
+    """Off Windows: the sign-in folder (and the tokens ant wrote into it) for this user only."""
+    if os.name == "nt":
+        return
+    try:
+        os.chmod(d, 0o700)
+        for root, dirs, files in os.walk(d):
+            for name in dirs:
+                os.chmod(Path(root) / name, 0o700)
+            for name in files:
+                os.chmod(Path(root) / name, 0o600)
+    except OSError:
+        log.warning("couldn't make the sign-in folder private", exc_info=True)
 
 
 def client_config() -> dict[str, Any] | None:

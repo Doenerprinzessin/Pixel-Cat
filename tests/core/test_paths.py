@@ -19,10 +19,36 @@ def test_data_dir_is_appdata_pixelcat_and_created(isolated_dirs: Path) -> None:
     assert d.is_dir()
 
 
-def test_data_dir_without_appdata_falls_back_to_home(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("os_name, base", [("win32", ("AppData", "Roaming")), ("linux", ("AppData", "Roaming")),
+                                           ("darwin", ("Library", "Application Support"))])
+def test_data_dir_without_appdata_falls_back_to_home(monkeypatch: pytest.MonkeyPatch, os_name: str,
+                                                     base: tuple[str, str]) -> None:
     monkeypatch.setenv("APPDATA", "")
-    assert paths.data_dir() == Path.home() / "AppData" / "Roaming" / "PixelCat"
-    assert paths.data_dir().is_dir()
+    with monkeypatch.context() as m:
+        m.setattr(sys, "platform", os_name)
+        d = paths.data_dir()
+    assert d == Path.home().joinpath(*base) / "PixelCat"
+    assert d.is_dir()
+
+
+@pytest.mark.parametrize("os_name", ["win32", "darwin"])
+def test_appdata_wins_on_every_os(monkeypatch: pytest.MonkeyPatch, os_name: str) -> None:
+    with monkeypatch.context() as m:
+        m.setattr(sys, "platform", os_name)
+        data, local = paths.data_dir(), paths.local_data_dir()
+    assert data == Path(os.environ["APPDATA"]) / "PixelCat"
+    assert local == Path(os.environ["LOCALAPPDATA"])
+
+
+@pytest.mark.parametrize("os_name, base", [("win32", ("AppData", "Local")), ("linux", ("AppData", "Local")),
+                                           ("darwin", ("Library", "Application Support"))])
+def test_local_data_dir_without_localappdata_falls_back_to_home(monkeypatch: pytest.MonkeyPatch, os_name: str,
+                                                                base: tuple[str, str]) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", "")
+    with monkeypatch.context() as m:
+        m.setattr(sys, "platform", os_name)
+        d = paths.local_data_dir()
+    assert d == Path.home().joinpath(*base)
 
 
 def test_cache_dir_and_log_file_live_in_the_data_dir() -> None:

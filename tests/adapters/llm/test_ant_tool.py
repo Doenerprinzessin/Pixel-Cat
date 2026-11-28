@@ -22,9 +22,25 @@ from pixelcat import paths
 from pixelcat.adapters.llm import ant_tool as T
 
 
+@pytest.fixture(autouse=True)
+def mac(monkeypatch):
+    """The Windows build by default (the tests run on a Mac too); ``mac()`` switches to the macOS one."""
+    monkeypatch.setattr(T, "_macos", lambda: False)
+    return lambda: monkeypatch.setattr(T, "_macos", lambda: True)
+
+
+def test_no_window_flag_is_the_windows_one_or_zero():
+    assert T.NO_WINDOW == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def test_folders():
     assert T.tool_path() == Path(os.environ["LOCALAPPDATA"]) / "PixelCat" / "tools" / "ant" / "ant.exe"
     assert T.signin_dir() == paths.data_dir() / "anthropic"
+
+
+def test_folders_on_a_mac(mac):
+    mac()
+    assert T.tool_path() == paths.local_data_dir() / "PixelCat" / "tools" / "ant" / "ant"
 
 
 @pytest.mark.parametrize("machine, arch", [("AMD64", "amd64"), ("x86_64", "amd64"), ("ARM64", "arm64"),
@@ -225,6 +241,38 @@ def test_install(unpack):
     assert not unpack.tmp.exists()
 
 
+def test_latest_and_install_on_a_mac(unpack, mac):
+    mac()
+    unpack.name = f"ant_9.9.9_macos_{T._arch()}.zip"
+    unpack.zip = make_zip(("LICENSE", b"license"), ("man/man1/ant.1.gz", b"#"), ("ant", EXE))
+    digest = hashlib.sha256(unpack.zip).hexdigest()
+    unpack.digest, unpack.sums = "sha256:" + digest, digest
+    unpack.url = unpack.base + unpack.name
+    unpack.http.on("GET", "/gh/" + unpack.name, lambda req: Raw(200, unpack.zip, {}))
+    assert T.latest()["name"] == unpack.name
+    exe = T.install()
+    assert exe == str(T.tool_path()) and Path(exe).name == "ant" and Path(exe).read_bytes() == EXE
+    assert sorted(p.name for p in T.tool_path().parent.iterdir()) == ["ant"]
+    if os.name != "nt":
+        assert os.stat(exe).st_mode & 0o777 == 0o755
+
+
+def test_latest_on_a_mac_wants_the_mac_build(github, mac):
+    mac()
+    with pytest.raises(T.AntError, match="no Mac version"):
+        T.latest()                                     # (the fake release has the Windows zip only)
+
+
+def test_find_on_a_mac_looks_for_ant(monkeypatch, mac):
+    mac()
+    gobin = Path.home() / "go" / "bin" / "ant"
+    gobin.parent.mkdir(parents=True)
+    gobin.write_bytes(b"x")
+    monkeypatch.setattr(T.shutil, "which", lambda name: None)
+    monkeypatch.setattr(T, "_is_ant", lambda exe: True)
+    assert T.find() == str(gobin)
+
+
 @pytest.mark.parametrize("change, message", [
     ({"zip": make_zip(("ant.exe", b"OTHER"))}, "doesn't match Anthropic's checksum"),
     ({"zip": make_zip(("readme", b"x")), "fix_sums": True}, "didn't contain the sign-in helper"),
@@ -379,6 +427,17 @@ def test_login(ant_proc, monkeypatch):
     assert "ANTHROPIC_API_KEY" not in env and "ANTHROPIC_PROFILE" not in env
     assert ant_proc.kw["creationflags"] == T.NO_WINDOW and ant_proc.kw["stdin"] == subprocess.DEVNULL
     assert T.signin_dir().is_dir()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_login_keeps_the_tokens_private(ant_proc):
+    ant_proc.proc = FakeProc(LOGIN_OUT, 0, on_exit=write_profile)
+    T.login("/x/ant", lambda url: None)
+    d = T.signin_dir()
+    assert os.stat(d).st_mode & 0o777 == 0o700
+    assert os.stat(d / "credentials").st_mode & 0o777 == 0o700
+    assert os.stat(d / "credentials" / "default.json").st_mode & 0o777 == 0o600
+    assert os.stat(d / "configs" / "default.json").st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize("lines, code, message", [
