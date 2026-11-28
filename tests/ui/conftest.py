@@ -174,7 +174,7 @@ def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path, fake_pl
     """Everything ``PixelCatApp`` touches outside the process, replaced."""
     from PySide6.QtGui import QDesktopServices, QGuiApplication
 
-    import pixelcat.app as app_mod
+    import pixelcat.app.controller as app_mod
     from pixelcat import persistence, settings
     from pixelcat.llm import model_status
     from pixelcat.sprites.library import SpriteLibrary

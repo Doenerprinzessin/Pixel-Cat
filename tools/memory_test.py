@@ -34,7 +34,7 @@ def main() -> int:
     win32.set_dpi_awareness()
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
-    from pixelcat.app import PixelCatApp
+    from pixelcat.app import PixelCatApp, context
     from pixelcat.bootstrap import build_platform, build_providers
     from pixelcat.persistence import SavedState
     from pixelcat.settings import load_config
@@ -54,7 +54,7 @@ def main() -> int:
     h.append({"role": "user", "content": "And now the current request."})
     ctx = pet._context()
     users = [m["content"] for m in ctx if m["role"] == "user"]
-    tokens = pet._tokens(ctx)
+    tokens = context.tokens(ctx)
     check("every earlier request is still remembered (condensed)", all(f"w{t}" in " ".join(users) for t in range(14)),
           f"{len(users)} requests in context")
     check("earlier answers are remembered too", any("Done with task 0" in str(m["content"]) for m in ctx))
@@ -67,7 +67,7 @@ def main() -> int:
         h.append({"role": "assistant", "content": "Answer " + "words " * 150})
     h.append({"role": "user", "content": "final question"})
     ctx = pet._context()
-    tokens = pet._tokens(ctx)
+    tokens = context.tokens(ctx)
     check("very long chats keep the newest exchanges within budget",
           tokens < pet.cfg.num_ctx - 2500 and "Later request 79" in str(ctx) and pet._forgotten > 0,
           f"~{tokens} tokens, {pet._forgotten} oldest exchanges left out")
@@ -81,7 +81,7 @@ def main() -> int:
         h.append({"role": "tool", "tool_name": "read_window", "content": f"Window step {k}\n" + "element list " * 500,
                   **({"images": ["B" * 2000]} if k == 39 else {})})
     ctx = pet._context()
-    tokens = pet._tokens(ctx)
+    tokens = context.tokens(ctx)
     check("long task: the user's request is always first", "THE GOAL" in str(ctx[0]["content"]))
     check("long task: everything fits the context", tokens <= pet.cfg.num_ctx - 2000 - 1500,
           f"~{tokens} tokens for messages, {pet._dropped_steps} oldest steps left out")
@@ -111,7 +111,7 @@ def main() -> int:
         ctx = pet._context()
         rebuilds += ctx[:len(before)] != before
     check("compaction is rare: most steps stay cache-friendly", rebuilds <= 4, f"{rebuilds} rebuilds in 49 steps")
-    tokens = pet._tokens(ctx)
+    tokens = context.tokens(ctx)
     check("a growing task is compacted before it overflows", tokens <= pet.cfg.num_ctx - 2000 - 1500
           and "THE GOAL" in str(ctx[0]["content"]), f"~{tokens} tokens")
     # "continue" after a pause resumes the same task

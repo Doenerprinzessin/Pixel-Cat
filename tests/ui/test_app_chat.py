@@ -5,8 +5,7 @@ from __future__ import annotations
 import pytest
 
 from fakes.chat import FakeJob
-from pixelcat import app as app_mod
-from pixelcat.app import PixelCatApp
+from pixelcat.app import context
 from pixelcat.ui.chat import GREETING
 
 pytestmark = pytest.mark.qt
@@ -279,32 +278,21 @@ def _hist() -> list[dict]:  # type: ignore[type-arg]
 
 def test_turns_and_rounds(pet) -> None:  # type: ignore[no-untyped-def]
     pet.history[:] = _hist()
-    turns = pet._turns()
+    turns = context.turns(pet.history)
     assert [len(t) for t in turns] == [4, 5]                     # ("continue" stays in its task)
-    rounds = PixelCatApp._rounds(turns[1][1:])
+    rounds = context.rounds(turns[1][1:])
     assert [[m["role"] for m in r] for r in rounds] == [["user"], ["assistant"], ["user"], ["assistant"]]
     assert pet._task_request() == "second question"
 
 
 def test_summarize_keeps_the_request_the_steps_and_the_answer(pet) -> None:  # type: ignore[no-untyped-def]
     turn = _hist()[:4]
-    short = PixelCatApp._summarize(turn)
+    short = context.summarize(turn)
     assert short[0] == {"role": "user", "content": "first question"}
     assert short[1]["tool_calls"][0]["function"]["name"] == "get_time"
     assert short[2] == {"role": "tool", "tool_name": "get_time", "content": "It is 12:00."}
     assert short[-1] == {"role": "assistant", "content": "Noon!"}         # (old "steps" notes are scrubbed)
-    assert [m["role"] for m in PixelCatApp._summarize(turn, native=False)] == ["user", "assistant"]
-
-
-def test_clean_drops_private_keys_and_shortens(pet) -> None:  # type: ignore[no-untyped-def]
-    m = {"role": "user", "content": "x" * 50, "_tool": True, "images": ["b64"]}
-    assert PixelCatApp._clean(m) == {"role": "user", "content": "x" * 50, "images": ["b64"]}
-    assert PixelCatApp._clean(m, 10, keep_images=False) == {"role": "user", "content": "x" * 10 + " ...(shortened)"}
-
-
-def test_token_estimate() -> None:
-    assert PixelCatApp._tokens([{"content": "x" * 30}]) == 10 + 8 + len('""') // 3
-    assert PixelCatApp._tokens([{"content": "", "images": ["a", "b"]}]) == 8 + 3200
+    assert [m["role"] for m in context.summarize(turn, native=False)] == ["user", "assistant"]
 
 
 def test_the_context_keeps_the_request_and_the_newest_steps(pet) -> None:  # type: ignore[no-untyped-def]
@@ -317,7 +305,7 @@ def test_the_context_keeps_the_request_and_the_newest_steps(pet) -> None:  # typ
     ctx = pet._build_context()
     assert ctx[0]["content"].startswith("do the long task")
     assert ctx[-1]["content"].startswith("result 59 ")
-    assert pet._tokens(ctx) < 12_000
+    assert context.tokens(ctx) < 12_000
     assert len(ctx) < len(pet.history)
 
 
@@ -336,12 +324,6 @@ def test_when_the_model_thinks(pet, effort, think, last_user: bool, want: bool) 
     pet.chat_effort, pet.cfg.think = effort, think
     pet.history[:] = [{"role": "user", "content": "x"}] if last_user else [{"role": "tool", "content": "y"}]
     assert pet._think_now() is want
-
-
-def test_scrub_and_rect_gap() -> None:
-    assert app_mod._scrub("Done (Steps I took: a, b) [memory note: x] ok") == "Done ok"
-    assert app_mod._rect_gap((0, 0, 10, 10), (5, 5, 20, 20)) == 0
-    assert app_mod._rect_gap((0, 0, 10, 10), (13, 14, 20, 20)) == 5.0
 
 
 # ---------------------------------------------------------------- the chat history

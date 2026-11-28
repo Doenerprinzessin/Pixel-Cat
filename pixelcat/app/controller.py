@@ -21,70 +21,50 @@ from PySide6.QtCore import QObject, QPoint, QRect, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
-from . import naming, paths, persistence, progress
-from .chats import ChatStore, new_id
-from .domain import Monitor, UserState, monitor_at, primary
-from .engine.activity import ActivityTracker
-from .engine.animations import all_poses
-from .engine.ballgame import BallGame
-from .engine.brain import Brain, Ctx
-from .engine.needs import Needs
-from .engine.states import STATES, S
-from .engine.surfaces import WINDOW_KINDS, SurfaceMap
-from .llm.agent import ToolOutput
-from .llm.model_status import ModelStatus
-from .llm.prompt import build_system_prompt
-from .llm.qt_chat import QtChatWorker, QtNotifier
-from .llm.replies import friendly_error, parse_text_tool_calls, strip_tool_markup
-from .llm.tools import SCREEN_EYES, AppHooks, ToolBox, ToolError, ToolSpec
-from .llm.watch import Watch, WatchManager
-from .logsetup import RateLimitedLogger
-from .persistence import SavedState, save_state
-from .ports import ChatRequest, ModelProvider, Platform, ProviderInfo
-from .settings import Config
-from .sprites.library import SpriteLibrary
-from .ui.ball import BallOverlay
-from .ui.chat import GREETING, ChatWindow
-from .ui.dialogs import PixelDialog
-from .ui.ledges import LedgeFinder
-from .llm import external, models
-from .llm.model_status import model_on_disk
-from .ui import theme
-from .ui.menu import MenuItem, PixelMenu
-from .ui.overlay import CatOverlay
-from .ui.tray import Tray
-from . import games as minigames
-from .games.base import MiniGame
-from .games.qt_host import PopupWin, QtHost, art_pixmap
-from .sprites import hats as hat_art
+from .. import naming, paths, persistence, progress
+from ..chats import ChatStore, new_id
+from ..domain import Monitor, UserState, monitor_at, primary
+from ..engine.activity import ActivityTracker
+from ..engine.animations import all_poses
+from ..engine.ballgame import BallGame
+from ..engine.brain import Brain, Ctx
+from ..engine.needs import Needs
+from ..engine.states import STATES, S
+from ..engine.surfaces import WINDOW_KINDS, SurfaceMap
+from ..llm.agent import ToolOutput
+from ..llm.model_status import ModelStatus
+from ..llm.prompt import build_system_prompt
+from ..llm.qt_chat import QtChatWorker, QtNotifier
+from ..llm.replies import friendly_error, parse_text_tool_calls, strip_tool_markup
+from ..llm.tools import SCREEN_EYES, AppHooks, ToolBox, ToolError, ToolSpec
+from ..llm.watch import Watch, WatchManager
+from ..logsetup import RateLimitedLogger
+from ..persistence import SavedState, save_state
+from ..ports import ChatRequest, ModelProvider, Platform, ProviderInfo
+from ..settings import Config
+from ..sprites.library import SpriteLibrary
+from ..ui.ball import BallOverlay
+from ..ui.chat import GREETING, ChatWindow
+from ..ui.dialogs import PixelDialog
+from ..ui.ledges import LedgeFinder
+from ..llm import external, models
+from ..llm.model_status import model_on_disk
+from ..ui import theme
+from ..ui.menu import MenuItem, PixelMenu
+from ..ui.overlay import CatOverlay
+from ..ui.tray import Tray
+from .. import games as minigames
+from ..games.base import MiniGame
+from ..games.qt_host import PopupWin, QtHost, art_pixmap
+from ..sprites import hats as hat_art
+from . import context
+from .geometry import rect_gap
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("pixelcat.app")   # (the name it had as pixelcat/app.py; tests look for it)
 
 # a chat's effort with a local model: how much it thinks (shown next to each level)
 LOCAL_EFFORTS = {"low": "NO THINKING", "medium": "THINKS WHEN PLANNING", "high": "ALWAYS THINKS"}
 EFFORT_SHORT = {"low": "LOW", "medium": "MED", "high": "HIGH", "xhigh": "XHIGH", "max": "MAX"}   # the model button
-
-
-_NOTE_RE = re.compile(r"\((?:Steps I took|steps i took):[^)]*\)\s*|\[memory note:[^\]]*\]\s*", re.I)
-# replies that promise to act later ("I'll let you know when it arrives") - only possible with wait_for
-_PROMISE_RE = re.compile(
-    r"\bI(?:'ll|\s+will|\s+am going to|'m going to|\s+shall)\s+(?:\w+\s+){0,3}?(?:wait|watch|monitor|keep (?:an eye|"
-    r"watching|checking|looking|monitoring)|let you know|notify you|tell you (?:when|as soon|once|if|right away)|"
-    r"ping you|alert you|check (?:back|again|in|later)|remind you|get back to you|be (?:waiting|watching|on the "
-    r"lookout))|\bI'm (?:now )?(?:waiting|watching|monitoring|keeping an eye)"
-    r"|\bich\s+(?:werde\s+)?(?:\w+\s+){0,3}?(?:warte|warten|beobachte|beobachten|überwache|überwachen|"
-    r"sage? dir (?:dann |sofort )?Bescheid|gebe? dir (?:dann |sofort )?Bescheid|melde mich|informiere dich|"
-    r"erinnere dich|behalte\b.{0,40}\bim Auge|schaue? (?:später|nochmal|wieder))"
-    r"|\b(?:sage|gebe) ich dir\b.{0,20}\bBescheid|\bmelde ich mich\b|\bwarte ich\b|\binformiere ich dich\b"
-    r"|\bhalte ich\b.{0,30}\bAusschau", re.I)
-# ...but waiting for the user's own answer is fine
-_USER_WAIT_RE = re.compile(r"\byour (?:answer|reply|response|decision|ok|okay|confirmation|go-ahead)\b|"
-                           r"\bdeine (?:Antwort|Rückmeldung|Entscheidung|Bestätigung)\b", re.I)
-
-
-def _scrub(text: str) -> str:
-    """Remove memory-note lookalikes (from older versions) from answers."""
-    return _NOTE_RE.sub("", text)
 
 
 class ToolThread(QThread):
@@ -102,12 +82,6 @@ class ToolThread(QThread):
         except Exception as exc:  # noqa: BLE001 - reported to the chat
             out = exc
         self.output.emit(out)
-
-
-def _rect_gap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
-    dx = max(a[0] - b[2], 0, b[0] - a[2])
-    dy = max(a[1] - b[3], 0, b[1] - a[3])
-    return (dx * dx + dy * dy) ** 0.5
 
 
 class _Later(QObject):
@@ -479,7 +453,7 @@ class PixelCatApp(QObject):
                 s = self.scale_for(monitor_at(self.monitors, self.brain.x, self.brain.y - 1))
                 for w in wins:
                     if (w.hwnd not in self._known_hwnds and w.hwnd not in self._own_hwnds
-                            and _rect_gap(w.rect, cat) < self.t.startle_radius * s):
+                            and rect_gap(w.rect, cat) < self.t.startle_radius * s):
                         self.brain.startle()
                         break
             self._known_hwnds = set(rects)
@@ -902,7 +876,7 @@ class PixelCatApp(QObject):
                               else self.chat.add("info", f"Okay, the default stays {models.label(self.cfg.model)}."))
 
     def _set_default_model(self, tag: str, download: bool = False) -> None:
-        from .settings import save_user_setting
+        from ..settings import save_user_setting
 
         self.cfg.model = tag
         save_user_setting("model", tag)
@@ -1267,7 +1241,7 @@ class PixelCatApp(QObject):
 
     def _ask_name(self) -> None:
         """Settings -> Name...: the cat's own name (empty: none, as before)."""
-        from .ui.dialogs import NameDialog
+        from ..ui.dialogs import NameDialog
 
         dlg = NameDialog("Your cat's name", "What should I be called? The chat, the menu, the tray and the "
                          f"notifications show it - up to {naming.MAX_LEN} letters, numbers or spaces. "
@@ -1298,7 +1272,7 @@ class PixelCatApp(QObject):
 
     def _ask_limit(self, p: str) -> None:
         """Token limit -> Custom...: any amount up to 100M tokens."""
-        from .ui.dialogs import AmountDialog
+        from ..ui.dialogs import AmountDialog
 
         b = self._budget(p)
         fmt = external.fmt_tokens
@@ -1342,7 +1316,7 @@ class PixelCatApp(QObject):
 
     def _ask_credit_limit(self) -> None:
         """Credit limit -> Custom...: any amount up to the Copilot plan's own monthly credits."""
-        from .ui.dialogs import AmountDialog
+        from ..ui.dialogs import AmountDialog
 
         cap = self._credit_cap()
         fc = external.fmt_credits
@@ -1446,7 +1420,7 @@ class PixelCatApp(QObject):
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
 
-        from .ui.dialogs import KeyDialog
+        from ..ui.dialogs import KeyDialog
 
         prov = self.providers[p].info
         dlg = KeyDialog(prov.key_title, prov.key_text, f"{prov.key_hint}...", bool(self.creds.get(f"{p}_key")),
@@ -2206,14 +2180,14 @@ class PixelCatApp(QObject):
                 self.platform.autostart.set(not self.platform.autostart.enabled())
                 self.saved.autostart_asked = True
             elif key == "preload_ai":
-                from .settings import save_user_setting
+                from ..settings import save_user_setting
 
                 self.cfg.preload_on_start = not self.cfg.preload_on_start
                 save_user_setting("preload_on_start", self.cfg.preload_on_start)
                 if self.cfg.preload_on_start and not self.selftest:
                     self.model_status.ensure()
             elif key == "explore":
-                from .settings import save_user_setting
+                from ..settings import save_user_setting
 
                 self.cfg.explore_windows = not self.cfg.explore_windows
                 save_user_setting("explore_windows", self.cfg.explore_windows)
@@ -3001,95 +2975,6 @@ class PixelCatApp(QObject):
             self._cancel_chat()
 
     # ---------------------------------------------------------------- memory
-    @staticmethod
-    def _tokens(msgs: list[dict[str, Any]]) -> int:
-        """Rough token estimate (about 3 characters per token; a screenshot ~1,600 tokens)."""
-        return sum(len(str(m.get("content", ""))) // 3 + 8 + 1600 * len(m.get("images") or [])
-                   + len(json.dumps(m.get("tool_calls", ""))) // 3 for m in msgs)
-
-    def _turns(self) -> list[list[dict[str, Any]]]:
-        """The history split into exchanges: each starts with something the user wrote."""
-        turns: list[list[dict[str, Any]]] = []
-        for m in self.history:
-            if m["role"] == "user" and not m.get("_tool") and not (m.get("_continue") and turns):
-                turns.append([m])
-            elif turns:
-                turns[-1].append(m)
-        return turns
-
-    @staticmethod
-    def _summarize(turn: list[dict[str, Any]], native: bool = True) -> list[dict[str, Any]]:
-        """An earlier exchange, condensed: the request, its last few tool steps (kept as real
-        tool calls with one-line results, so the model keeps *calling* tools rather than writing
-        results as text) and the answer.  Screenshots and long tool output are dropped."""
-        out: list[dict[str, Any]] = [{"role": "user", "content": turn[0]["content"]}]
-        steps: list[tuple[dict[str, Any], dict[str, Any]]] = []
-        pending: list[dict[str, Any]] = []
-        for m in turn[1:]:
-            if m["role"] == "assistant" and m.get("tool_calls"):
-                pending = list(m["tool_calls"])
-            elif m["role"] == "tool" and pending:
-                steps.append((pending.pop(0), m))
-        if native:
-            for call, res in steps[-4:]:
-                fn = call.get("function", {})
-                args = {k: (v[:60] + "..." if isinstance(v, str) and len(v) > 60 else v)
-                        for k, v in (fn.get("arguments") or {}).items()}
-                first = str(res.get("content", "")).split("\n")[0]
-                out.append({"role": "assistant", "content": "",
-                            "tool_calls": [{"function": {"name": fn.get("name", ""), "arguments": args}}]})
-                out.append({"role": "tool", "tool_name": res.get("tool_name", fn.get("name", "")),
-                            "content": first[:160] + (" ..." if len(first) > 160 else "")})
-        answer = ""
-        for m in reversed(turn):
-            if m["role"] == "assistant" and str(m.get("content", "")).strip():
-                answer = strip_tool_markup(str(m["content"]))
-                break
-        out.append({"role": "assistant", "content": _scrub(answer)[:1500].strip() or "(done)"})
-        return out
-
-    @staticmethod
-    def _rounds(steps: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-        """Steps of a task grouped into rounds: one model message plus its tool results
-        (a "continue" from the user is a round of its own)."""
-        rounds: list[list[dict[str, Any]]] = []
-        for m in steps:
-            if m["role"] == "assistant" or (m["role"] == "user" and not m.get("_tool")) or not rounds:
-                rounds.append([m])
-            else:
-                rounds[-1].append(m)
-        return rounds
-
-    @staticmethod
-    def _clean(m: dict[str, Any], cap: int | None = None, keep_images: bool = True) -> dict[str, Any]:
-        out = {k: v for k, v in m.items() if not k.startswith("_") and (keep_images or k != "images")}
-        text = str(out.get("content", ""))
-        if cap is not None and len(text) > cap:
-            out["content"] = text[:cap] + " ...(shortened)"
-        return out
-
-    def _round_form(self, rnd: list[dict[str, Any]], age: int) -> list[dict[str, Any]]:
-        """A round as sent to the model: the newest in full, older ones shorter and shorter."""
-        if age == 0:
-            return [self._clean(m) for m in rnd]
-        if age < 3:
-            return [self._clean(m, 1500 if (m["role"] == "tool" or m.get("_tool")) else None, False) for m in rnd]
-        out = []
-        for m in rnd:
-            c = self._clean(m, None, False)
-            c.pop("raw", None)                           # (shortened: not the model's own blocks any more)
-            if m["role"] == "tool" or m.get("_tool"):
-                first = str(c.get("content", "")).split("\n")[0]
-                c["content"] = first[:160] + (" ..." if len(first) > 160 else "")
-            elif m["role"] == "assistant":
-                c["content"] = str(c.get("content", ""))[:300]
-                for tc in c.get("tool_calls") or []:
-                    fn = tc.get("function", {})
-                    fn["arguments"] = {k: (v[:60] + "..." if isinstance(v, str) and len(v) > 60 else v)
-                                       for k, v in (fn.get("arguments") or {}).items()}
-            out.append(c)
-        return out
-
     def _ctx_budget(self) -> int:
         """How many tokens a request may hold: ``num_ctx`` for local models (and Copilot, which
         keeps its own context); Claude and ChatGPT: the model's own maximum - smaller if the
@@ -3143,18 +3028,18 @@ class PixelCatApp(QObject):
         instead of 5-10 s per step - with this model any change earlier in the prompt means
         re-reading all of it).  When the context gets close to full, it is rebuilt once
         (compacted: older steps shortened, old screenshots dropped) and grows again from there."""
-        turns = self._turns()
+        turns = context.turns(self.history)
         task_start = len(self.history) - sum(len(t) for t in turns[-1:]) if turns else 0
         sent = getattr(self, "_sent", None)
         upto = getattr(self, "_sent_upto", 0)
         if (sent is not None and getattr(self, "_sent_task", -1) == task_start
                 and getattr(self, "_sent_native", None) == self.native_tools
                 and 0 < upto <= len(self.history) and self.history[upto - 1] is getattr(self, "_sent_last", None)):
-            new = [self._clean(m) for m in self.history[self._sent_upto:]]
+            new = [context.clean(m) for m in self.history[self._sent_upto:]]
             candidate = sent + new
-            fixed = self._tokens([{"content": build_system_prompt(self.toolbox.names())}]) + \
+            fixed = context.tokens([{"content": build_system_prompt(self.toolbox.names())}]) + \
                 len(json.dumps(self.toolbox.schemas())) // 3
-            if self._tokens(candidate) <= (self._ctx_budget() - 2000 - fixed) * 0.9:
+            if context.tokens(candidate) <= (self._ctx_budget() - 2000 - fixed) * 0.9:
                 self._sent, self._sent_upto = candidate, len(self.history)
                 self._sent_last = self.history[-1] if self.history else None
                 return candidate
@@ -3173,24 +3058,24 @@ class PixelCatApp(QObject):
           same task shortened to one line; the oldest dropped only if even that doesn't fit.
         * Earlier exchanges: condensed (request, last tool steps, answer), as far as room is left.
         A stable beginning also lets Ollama reuse its cache, so answers start faster."""
-        turns = self._turns()
+        turns = context.turns(self.history)
         if not turns:
             return []
         task = turns[-1]
-        fixed = self._tokens([{"content": build_system_prompt(self.toolbox.names())}]) + \
+        fixed = context.tokens([{"content": build_system_prompt(self.toolbox.names())}]) + \
             len(json.dumps(self.toolbox.schemas())) // 3
         room = self._ctx_budget() - 2000 - fixed
-        head = self._clean(task[0])
-        used = self._tokens([head])
-        rounds = self._rounds(task[1:])
+        head = context.clean(task[0])
+        used = context.tokens([head])
+        rounds = context.rounds(task[1:])
         chosen: list[list[dict[str, Any]]] = []
         dropped = 0
         for age, rnd in enumerate(reversed(rounds)):
-            form = self._round_form(rnd, age)
-            cost = self._tokens(form)
+            form = context.round_form(rnd, age)
+            cost = context.tokens(form)
             if used + cost > room * fill and age > 0:
-                form = self._round_form(rnd, 99)          # one line per step
-                cost = self._tokens(form)
+                form = context.round_form(rnd, 99)          # one line per step
+                cost = context.tokens(form)
                 if used + cost > room * fill:
                     dropped = len(rounds) - age
                     break
@@ -3208,8 +3093,8 @@ class PixelCatApp(QObject):
         for turn in reversed(turns[:-1]):
             if kept >= self.cfg.max_history:
                 break
-            short = self._summarize(turn, self.native_tools)
-            cost = self._tokens(short)
+            short = context.summarize(turn, self.native_tools)
+            cost = context.tokens(short)
             if cost > budget:
                 break
             older = short + older
@@ -3227,13 +3112,13 @@ class PixelCatApp(QObject):
         if ext:
             if self.providers[ext[0]].max_input(ext[1], self._ext_info(*ext)) is not None:
                 # (how big this request is, if it turns out too long)
-                self._sent_est = self._tokens(msgs) + len(json.dumps(self.toolbox.schemas())) // 3
+                self._sent_est = context.tokens(msgs) + len(json.dumps(self.toolbox.schemas())) // 3
             worker = self._ext_worker(ext[0], ext[1], msgs)
             if worker is None:
                 return
         else:
             if self.cfg.ai_mode == "online" and self.chat_model is None:
-                from .llm.model_status import ONLINE_ONLY
+                from ..llm.model_status import ONLINE_ONLY
 
                 self.chat.add("info", ONLINE_ONLY)
                 self._end_task()
@@ -3298,7 +3183,7 @@ class PixelCatApp(QObject):
         if not self._current() or self.chat is None:
             return
         self._raw += tok
-        self.chat.set_cat_text(_scrub(strip_tool_markup(self._raw, set(self.toolbox.names()))))
+        self.chat.set_cat_text(context.scrub(strip_tool_markup(self._raw, set(self.toolbox.names()))))
 
     def _on_done(self, content: str, calls: list) -> None:
         if not self._current() or self.chat is None:
@@ -3308,7 +3193,7 @@ class PixelCatApp(QObject):
         native = bool(calls)
         if not calls and self.cfg.enable_tools:
             calls = parse_text_tool_calls(content, set(self.toolbox.names()))
-        content = _scrub(content)
+        content = context.scrub(content)
         self.chat.set_cat_text(strip_tool_markup(content, set(self.toolbox.names())))
         self.chat.end_cat()
         msg: dict[str, Any] = {"role": "assistant", "content": content}
@@ -3348,8 +3233,8 @@ class PixelCatApp(QObject):
 
     def _broken_promise(self, content: str) -> bool:
         """The reply says "I'll wait / let you know" but nothing was set up to do that."""
-        return (not self._task_watched and not self._promise_nudged and bool(_PROMISE_RE.search(content))
-                and not _USER_WAIT_RE.search(content))
+        return (not self._task_watched and not self._promise_nudged and bool(context.PROMISE_RE.search(content))
+                and not context.USER_WAIT_RE.search(content))
 
     def _nudge_promise(self) -> None:
         assert self.chat is not None
@@ -3536,7 +3421,7 @@ class PixelCatApp(QObject):
     # ================================================================ long tasks (wait_for)
     def _task_request(self) -> str:
         """The user's request behind the running task (kept across wake-ups)."""
-        turns = self._turns()
+        turns = context.turns(self.history)
         if not turns:
             return ""
         head = turns[-1][0]

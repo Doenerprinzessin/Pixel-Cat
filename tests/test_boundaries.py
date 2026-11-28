@@ -42,7 +42,7 @@ WIN32 = {"ctypes", "_ctypes", "winreg", "msvcrt", "_winapi", "nt", "winsound"}
 QT = {"PySide6", "shiboken6", "shibokensupport"}   # shibokensupport: embedded in shiboken6
 # Where Qt belongs (core files or packages).  Every other core module may use Qt in type hints only.
 QT_ALLOWED = {
-    "app.py": "the application: QApplication, the windows, timers and the tray",
+    "app/controller.py": "the application: QApplication, the windows, timers and the tray",
     "ui": "the widgets: overlay, ball, menu, chat, dialogs, tray, theme, screen geometry",
     "games/qt_host.py": "the minigames' Qt window (the games themselves are plain Python)",
     "imaging.py": "picture helpers for the chat (QImage in, PNG bytes out)",
