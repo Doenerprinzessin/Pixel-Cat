@@ -833,14 +833,14 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     saved = persistence.SavedState(autostart_asked=True)
     pet = PixelCatApp(app, cfg, saved, selftest=1, platform=build_platform(), providers=build_providers())
     pet.save = lambda: None
-    pet.creds = pet.accounts.creds = creds
+    pet.creds = pet.accounts.creds = pet.provider_settings.creds = creds
     pet.creds.set("anthropic_key", "sk-ant-secret-123")
     # the key dialog: a bad key, then a good one ----------------------------------------------------
     pet.creds.set("anthropic_key", None)
     from pixelcat.ui import dialogs
     dialogs.KeyDialog.show_near = lambda self, *a: None   # (never shown: no focus taken from the user)
-    pet._ask_key("anthropic")
-    dlg = pet._key_dialog
+    pet.provider_settings._ask_key("anthropic")
+    dlg = pet.provider_settings.key_dialog
     dlg.field.setText("sk-ant-bad")
     dlg._save()
     wait(lambda: dlg.save.isEnabled())
@@ -893,15 +893,15 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     check("menu: limit, effort and thinking change", pet.accounts.budget("anthropic").limit == 50000
           and saved.ext_settings["effort"] == "low" and saved.ext_settings["thinking"] is False)
     # a custom token limit (Token limit -> Custom...) ---------------------------------------------------
-    lim_kids = next(c for c in pet._provider_menu("anthropic").children if c.key == "ext_limit_anthropic").children
+    lim_kids = next(c for c in pet.provider_settings.provider_menu("anthropic").children if c.key == "ext_limit_anthropic").children
     pet._on_menu("ext:custom:anthropic")
-    dlg = pet._key_dialog
+    dlg = pet.provider_settings.key_dialog
     answers = []
     for text in ("lots", "500", "150M", "3.5M"):
         dlg.field.setText(text)
         dlg._save()
         answers.append(dlg.status.text() if dlg.save.isEnabled() else "ok")
-    lim_kids2 = next(c for c in pet._provider_menu("anthropic").children if c.key == "ext_limit_anthropic").children
+    lim_kids2 = next(c for c in pet.provider_settings.provider_menu("anthropic").children if c.key == "ext_limit_anthropic").children
     custom = next(c for c in lim_kids2 if c.key == "ext:custom:anthropic")
     check("Token limit: presets up to 100M, then Custom... - a typed limit: nonsense, too little and over 100M are "
           "refused in the dialog; 3.5M is kept and shown as 'Custom: 3.5M tokens'",
@@ -1020,7 +1020,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     pet.accounts.ext_p("openai").pop("auth", None)
     S["refuse_codes"] = 1
     n_pop = len(pet.popups.open)
-    pet._browser_start("openai")
+    pet.provider_settings._browser_start("openai")
     wait_pop = pet.popups.open[-1] if len(pet.popups.open) > n_pop else None
     seen: set[str] = set()
 
@@ -1045,7 +1045,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     pet.accounts.ext_p("openai").pop("auth", None)
     S["error_page"] = True
     n_auth, n_pop = len(S["authorize"]), len(pet.popups.open)
-    pet._browser_start("openai")
+    pet.provider_settings._browser_start("openai")
     wait(lambda: len(S["authorize"]) > n_auth, 10)
     first = pet.popups.open[-1] if len(pet.popups.open) > n_pop else None
     S["error_page"] = False

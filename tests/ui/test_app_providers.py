@@ -31,7 +31,7 @@ def bg(pet, sync_background):  # type: ignore[no-untyped-def]
 @pytest.fixture
 def dialogs(pet, monkeypatch) -> list:  # type: ignore[no-untyped-def,type-arg]
     shown: list = []  # type: ignore[type-arg]
-    monkeypatch.setattr(pet, "_show_amount_dialog", shown.append)
+    monkeypatch.setattr(pet.provider_settings, "show_amount_dialog", shown.append)
     return shown
 
 
@@ -44,7 +44,7 @@ def test_thinking_web_search_and_effort(pet, app_env) -> None:  # type: ignore[n
     pet._on_menu("ext:effort:bogus")
     assert (st["thinking"], st["web_search"], st["effort"]) == (False, False, "high")
     assert app_env.saved_states
-    ext = pet._external_menu()
+    ext = pet.provider_settings.external_menu()
     assert ext.children[3].checked is False and ext.children[5].checked is False
     assert [c.checked for c in ext.children[4].children] == [False, False, True, False, False]
 
@@ -60,7 +60,7 @@ def test_token_limit_period_and_maximum(pet) -> None:  # type: ignore[no-untyped
     assert (b.limit, b.period, b.maximum, b.allowed()) == (50000, "week", 150000, 50000)
     start = external.period_start("week", datetime.now()).timestamp()
     assert pet.saved.ext_usage["anthropic"]["start"] == start
-    kids = pet._provider_menu("anthropic").children
+    kids = pet.provider_settings.provider_menu("anthropic").children
     limit = next(k for k in kids if k.key == "ext_limit_anthropic")
     assert limit.note == "50k/week" and [c.checked for c in limit.children].count(True) == 1
 
@@ -176,27 +176,27 @@ def test_copilot_problems(exc: Exception, text: str) -> None:
 
 @pytest.mark.parametrize(("q", "note"), [({"reset": "garbage"}, ""), ({}, "")])
 def test_quota_reset_note_without_a_date(q, note) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.app import PixelCatApp
+    from pixelcat.app.provider_settings import ProviderSettings
 
-    assert PixelCatApp._quota_reset_note(q) == note
+    assert ProviderSettings.quota_reset_note(q) == note
 
 
 def test_credit_cap(pet) -> None:  # type: ignore[no-untyped-def]
     s = pet.accounts.ext_p("copilot")
-    assert pet._credit_cap() is None
+    assert pet.provider_settings.credit_cap() is None
     s["quota"] = {"total": 1500}
-    assert pet._credit_cap() == 1500.0
+    assert pet.provider_settings.credit_cap() == 1500.0
     s["quota"] = {"total": 1500, "unlimited": True}
-    assert pet._credit_cap() is None
+    assert pet.provider_settings.credit_cap() is None
     s["quota"] = {"total": 0}
-    assert pet._credit_cap() is None
+    assert pet.provider_settings.credit_cap() is None
 
 
 # ---------------------------------------------------------------- API keys and sign-ins
 @pytest.mark.parametrize("p", ["anthropic", "openai"])
 def test_menu_key_entry_opens_the_key_dialog(pet, p: str) -> None:  # type: ignore[no-untyped-def]
     pet._on_menu(f"ext:key:{p}")
-    dlg = pet._key_dialog
+    dlg = pet.provider_settings.key_dialog
     assert isinstance(dlg, KeyDialog) and dlg.isVisible() and not dlg.remove.isVisibleTo(dlg)
     assert dlg.field.placeholderText().endswith("...")
 
@@ -209,8 +209,8 @@ def test_a_good_key_connects_the_provider(bg, monkeypatch, p: str, module: str) 
     seen: list = []  # type: ignore[type-arg]
     monkeypatch.setattr(mod, "list_models", lambda creds, auth="key": (seen.append((creds.get(f"{p}_key"), auth)),
                                                                         MODELS)[1])
-    bg._ask_key(p)
-    dlg = bg._key_dialog
+    bg.provider_settings._ask_key(p)
+    dlg = bg.provider_settings.key_dialog
     dlg.field.setText("sk-good")
     dlg._save()
     assert seen == [("sk-good", "key")]
@@ -228,11 +228,11 @@ def test_a_bad_key_is_refused_with_the_reason(bg, monkeypatch) -> None:  # type:
         raise Kind("auth")
 
     monkeypatch.setattr(anthropic_client, "list_models", refuse)
-    bg._ask_key("anthropic")
-    bg._key_dialog.field.setText("sk-bad")
-    bg._key_dialog._save()
+    bg.provider_settings._ask_key("anthropic")
+    bg.provider_settings.key_dialog.field.setText("sk-bad")
+    bg.provider_settings.key_dialog._save()
     assert bg.creds.get("anthropic_key") is None and bg.accounts.auth("anthropic") == ""
-    assert bg._key_dialog.status.text() == "That key wasn't accepted - check that you copied all of it."
+    assert bg.provider_settings.key_dialog.status.text() == "That key wasn't accepted - check that you copied all of it."
 
 
 def test_a_good_github_token_connects_copilot(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -242,7 +242,7 @@ def test_a_good_github_token_connects_copilot(bg, monkeypatch) -> None:  # type:
     monkeypatch.setattr(copilot_client, "check_token", lambda key: ("octocat", MODELS))
     monkeypatch.setattr(copilot_client, "quota", lambda creds, auth, start=False: {"total": 300.0, "used": 3})
     bg._on_menu("ext:key:copilot")
-    dlg = bg._key_dialog
+    dlg = bg.provider_settings.key_dialog
     assert dlg.get.text() == "GET A TOKEN"
     dlg.field.setText("github_pat_x")
     dlg._save()
@@ -260,14 +260,14 @@ def test_copilot_without_its_runtime_offers_to_get_it(bg, monkeypatch) -> None: 
     pop = bg.popups.open[-1]
     assert pop.title == "GitHub Copilot" and "100 MB" in pop.text.text()
     pop.ok.click()
-    assert installs == [True] and isinstance(bg._key_dialog, KeyDialog)
+    assert installs == [True] and isinstance(bg.provider_settings.key_dialog, KeyDialog)
 
 
 @pytest.mark.parametrize(("p", "method"), [("anthropic", "_cli_signin"), ("openai", "_browser_signin"),
                                            ("copilot", "_device_signin")])
 def test_menu_sign_in_entry_starts_that_providers_sign_in(pet, monkeypatch, p: str, method: str) -> None:  # type: ignore[no-untyped-def]
     started: list[str] = []
-    monkeypatch.setattr(pet, method, started.append)
+    monkeypatch.setattr(pet.provider_settings, method, started.append)
     pet._on_menu(f"ext:signin:{p}")
     assert started == [p]
 
@@ -277,24 +277,24 @@ def test_chatgpt_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-unt
 
     monkeypatch.setattr(openai_client, "list_models", lambda creds, auth: MODELS)
     bg.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r", "email": "cat@example.com"})
-    bg._browser_done("openai", {"plan": True})
+    bg.provider_settings._browser_done("openai", {"plan": True})
     assert bg.accounts.auth("openai") == "chatgpt" and bg.accounts.ext_p("openai")["welcomed"]
     assert bg.popups.open[-1].title == "Using your ChatGPT plan"
-    bg._browser_done("openai", {"plan": True})
+    bg.provider_settings._browser_done("openai", {"plan": True})
     assert bg.popups.open[-1].title == "ChatGPT is connected"
 
 
 def test_chatgpt_sign_in_without_plan_usage(bg) -> None:  # type: ignore[no-untyped-def]
-    bg._browser_done("openai", {"plan": False})
+    bg.provider_settings._browser_done("openai", {"plan": False})
     assert bg.popups.open[-1].title == "Signed in - but no plan usage" and bg.accounts.auth("openai") == ""
 
 
 def test_a_failed_or_cancelled_sign_in(bg) -> None:  # type: ignore[no-untyped-def]
     from pixelcat.adapters.llm import chatgpt_signin
 
-    bg._browser_done("openai", chatgpt_signin.SignInError("cancelled"))
+    bg.provider_settings._browser_done("openai", chatgpt_signin.SignInError("cancelled"))
     assert bg.popups.open == []
-    bg._browser_done("openai", chatgpt_signin.SignInError("The browser closed"))
+    bg.provider_settings._browser_done("openai", chatgpt_signin.SignInError("The browser closed"))
     assert bg.popups.open[-1].title == "Sign in with ChatGPT" and "browser closed" in bg.popups.open[-1].text.text()
 
 
@@ -306,11 +306,11 @@ def test_github_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-unty
     monkeypatch.setattr(copilot_client, "list_models", lambda creds, auth: MODELS)
     monkeypatch.setattr(copilot_client, "quota", lambda creds, auth, start=False: {"unlimited": True})
     ev = threading.Event()
-    bg._signin_cancel = ev
+    bg.provider_settings._signin_cancel = ev
     bg.creds.set("copilot_signin", {"token": "t"})
-    bg._device_done("copilot", {"login": "octocat"}, threading.Event())         # an attempt that was started over
+    bg.provider_settings._device_done("copilot", {"login": "octocat"}, threading.Event())         # an attempt that was started over
     assert bg.accounts.auth("copilot") == ""
-    bg._device_done("copilot", {"login": "octocat"}, ev)
+    bg.provider_settings._device_done("copilot", {"login": "octocat"}, ev)
     assert bg.accounts.auth("copilot") == "signin" and bg.accounts.ext_p("copilot")["login"] == "octocat"
     assert bg.accounts.models("copilot") == MODELS and bg.accounts.ext_p("copilot")["quota"] == {"unlimited": True}
 
@@ -321,7 +321,7 @@ def test_anthropic_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-u
     from pixelcat.adapters.llm import anthropic_client
 
     monkeypatch.setattr(anthropic_client, "list_models", lambda creds, auth="key": MODELS)
-    bg._cli_signed_in("anthropic", "ok", threading.Event())
+    bg.provider_settings._cli_signed_in("anthropic", "ok", threading.Event())
     assert bg.accounts.auth("anthropic") == "signin" and bg.accounts.models("anthropic") == MODELS
 
 
@@ -616,7 +616,7 @@ def test_the_menu_popups_and_banner_tell_the_injected_description(make_app, sync
     sync_background(pet)
     pet.creds.set("openai_key", "k")
     pet.accounts.ext_p("openai")["models"] = MODELS
-    menu = {k.key: k for k in pet._external_menu().children}
+    menu = {k.key: k for k in pet.provider_settings.external_menu().children}
     assert menu["ext_openai"].label == "Zed (ZedCo)" and menu["ext_anthropic"].label == "Claude (Anthropic)"
     assert menu["ext_openai"].children[0].label == "Zed key in"
     assert [i.label for i in pet._ext_chat_items()] == ["Zed models"]
@@ -639,6 +639,6 @@ def test_the_menu_popups_and_banner_tell_the_injected_description(make_app, sync
 
 def test_a_provider_without_a_sign_in_offers_none(make_app) -> None:  # type: ignore[no-untyped-def]
     pet = make_app(providers=_providers(anthropic={"signin_kind": ""}))
-    keys = [k.key for k in pet._provider_menu("anthropic").children]
+    keys = [k.key for k in pet.provider_settings.provider_menu("anthropic").children]
     assert "ext:key:anthropic" in keys and not [k for k in keys if k.startswith("ext:signin:")]
-    assert "ext:signin:openai" in [k.key for k in pet._provider_menu("openai").children]
+    assert "ext:signin:openai" in [k.key for k in pet.provider_settings.provider_menu("openai").children]

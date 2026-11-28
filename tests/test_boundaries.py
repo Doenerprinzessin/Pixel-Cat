@@ -46,6 +46,7 @@ QT_ALLOWED = {
     "app/popups.py": "the popup windows, and a Qt signal that brings background results to the GUI thread",
     "app/progress_io.py": "the export/import file dialogs (QFileDialog), and the popups",
     "app/minigames.py": "the minigames' pictures (QPixmap from the Qt host's art) in their popups",
+    "app/provider_settings.py": "the provider menus and key/amount dialogs, a QTimer to start a sign-in over, the clipboard (GitHub code)",
     "ui": "the widgets: overlay, ball, menu, chat, dialogs, tray, theme, screen geometry",
     "games/qt_host.py": "the minigames' Qt window (the games themselves are plain Python)",
     "imaging.py": "picture helpers for the chat (QImage in, PNG bytes out)",

@@ -50,7 +50,7 @@ def name_and_chat_checks(pet, m, row) -> None:  # type: ignore[no-untyped-def]  
 
     chat = pet._ensure_chat()
     dialogs: list = []
-    pet._show_amount_dialog = dialogs.append                  # type: ignore[method-assign]   (not shown)
+    pet.provider_settings.show_amount_dialog = dialogs.append  # type: ignore[method-assign]   (not shown)
     m.close = lambda: None                                     # type: ignore[method-assign]
     m.expanded = {"settings"}
     m.items = pet._menu_items()

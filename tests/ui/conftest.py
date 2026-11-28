@@ -221,7 +221,7 @@ def _close_all(pet: Any) -> None:
     for tm in pet.findChildren(type(pet.tick_timer)):
         tm.stop()
     for w in [pet.chat, pet.menu, pet.model_menu, pet.overlay, pet.ball_win, pet.hud, *pet.popups.open,
-              getattr(pet, "_key_dialog", None), getattr(pet, "_dialog", None)]:
+              pet.provider_settings.key_dialog, getattr(pet, "_dialog", None)]:
         try:
             if w is not None:
                 w.hide()

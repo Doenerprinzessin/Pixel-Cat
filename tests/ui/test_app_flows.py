@@ -85,7 +85,7 @@ def test_github_sign_in(bg, app_env, monkeypatch) -> None:  # type: ignore[no-un
     monkeypatch.setattr(github_signin, "sign_in", sign_in)
     monkeypatch.setattr(copilot_client, "list_models", lambda creds, auth: MODELS)
     monkeypatch.setattr(copilot_client, "quota", lambda creds, auth, start=False: None)
-    bg._device_signin("copilot")
+    bg.provider_settings._device_signin("copilot")
     assert bg.popups.open[-1].title == "Sign in with GitHub"
     bg.popups.open[-1].ok.click()
     assert app_env.clipboard.text() == "ABCD-1234" and app_env.opened_urls == ["https://github.com/login/device"]

@@ -302,7 +302,7 @@ def app_flow() -> None:
     opened: list[str] = []
     webbrowser.open = lambda url, *a, **k: (opened.append(url), APPROVE.write_text("ok"))
     n = len(pet.popups.open)
-    pet._cli_signin("anthropic")
+    pet.provider_settings._cli_signin("anthropic")
     wait(lambda: len(pet.popups.open) > n)
     ask = pet.popups.open[-1]
     text = ask.text.text()
@@ -322,7 +322,7 @@ def app_flow() -> None:
         except RuntimeError:
             pass
     n = len(pet.popups.open)
-    pet._cli_signin("anthropic")
+    pet.provider_settings._cli_signin("anthropic")
     wait(lambda: len(pet.popups.open) > n)
     again = pet.popups.open[-1].text.text() if len(pet.popups.open) > n else ""
     check("...next time (helper already here) it doesn't mention fetching it", "sign-in helper" not in again

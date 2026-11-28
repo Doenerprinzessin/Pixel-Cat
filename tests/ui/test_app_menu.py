@@ -93,7 +93,7 @@ def test_ai_model(pet) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_external_ai_models(pet) -> None:  # type: ignore[no-untyped-def]
-    ext = pet._external_menu()
+    ext = pet.provider_settings.external_menu()
     assert (ext.key, ext.label, ext.note) == ("ext", "External AI models", "")
     assert [x if isinstance(x, str) else x[0] for x in tree(ext.children)] == [
         "ext_anthropic | Claude (Anthropic)", "ext_openai | ChatGPT (OpenAI)", "ext_copilot | Copilot (GitHub)",
@@ -108,7 +108,7 @@ def test_external_is_marked_best_on_a_pc_without_room_for_a_local_ai(pet) -> Non
 
     pet.platform.system.answers("hardware", lambda fresh=False: Hardware(ram_gb=8.0, cores=4, gpus=[],
                                                                          disk_free_gb=500.0))
-    assert pet._external_menu().note == "BEST"
+    assert pet.provider_settings.external_menu().note == "BEST"
 
 
 def connect(pet, p: str, auth: str) -> None:  # type: ignore[no-untyped-def]
@@ -168,7 +168,7 @@ PROVIDER_SNAPSHOT = {
 @pytest.mark.parametrize(("p", "auth"), list(PROVIDER_SNAPSHOT))
 def test_provider_menu_per_connection(pet, p: str, auth: str) -> None:  # type: ignore[no-untyped-def]
     connect(pet, p, auth)
-    item = pet._provider_menu(p)
+    item = pet.provider_settings.provider_menu(p)
     label, kids = PROVIDER_SNAPSHOT[(p, auth)]
     assert tree([item])[0][0] == label
     assert [x if isinstance(x, str) else x[0] for x in tree(item.children)] == [k.format(p=p) for k in kids]
@@ -178,7 +178,7 @@ def test_provider_menu_per_connection(pet, p: str, auth: str) -> None:  # type: 
 @pytest.mark.parametrize("p", list(external.PROVIDERS))
 def test_provider_sub_menus(pet, p: str) -> None:  # type: ignore[no-untyped-def]
     connect(pet, p, "key")
-    kids = pet._provider_menu(p).children
+    kids = pet.provider_settings.provider_menu(p).children
     assert tree(find(kids, f"ext_models_{p}").children) == [
         f"model:{p}:m1 | Model One", f"model:{p}:m2 | Model Two", f"ext:refresh:{p} | Reload the list"]
     assert tree(find(kids, f"ext_limit_{p}").children) == [
@@ -196,7 +196,7 @@ def test_provider_sub_menus(pet, p: str) -> None:  # type: ignore[no-untyped-def
 
 
 def test_copilot_credit_limit_choices(pet) -> None:  # type: ignore[no-untyped-def]
-    kids = pet._provider_menu("copilot").children
+    kids = pet.provider_settings.provider_menu("copilot").children
     assert tree(find(kids, "ext_climit_copilot").children) == [
         "ext:climit:copilot:0 | No limit", "ext:climit:copilot:500 | 500 credits",
         "ext:climit:copilot:1000 | 1,000 credits", "ext:climit:copilot:2000 | 2,000 credits",
@@ -207,7 +207,7 @@ def test_copilot_credit_limit_choices(pet) -> None:  # type: ignore[no-untyped-d
 def test_copilot_credits_with_a_known_plan(pet) -> None:  # type: ignore[no-untyped-def]
     connect(pet, "copilot", "key")
     pet.accounts.ext_p("copilot")["quota"] = {"total": 1500, "used": 300, "reset": "2026-12-15T12:00:00Z"}
-    kids = pet._provider_menu("copilot").children
+    kids = pet.provider_settings.provider_menu("copilot").children
     assert tree(find(kids, "ext_climit_copilot").children) == [
         "ext:climit:copilot:0 | No limit", "ext:climit:copilot:500 | 500 credits",
         "ext:climit:copilot:1000 | 1,000 credits", "ext:climit:copilot:1500 | 1,500 credits (your whole plan)",
@@ -216,20 +216,20 @@ def test_copilot_credits_with_a_known_plan(pet) -> None:  # type: ignore[no-unty
     assert quota.label == "Copilot plan: 300 of 1,500 used" and quota.bar == pytest.approx(0.2)
     assert quota.note.startswith("RESETS ") and quota.note.endswith(" 15")     # (the month: the locale's)
     pet.accounts.ext_p("copilot")["quota"] = {"unlimited": True}
-    assert "ext:quota:copilot | Copilot plan: no monthly limit" in tree(pet._provider_menu("copilot").children)
+    assert "ext:quota:copilot | Copilot plan: no monthly limit" in tree(pet.provider_settings.provider_menu("copilot").children)
 
 
 def test_copilot_sign_in_shows_when_this_build_can_do_it(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from pixelcat.adapters.llm import github_signin
 
     monkeypatch.setattr(github_signin, "CLIENT_ID", "test-client")
-    assert "ext:signin:copilot | Sign in with GitHub" in tree(pet._provider_menu("copilot").children)
+    assert "ext:signin:copilot | Sign in with GitHub" in tree(pet.provider_settings.provider_menu("copilot").children)
 
 
 def test_no_limit_hides_resets_and_raise(pet) -> None:  # type: ignore[no-untyped-def]
-    pet._set_token_limit("openai", 0)
+    pet.provider_settings._set_token_limit("openai", 0)
     pet._on_ext_used("openai", 1234)
-    kids = tree(pet._provider_menu("openai").children)
+    kids = tree(pet.provider_settings.provider_menu("openai").children)
     assert "ext_limit_openai | Token limit [NONE]" in [x if isinstance(x, str) else x[0] for x in kids]
     assert "ext:used:openai | Used 1.2k today" in kids
     assert not any((x if isinstance(x, str) else x[0]).startswith(("ext_period", "ext_max")) for x in kids)
@@ -356,7 +356,7 @@ def test_a_style_change_refreshes_the_open_menu(pet) -> None:  # type: ignore[no
 
 def test_name(pet, app_env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     shown: list = []  # type: ignore[type-arg]
-    monkeypatch.setattr(pet, "_show_amount_dialog", shown.append)
+    monkeypatch.setattr(pet.provider_settings, "show_amount_dialog", shown.append)
     pet._on_menu("set_name")
     dlg = shown[-1]
     dlg.field.setText("<b>Bad</b>")

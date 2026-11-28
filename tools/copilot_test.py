@@ -443,7 +443,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     pet.save = lambda: None
     from pixelcat.ui import dialogs
     dialogs.KeyDialog.show_near = lambda self, *a: None   # (never shown: no focus taken from the user)
-    pet.creds = pet.accounts.creds = X.MemoryCredentials({"copilot_key": "github_pat_fake"})
+    pet.creds = pet.accounts.creds = pet.provider_settings.creds = X.MemoryCredentials({"copilot_key": "github_pat_fake"})
     pet.accounts.ext_p("copilot").update(auth="key", login="octocat", limit=0)
     pet.accounts.set_models("copilot", MODELS)
     pet._copilot_quota(force=True)
@@ -463,20 +463,20 @@ def app_checks() -> None:  # noqa: C901 - a linear test
           and labels.get("ext:state:copilot") == "Connected with a GitHub token (octocat)"
           and labels.get("ext:quota:copilot") == "Copilot plan: 3,120 of 20,000 used", str(labels))
     GS.CLIENT_ID = "Iv-pixel"
-    keys2 = [c.key for c in pet._provider_menu("copilot").children]
+    keys2 = [c.key for c in pet.provider_settings.provider_menu("copilot").children]
     check("...with Pixel Cat's client id the sign-in shows up", "ext:signin:copilot" in keys2)
     pet._on_menu("ext:climit:copilot:2000")
     check("menu: the credit limit changes", pet._credit_budget().limit == 2000)
     # a custom credit limit (Credit limit -> Custom...), up to the plan's own credits ----------------------
     pet._on_menu("ext:ccustom:copilot")
-    dlg = pet._key_dialog
+    dlg = pet.provider_settings.key_dialog
     answers = []
     for text in ("plenty", "25000", "12.5k"):
         dlg.field.setText(text)
         dlg._save()
         wait(lambda: dlg.save.isEnabled() or pet._credit_budget().limit != 2000, 10)
         answers.append(dlg.status.text() if dlg.save.isEnabled() else "ok")
-    climit = next(c for c in pet._provider_menu("copilot").children if c.key == "ext_climit_copilot").children
+    climit = next(c for c in pet.provider_settings.provider_menu("copilot").children if c.key == "ext_climit_copilot").children
     custom = next(c for c in climit if c.key == "ext:ccustom:copilot")
     check("Credit limit -> Custom...: up to the plan's 20,000 credits - more is refused in the dialog; 12.5k is kept",
           "understand" in answers[0] and "20,000" in answers[1] and answers[2] == "ok"
@@ -484,7 +484,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
           and custom.note == "UP TO 20,000", str(answers))
     q = pet.accounts.ext_p("copilot")["quota"]
     q["total"] = 3000.0                                   # (a smaller plan)
-    labels = [c.label for c in next(c for c in pet._provider_menu("copilot").children
+    labels = [c.label for c in next(c for c in pet.provider_settings.provider_menu("copilot").children
                                     if c.key == "ext_climit_copilot").children]
     check("...a smaller plan: no presets above it, the whole plan as the top choice",
           labels == ["No limit", "500 credits", "1,000 credits", "2,000 credits", "3,000 credits (your whole plan)",
