@@ -8,7 +8,9 @@ Normally the cat asks before it does something on your PC. If you trust it, turn
 
 Installing: Just run the installer and wait for it to do the magic for you.
 
-Compatibility: Windows 11
+Compatibility: Windows 11 and macOS
+
+On a Mac: there's no installer or app yet, so you run it from the sources. You need Python 3.13; `pip install -r requirements.txt` also installs pyobjc there (Windows skips it), then start the cat with `python main.py`. It lives in the menu bar, not in the Dock. macOS asks for two permissions, and only the first time the AI agent needs them: Accessibility (System Settings → Privacy & Security) when the agent moves the mouse, types, reads another app's controls or moves, closes or resizes a window, and Screen Recording when it takes a screenshot. If you already allowed Screen Recording, the cat also uses it to read window titles and to find ledges to sit on; it never asks for it just for that. It never asks for Automation. Your data is kept in `~/Library/Application Support/PixelCat`, encrypted with a key that lives in your Keychain (the item "Pixel Cat data key"). "Open at Login" in the menu adds a LaunchAgent (`~/Library/LaunchAgents/com.pixelcat.PixelCat.plist`).
 
 You can also play with the cat and throw around a ball that it will chase, so you can waste your time at work (just kidding ;)). The cat is meant as a useful assistant that can help you do work, not ditch it. You can also feed it, which doesn’t really do anything. And there are several more minigames: Laser pointer, Treat toss, Knock it off!, Mouse hunt, Fishing, Hide and seek and Box fort. Just right-click the cat and look under Minigames. If you don’t have any windows open for the cat to jump around on, it just brings its own furniture, which disappears again when the game is over. Oh, and not all games are there from the start, you have to unlock them.
 
@@ -16,4 +18,4 @@ That’s where the Cat Pass comes in. Every game gives you XP, which fills up th
 
 And if you don’t like how the menus and the chat look, there’s a Style setting with 10 different looks (Cat Chat, Modern White, Modern Black, Midnight, Retro Terminal and more), plus accent colors, sizes and fonts.
 
-Running the tests (for developers): `pip install -r requirements-dev.txt`, then `python -m pytest`. The suite also runs on macOS and Linux: Windows-only tests (marked `windows`) are skipped there, and Qt runs headless. Tests marked `macos` run only on macOS (read-only, they never ask for a permission); the ones that drive the real Mac (`macos_live`: mouse, keys, volume, a test Keychain item) run only with `PIXELCAT_MACOS_LIVE=1`. GitHub Actions runs it on Windows and macOS for every push.
+Running the tests (for developers): `pip install -r requirements-dev.txt`, then `python -m pytest`. The suite also runs on macOS and Linux: Windows-only tests (marked `windows`) are skipped there, and Qt runs headless. Tests marked `macos` run only on macOS (read-only, they never ask for a permission); the ones that drive the real Mac (`macos_live`: mouse, keys, volume, a test Keychain item, a LaunchAgent) run only with `PIXELCAT_MACOS_LIVE=1`, so `PIXELCAT_MACOS_LIVE=1 python -m pytest -m macos_live` (it may ask for Accessibility for your terminal). GitHub Actions runs it on Windows and macOS for every push.
