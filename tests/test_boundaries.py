@@ -329,8 +329,9 @@ def test_import_scanner_sees_relative_lazy_typing_and_dynamic_imports(tmp_path):
 
 # Runs in a fresh interpreter (no conftest, so no Windows shim): imports one module and records, for every Win32,
 # Qt or adapter module loaded on the way, the module whose code asked for it.  The importer matters: on Windows the
-# standard library loads some of these itself (subprocess and shutil load _winapi and msvcrt, mimetypes loads winreg,
-# asyncio loads _winapi...), and that's fine; a pixelcat module asking for them is not.
+# interpreter loads winreg at startup (importlib._bootstrap_external) and the standard library loads some of these
+# itself (subprocess and shutil load _winapi and msvcrt, asyncio loads _winapi...), and that's fine; a pixelcat
+# module asking for them is not.
 _PROBE = """
 import json, sys
 WATCHED = ("pixelcat.adapters", "pixelcat.bootstrap", "pixelcat.desktop", "PySide6", "shiboken6", "shibokensupport",

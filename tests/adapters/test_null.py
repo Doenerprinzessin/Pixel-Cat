@@ -1,6 +1,7 @@
 """pixelcat.adapters.null: the ports on platforms the cat doesn't support yet - safe answers, no OS calls."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -20,21 +21,55 @@ def plat():  # type: ignore[no-untyped-def]
     return null.build()
 
 
+# Watched modules, and for each import of one the module whose code asked for it.  On Windows the interpreter
+# itself loads winreg at startup (importlib._bootstrap_external: ``import winreg``), and the standard library
+# may load ctypes or winreg on its own; only a request from outside the standard library (pixelcat) counts.
+_PROBE = """
+import json, sys
+WATCHED = ("ctypes", "_ctypes", "winreg", "PySide6", "pixelcat.adapters.windows")
+preloaded = sorted(sys.modules)
+events = []
+
+def importer():
+    frame = sys._getframe(2)
+    while frame is not None:
+        name = frame.f_globals.get("__name__", "?")
+        if not (name == "importlib" or name.startswith(("importlib.", "_frozen_importlib"))):
+            return name
+        frame = frame.f_back
+    return "?"
+
+class Recorder:
+    @staticmethod
+    def find_spec(name, path=None, target=None):
+        if any(name == w or name.startswith(w + ".") for w in WATCHED):
+            events.append((name, importer()))
+        return None
+
+sys.meta_path.insert(0, Recorder)
+import pixelcat.adapters.null as n
+p = n.build()
+assert p.name == 'null' and p.system.acquire_single_instance() and p.display.monitors() == []
+with p.input.holding(['ctrl']), p.capture.excluding(1):
+    p.windows.own_click_through(1, 2)
+print("@@probe" + json.dumps({"preloaded": preloaded, "loaded": sorted(sys.modules), "events": events,
+                              "stdlib": sorted(sys.stdlib_module_names)}))
+"""
+
+
 def test_loads_and_works_without_ctypes_winreg_qt_or_the_windows_adapter():
-    probe = ("import sys, pixelcat.adapters.null as n\n"
-             "p = n.build()\n"
-             "assert p.name == 'null' and p.system.acquire_single_instance() and p.display.monitors() == []\n"
-             "with p.input.holding(['ctrl']), p.capture.excluding(1):\n"
-             "    p.windows.own_click_through(1, 2)\n"
-             "print('\\n'.join(sys.modules))\n")
-    res = subprocess.run([sys.executable, "-c", probe], cwd=ROOT, capture_output=True, text=True, timeout=60,
+    res = subprocess.run([sys.executable, "-c", _PROBE], cwd=ROOT, capture_output=True, text=True, timeout=60,
                          env={**os.environ, "PYTHONPATH": str(ROOT)})
     assert res.returncode == 0, res.stderr
-    loaded = set(res.stdout.split())
+    out = json.loads([line for line in res.stdout.splitlines() if line.startswith("@@probe")][-1][len("@@probe"):])
+    loaded, stdlib = set(out["loaded"]), set(out["stdlib"])
     assert "pixelcat.adapters.null" in loaded
-    bad = {m for m in loaded if m.split(".")[0] in ("ctypes", "_ctypes", "winreg", "PySide6")
-           or m.startswith("pixelcat.adapters.windows")}
-    assert not bad
+    assert not {m for m in loaded if m.split(".")[0] == "PySide6" or m.startswith("pixelcat.adapters.windows")}
+    asked = {(m, by) for m, by in out["events"] if by.split(".")[0] not in stdlib}
+    assert not asked, f"loaded by non-stdlib code: {sorted(asked)}"
+    # whatever else got loaded was already there at startup, or the standard library asked for it
+    win32 = {m for m in loaded if m.split(".")[0] in ("ctypes", "_ctypes", "winreg")}
+    assert win32 <= set(out["preloaded"]) | {m for m, _ in out["events"]}, win32
 
 
 def test_answers_nothing_there(plat):  # type: ignore[no-untyped-def]
