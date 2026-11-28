@@ -19,6 +19,7 @@ class Hardware:
     avx2: bool = True
     gpus: list[Gpu] = field(default_factory=list)
     disk_free_gb: float = 100.0
+    unified_memory: bool = False        # the graphics work in the same memory (Apple Silicon), no card of their own
 
     @property
     def gpu(self) -> Gpu | None:
@@ -33,8 +34,10 @@ class Hardware:
 
     def summary(self) -> str:
         """'16 GB memory · NVIDIA GeForce RTX 3060 (12 GB) · 8 cores'"""
-        parts = [f"{self.ram_gb:.0f} GB memory"]
         g = self.gpu
+        if self.unified_memory and not g:     # '36 GB unified memory · graphics built in · 12 cores'
+            return " · ".join([f"{self.ram_gb:.0f} GB unified memory", "graphics built in", f"{self.cores} cores"])
+        parts = [f"{self.ram_gb:.0f} GB memory"]
         parts.append(f"{g.name} ({g.vram_gb:.0f} GB)" if g else "no graphics card for AI")
         parts.append(f"{self.cores} cores")
         return " · ".join(parts)

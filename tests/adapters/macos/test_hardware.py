@@ -24,7 +24,7 @@ def _mac(fake_run, monkeypatch, ram_gb: int, cores: int, machine: str = "arm64",
 def test_detect_reads_sysctl(fake_run, monkeypatch):  # type: ignore[no-untyped-def]
     _mac(fake_run, monkeypatch, 36, 12)
     hw = hardware.detect()
-    assert (hw.ram_gb, hw.cores, hw.cpu, hw.avx2, hw.gpus) == (36.0, 12, "Apple M3 Pro", True, [])
+    assert (hw.ram_gb, hw.cores, hw.cpu, hw.avx2, hw.gpus, hw.unified_memory) == (36.0, 12, "Apple M3 Pro", True, [], True)
     assert hw.disk_free_gb > 0
     calls = len(fake_run.calls)
     assert hardware.detect() is hw and len(fake_run.calls) == calls      # looked at once
@@ -33,7 +33,8 @@ def test_detect_reads_sysctl(fake_run, monkeypatch):  # type: ignore[no-untyped-
 
 def test_intel_macs_report_their_avx2(fake_run, monkeypatch):  # type: ignore[no-untyped-def]
     _mac(fake_run, monkeypatch, 16, 4, machine="x86_64", avx2="1")
-    assert hardware.detect().avx2 is True
+    hw = hardware.detect()
+    assert hw.avx2 is True and hw.unified_memory is False and "no graphics card" in hw.summary()
     fake_run = FakeRun()
     monkeypatch.setattr(_objc, "run", fake_run)
     _mac(fake_run, monkeypatch, 16, 4, machine="x86_64", avx2="0")

@@ -44,11 +44,14 @@ def ram_gb() -> float:
     return total / 2**30 if total > 0 else 16.0
 
 
+def apple_silicon() -> bool:
+    return platform.machine() == "arm64" or sysctl("hw.optional.arm64") == "1"   # (also under Rosetta)
+
+
 def cpu() -> tuple[str, int, bool]:
     name = " ".join(sysctl("machdep.cpu.brand_string").split())
     cores = _int(sysctl("hw.physicalcpu"), 0) or os.cpu_count() or 2
-    arm = platform.machine() == "arm64" or sysctl("hw.optional.arm64") == "1"   # (also under Rosetta)
-    avx2 = True if arm else sysctl("hw.optional.avx2_0") == "1"
+    avx2 = True if apple_silicon() else sysctl("hw.optional.avx2_0") == "1"
     return name, cores, avx2
 
 
@@ -75,7 +78,7 @@ def detect(fresh: bool = False) -> Hardware:
     global _cached
     if _cached is None or fresh:
         name, cores, avx2 = cpu()
-        _cached = Hardware(ram_gb(), cores, name, avx2, [], disk_free_gb())
+        _cached = Hardware(ram_gb(), cores, name, avx2, [], disk_free_gb(), unified_memory=apple_silicon())
         log.info("this Mac: %s; CPU %s; %.0f GB free for models", _cached.summary(), name or "?",
                  _cached.disk_free_gb)
     return _cached

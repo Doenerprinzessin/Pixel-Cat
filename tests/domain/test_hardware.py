@@ -23,3 +23,5 @@ def test_hardware_summary():
     hw = Hardware(ram_gb=15.7, cores=8, gpus=[Gpu("NVIDIA GeForce RTX 3060", 12.0, False)])
     assert hw.summary() == "16 GB memory · NVIDIA GeForce RTX 3060 (12 GB) · 8 cores"
     assert Hardware(ram_gb=8, cores=4).summary() == "8 GB memory · no graphics card for AI · 4 cores"
+    assert Hardware(ram_gb=36, cores=12, unified_memory=True).summary() == \
+        "36 GB unified memory · graphics built in · 12 cores"
