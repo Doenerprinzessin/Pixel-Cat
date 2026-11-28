@@ -5,7 +5,6 @@ import pytest
 
 from llm_agent.agent_fakes import OWN_PID, el
 from pixelcat import domain
-from pixelcat.adapters.windows import uia
 from pixelcat.llm import tools
 from pixelcat.llm.agent import Shot
 from pixelcat.llm.tools import ToolBox, ToolError
@@ -22,7 +21,7 @@ def tb(toolbox: ToolBox, desk) -> ToolBox:  # type: ignore[no-untyped-def]
     desk.add_window(CHROME, "News - Google Chrome", "chrome.exe", minimized=True)
     ag = toolbox.agent
     ag.shot = Shot(NOTEPAD, (100, 100), 0.5, (400, 300))
-    ag.snap = uia.Snapshot(NOTEPAD, (100, 100, 900, 700), [
+    ag.snap = domain.Snapshot(NOTEPAD, (100, 100, 900, 700), [
         el(1, "edit", "Title", (150, 150, 350, 170)), el(2, "button", "Save", (700, 600, 760, 630)),
         el(3, "checkbox", "", (120, 200, 130, 210))])
     return toolbox
@@ -141,14 +140,12 @@ def test_click_verbs(tb: ToolBox, args: dict, verb: str) -> None:
 
 
 def test_held_keys_are_the_domain_modifiers() -> None:
-    vk = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "win": 0x5B}
-    assert set(domain.MODIFIERS) == set(tools.HELD_KEYS)
-    assert {alias: vk[name] for alias, name in domain.MODIFIERS.items()} == tools.HELD_KEYS
+    assert tools.HELD_KEYS == domain.MODIFIERS
 
 
 def test_click_held_keys_and_counts(tb: ToolBox) -> None:
     a, _ = prep(tb, "click", x=1, y=1, keys="ctrl+shift", clicks=2, hold="0.5")
-    assert (a["_keys"], a["_count"], a["_double"], a["_hold"]) == ([0x11, 0x10], 2, True, 0.5)
+    assert (a["_keys"], a["_count"], a["_double"], a["_hold"]) == (["ctrl", "shift"], 2, True, 0.5)
     assert prep(tb, "click", x=1, y=1, clicks=3)[0]["_double"] is False
 
 
@@ -240,7 +237,7 @@ def test_scroll(tb: ToolBox) -> None:
     assert prep(tb, "scroll", direction="up", amount=0)[0]["amount"] == 5
     assert prep(tb, "scroll", direction="up", amount="lots")[0]["amount"] == 5
     a, d = prep(tb, "scroll", direction="up", element=2, keys="shift")
-    assert (a["_eid"], a["_hwnd"], a["_keys"], d) == (2, NOTEPAD, [0x10], f"scroll up in {NP_LABEL}")
+    assert (a["_eid"], a["_hwnd"], a["_keys"], d) == (2, NOTEPAD, ["shift"], f"scroll up in {NP_LABEL}")
     a, d = prep(tb, "scroll", direction="left", x=40, y=50)
     assert (a["_xy"], a["_hwnd"], d) == ((40.0, 50.0), NOTEPAD, f"scroll left in 40,50 in {NP_LABEL}")
     assert refused(tb, "scroll", direction="sideways") == "direction must be up, down, left or right"
@@ -276,7 +273,7 @@ def test_move_mouse(tb: ToolBox) -> None:
 def test_drag_between_elements_and_spots(tb: ToolBox) -> None:
     a, d = prep(tb, "drag", from_element=1, to_x=300, to_y=200, keys="ctrl", button="right")
     assert (a["_src"], a["_dst"], a["_path"], a["_button"], a["_keys"]) == (("el", 1), ("xy", 300.0, 200.0), [],
-                                                                            "right", [0x11])
+                                                                            "right", ["ctrl"])
     assert a["_seconds"] == 0.6 and a["_hwnd"] == NOTEPAD
     assert d == (f"drag from [1] edit 'Title' in {NP_LABEL} to 300,200 in {NP_LABEL} with the right button "
                  "holding ctrl")

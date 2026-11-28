@@ -41,9 +41,9 @@ def folder_port(folders: dict[str, Path]) -> FakeKnownFolders:
 
 
 @pytest.fixture(autouse=True)
-def desk(monkeypatch: pytest.MonkeyPatch, fake_dll: type, clock: Clock) -> FakeDesktop:
+def desk(monkeypatch: pytest.MonkeyPatch, clock: Clock, folder_port: FakeKnownFolders) -> FakeDesktop:
     d = FakeDesktop()
-    d.install(monkeypatch, fake_dll, clock)
+    d.install(monkeypatch, clock, folders=folder_port)
     return d
 
 
@@ -53,17 +53,18 @@ def cfg() -> Config:
 
 
 @pytest.fixture
-def hooks(folder_port) -> Hooks:  # type: ignore[no-untyped-def]
+def hooks(folder_port, desk: FakeDesktop) -> Hooks:  # type: ignore[no-untyped-def]
     h = Hooks()
     h.folders = folder_port
+    h.platform = desk.platform
     return h
 
 
 @pytest.fixture
 def toolbox(cfg: Config, hooks: Hooks) -> ToolBox:
-    return ToolBox(cfg, hooks.hooks(), folders=hooks.folders)
+    return ToolBox(cfg, hooks.hooks(), platform=hooks.platform)
 
 
 @pytest.fixture
-def agent(cfg: Config) -> DesktopAgent:
-    return DesktopAgent(cfg, OWN_PID)
+def agent(cfg: Config, desk: FakeDesktop) -> DesktopAgent:
+    return DesktopAgent(cfg, OWN_PID, platform=desk.platform)

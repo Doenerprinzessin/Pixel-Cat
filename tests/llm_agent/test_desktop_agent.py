@@ -6,13 +6,11 @@ import threading
 import pytest
 
 from llm_agent.agent_fakes import OWN_PID, SCREEN, el
-from pixelcat.adapters.windows import inputs, monitors, uia
-from pixelcat.domain import Monitor
+from pixelcat.domain import Monitor, Snapshot
 from pixelcat.llm import agent as agent_mod
 from pixelcat.llm import watch as watch_mod
 from pixelcat.llm.agent import AgentError, DesktopAgent, Shot, ToolOutput
 
-ORIGINAL_CONTROL_MONITOR = agent_mod.control_monitor
 NOTEPAD, CHROME = 21, 22
 NP = "notepad: 'Notes.txt - Notepad'"
 NP_FRONT = f" Now in front: {NP}."
@@ -22,7 +20,7 @@ NP_FRONT = f" Now in front: {NP}."
 def ag(agent: DesktopAgent, desk) -> DesktopAgent:  # type: ignore[no-untyped-def]
     desk.add_window(NOTEPAD, "Notes.txt - Notepad", "notepad.exe")
     desk.add_window(CHROME, "News - Google Chrome", "chrome.exe", rect=(1000, 100, 1800, 900))
-    snap = uia.Snapshot(NOTEPAD, (100, 100, 900, 700), [
+    snap = Snapshot(NOTEPAD, (100, 100, 900, 700), [
         el(1, "edit", "Title", (150, 150, 350, 170), value="Weekend"),
         el(2, "button", "Save", (700, 600, 760, 630)),
         el(3, "checkbox", "Important", (120, 200, 130, 210), checked=False)])
@@ -73,30 +71,26 @@ def test_diff_and_changed() -> None:
     assert DesktopAgent._changed(bytes(100), bytes([31] * 41 + [0] * 59)) is True
 
 
-def test_clip_and_window_rect(desk) -> None:  # type: ignore[no-untyped-def]
+def test_clip() -> None:
     assert agent_mod._clip((-10, 5, 3000, 900), SCREEN) == (0, 5, 1920, 900)
-    assert agent_mod._virtual_screen() == SCREEN
-    desk.rects[5] = (1, 2, 3, 4)
-    assert agent_mod.window_rect(5) == (1, 2, 3, 4)
-    assert agent_mod.window_rect(6) == (0, 0, 0, 0)          # no DWM frame: GetWindowRect (faked: all zero)
 
 
-def test_control_monitor(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_control_monitor(agent: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
     mons = [Monitor(1, (0, 0, 1920, 1080), (0, 0, 1920, 1040), 96, True, "A"),
             Monitor(2, (1920, 0, 3840, 1080), (1920, 0, 3840, 1040), 144, False, "B")]
-    monkeypatch.setattr(monitors, "enumerate_monitors", lambda: mons)
-    assert ORIGINAL_CONTROL_MONITOR(2000, 10) == (1920, 0, 3840, 1080)
-    assert ORIGINAL_CONTROL_MONITOR(5, 5) == (0, 0, 1920, 1080)
+    desk.platform.display.returns("monitors", mons)
+    assert agent.control_monitor(2000, 10) == (1920, 0, 3840, 1080)
+    assert agent.control_monitor(5, 5) == (0, 0, 1920, 1080)
 
 
 @pytest.mark.parametrize(("after", "before", "result"), [
     ("abc hello", "abc ", "exact"), ("x\r\nhello\r\n", None, "exact"), ("old", "old", "unchanged"),
     ("...line two\nline three", "", "tail"), ("other", "", "differs"), (None, "", "unknown"),
 ])
-def test_verify(desk, after, before, result: str) -> None:  # type: ignore[no-untyped-def]
+def test_verify(agent: DesktopAgent, desk, after, before, result: str) -> None:  # type: ignore[no-untyped-def]
     desk.field_text = after
     text = "hello" if result != "tail" else "line one\nline two\nline three"
-    assert DesktopAgent._verify(text, before) == result
+    assert agent._verify(text, before) == result
 
 
 # ================================================================ windows
@@ -258,28 +252,28 @@ def test_read_refuses(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untype
 
 def test_read_a_minimized_window(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
     desk.add_window(25, "Mini", "mini.exe", minimized=True)
-    desk.snapshots[25] = uia.Snapshot(25, (0, 0, 1, 1))
+    desk.snapshots[25] = Snapshot(25, (0, 0, 1, 1))
     assert ag.read(25) == "Window mini: 'Mini' (minimized).\nElements (use click with element=ID):\n(none found)"
 
 
-def test_uia_snapshot_errors_and_busy_windows(ag: DesktopAgent, desk, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_uia_snapshot_errors_and_busy_windows(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
     def boom(*a, **k):  # type: ignore[no-untyped-def]
         raise RuntimeError("COM error")
-    monkeypatch.setattr(uia, "snapshot", boom)
+    desk.platform.accessibility.answers("snapshot", boom)
     assert ag._uia_snapshot(NOTEPAD) is None
     release = threading.Event()
-    monkeypatch.setattr(uia, "snapshot", lambda *a, **k: release.wait(5) and None)
+    desk.platform.accessibility.answers("snapshot", lambda *a, **k: release.wait(5) and None)
     assert ag._uia_snapshot(NOTEPAD, timeout=0.05) is None            # too slow
     assert ag._uia_snapshot(NOTEPAD, timeout=5) is None               # still busy: not asked again
     release.set()
 
 
 # ================================================================ hands
-def test_click_element(ag: DesktopAgent, desk, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_click_element(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
     def click(x, y, button="left", count=1, hold=0.0, cancel=None):  # type: ignore[no-untyped-def]
         desk.calls.append(("click", x, y, button, count, hold))
         desk.cursor = (x, y)
-    monkeypatch.setattr(inputs, "click", click)
+    desk.platform.input.answers("click", click)
     out = ag.click(2, None, None, None)
     assert out == f"Clicked [2] button 'Save' in {NP}.{NP_FRONT}"
     assert desk.called("click") == [(730, 615, "left", 1, 0.0)]
@@ -296,12 +290,12 @@ def test_click_spot_and_verbs(ag: DesktopAgent, desk) -> None:  # type: ignore[n
     assert ag.click(None, 40, 50, None, double=True).startswith("Double-clicked the spot")
     assert ag.click(None, 40, 50, None, hold=1.0).startswith("Pressed and held (1 s) the spot")
     assert ag.click(None, 40, 50, None, button="back").startswith("Clicked the mouse's back button on the spot")
-    assert ag.click(None, 40, 50, None, keys=[0x11, 0x10]).startswith("Clicked (holding ctrl+shift) the spot")
-    assert ("hold", [0x11, 0x10]) in desk.calls
+    assert ag.click(None, 40, 50, None, keys=["ctrl", "shift"]).startswith("Clicked (holding ctrl+shift) the spot")
+    assert ("hold", ["ctrl", "shift"]) in desk.calls
 
 
 def test_click_reports_the_checkbox_state(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
-    after = uia.Snapshot(NOTEPAD, (100, 100, 900, 700), [el(7, "checkbox", "Important", (120, 200, 130, 210),
+    after = Snapshot(NOTEPAD, (100, 100, 900, 700), [el(7, "checkbox", "Important", (120, 200, 130, 210),
                                                             checked=True)])
     desk.snapshots[NOTEPAD] = after
     assert ag.click(3, None, None, None) == f"Clicked [3] checkbox 'Important' in {NP}. It is now checked.{NP_FRONT}"
@@ -380,14 +374,14 @@ def test_type_stops(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-
     assert ag.type("hello", NOTEPAD).endswith("because you pressed Esc / Stop.")
 
 
-def test_paste_stops_when_the_window_lost_the_front(ag: DesktopAgent, desk, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(inputs, "is_foreground", lambda h: False)
+def test_paste_stops_when_the_window_lost_the_front(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
+    desk.platform.windows.answers("is_foreground", lambda h: False)
     assert fails(ag.type, "a much longer text", NOTEPAD) == f"{NP} is no longer in front, so I stopped"
     assert desk.called("write_clipboard") == [([(13, b"user clip")],)]
 
 
-def test_paste_when_the_clipboard_cannot_be_set(ag: DesktopAgent, desk, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(inputs, "set_clipboard_private_text", lambda t: False)
+def test_paste_when_the_clipboard_cannot_be_set(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
+    desk.platform.clipboard.answers("set_private_text", lambda t: False)
     assert fails(ag.type, "a much longer text", NOTEPAD) == "the clipboard is busy - try again"
     assert desk.called("write_clipboard") == [([(13, b"user clip")], ("private", False))]
 
@@ -430,13 +424,13 @@ def test_keys(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
     assert ag.keys(combos[:1], NOTEPAD, hold=1.0).startswith("Pressed ctrl+s (held 1 s) in")
 
 
-def test_keys_stop(ag: DesktopAgent, desk, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_keys_stop(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
     combos = [("ctrl+s", [0x11, 0x53]), ("enter", [0x0D])]
 
     def press(keys, hold=0.0, cancel=None):  # type: ignore[no-untyped-def]
         desk.calls.append(("press_combo", keys))
         desk.foreground = CHROME
-    monkeypatch.setattr(inputs, "press_combo", press)
+    desk.platform.input.answers("press_combo", press)
     assert ag.keys(combos, NOTEPAD) == ("Pressed ctrl+s; stopped before enter because another app came to the "
                                         "front.")
     ag.cancel.set()
@@ -446,14 +440,14 @@ def test_keys_stop(ag: DesktopAgent, desk, monkeypatch) -> None:  # type: ignore
 def test_scroll(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
     assert ag.scroll("down", 3, NOTEPAD) == f"Scrolled down 3x in {NP}.{NP_FRONT}"
     assert desk.called("scroll") == [(500, 400, -3, ("horizontal", False))]
-    out = ag.scroll("left", 99, NOTEPAD, xy=(40, 50), keys=[0x10])
+    out = ag.scroll("left", 99, NOTEPAD, xy=(40, 50), keys=["shift"])
     assert out.startswith(f"Scrolled left 50x over the spot 40,50 (holding shift) in {NP}.")
     assert desk.called("scroll")[-1] == (180, 200, 50, ("horizontal", True))
     assert ag.scroll("up", 1, NOTEPAD, eid=2).startswith("Scrolled up 1x over [2] button 'Save' in")
 
 
 def test_drag(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
-    out = ag.drag(("el", 1), ("xy", 300.0, 200.0), [], keys=[0x11])
+    out = ag.drag(("el", 1), ("xy", 300.0, 200.0), [], keys=["ctrl"])
     assert out.text == f"Dragged from [1] edit 'Title' to the spot 300,200 holding ctrl in {NP}.{NP_FRONT}"
     assert out.display == f"🖱️ Dragged from [1] edit 'Title' to the spot 300,200 holding ctrl in {NP}."
     assert len(out.images) == 1
@@ -483,7 +477,7 @@ def test_drag_refuses(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untype
 def test_zoom(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
     out = ag.zoom(("mid", NOTEPAD), "in", 3)
     assert out.text == f"Zoomed in (3 steps, ctrl + mouse wheel) in {NP}.{NP_FRONT}"
-    assert ("hold", [0x11]) in desk.calls and desk.called("scroll") == [(500, 400, 3)]
+    assert ("hold", ["ctrl"]) in desk.calls and desk.called("scroll") == [(500, 400, 3)]
     assert ag.shot == Shot(NOTEPAD, (100, 100), 1.0, (800, 600))      # the picture it returned is the latest now
     out = ag.zoom(("xy", 40.0, 50.0), "out", 1, how="pinch")
     assert out.text.startswith(f"Zoomed out (1 step, two-finger pinch) at the spot 40,50 in {NP}.")
@@ -555,10 +549,10 @@ def test_replace_refuses(ag: DesktopAgent, editor, setup, msg: str) -> None:  # 
 
 def test_replace_refuses_formatted_text(ag: DesktopAgent, editor) -> None:  # type: ignore[no-untyped-def]
     editor.add_window(30, "Letter - Word", "winword.exe")
-    editor.clip_formats = {"Rich Text Format"}
+    editor.clip_formats = {"rtf"}
     assert fails(ag.replace, 30, "sort(;", "x").startswith("winword: 'Letter - Word' holds formatted text")
     assert editor.called("write_clipboard")                               # the clipboard is put back anyway
-    editor.clip_formats = {"Rich Text Format", "HTML Format"}
+    editor.clip_formats = {"rtf", "html"}
     assert ag.replace(NOTEPAD, "sort(;", "sort();").startswith("Replaced")  # plain-text editors may copy HTML too
 
 
@@ -569,7 +563,7 @@ def test_replace_reports_a_mismatch(ag: DesktopAgent, editor) -> None:  # type: 
 
 
 def test_copy_all_of_files_is_not_text(ag: DesktopAgent, editor) -> None:  # type: ignore[no-untyped-def]
-    editor.clip_formats = {15}
+    editor.clip_formats = {"files"}
     assert ag._copy_all(NOTEPAD) is None
 
 
@@ -584,7 +578,7 @@ def test_wait(ag: DesktopAgent, clock) -> None:  # type: ignore[no-untyped-def]
     assert clock.t == t0
 
 
-def test_wait_for_window_finds_the_new_window(ag: DesktopAgent, desk, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_wait_for_window_finds_the_new_window(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
     before = {w.hwnd for w in ag.windows()}
     desk.add_window(60, "Untitled - Paint", "mspaint.exe")
     desk.add_window(61, "Other", "other.exe")
@@ -609,7 +603,8 @@ def test_wait_for_window_falls_back(ag: DesktopAgent, desk, clock) -> None:  # t
 @pytest.fixture
 def texts(monkeypatch):  # type: ignore[no-untyped-def]
     seq: list = []
-    monkeypatch.setattr(watch_mod, "_window_text", lambda hwnd, timeout=8.0: seq.pop(0) if len(seq) > 1 else seq[0])
+    monkeypatch.setattr(watch_mod, "_window_text",
+                        lambda a11y, hwnd, timeout=8.0: seq.pop(0) if len(seq) > 1 else seq[0])
     return seq
 
 
@@ -668,9 +663,9 @@ def test_watch_pixels_until_still(ag: DesktopAgent) -> None:
     assert out.text.startswith("The screen stopped changing after 1.2 s. Screenshot of the whole screen")
 
 
-def test_watch_pixels_dialog_opened(ag: DesktopAgent, desk, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_watch_pixels_dialog_opened(ag: DesktopAgent, desk) -> None:  # type: ignore[no-untyped-def]
     calls = iter([NOTEPAD, NOTEPAD])
-    monkeypatch.setattr(inputs, "active_popup", lambda h: next(calls, 77))
+    desk.platform.windows.answers("active_popup", lambda h: next(calls, 77))
     desk.add_window(77, "Save as", "notepad.exe", pid=desk.pids[NOTEPAD])
     out = ag.watch(NOTEPAD, None, "change", seconds=30)
     assert out.text.startswith("A dialog window opened or closed after 0.5 s. Screenshot of notepad: 'Save as'")

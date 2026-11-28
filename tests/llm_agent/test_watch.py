@@ -10,15 +10,14 @@ from pathlib import Path
 import pytest
 
 from llm_agent.agent_fakes import OWN_PID, FakeFeed
-from pixelcat.adapters.windows import uia
-from pixelcat.adapters.windows.notifications import Notification
+from pixelcat.domain import Element, Notification, Snapshot
 from pixelcat.llm import watch as watch_mod
 from pixelcat.llm.watch import MAX_ACTIVE, Checker, Watch, WatchError, WatchManager
 
 
 @pytest.fixture
-def checker() -> Checker:
-    c = Checker(OWN_PID)
+def checker(desk) -> Checker:  # type: ignore[no-untyped-def]
+    c = Checker(OWN_PID, platform=desk.platform)
     c.feed = FakeFeed()
     return c
 
@@ -27,7 +26,7 @@ def checker() -> Checker:
 def texts(monkeypatch):  # type: ignore[no-untyped-def]
     """hwnd -> the text _window_text reads (None = unreadable)."""
     by_hwnd: dict = {}
-    monkeypatch.setattr(watch_mod, "_window_text", lambda hwnd, timeout=8.0: by_hwnd.get(hwnd))
+    monkeypatch.setattr(watch_mod, "_window_text", lambda a11y, hwnd, timeout=8.0: by_hwnd.get(hwnd))
     return by_hwnd
 
 
@@ -58,13 +57,13 @@ def test_norm() -> None:
 
 
 def test_window_text_reads_names_values_and_the_document(desk) -> None:  # type: ignore[no-untyped-def]
-    desk.snapshots[5] = uia.Snapshot(5, (0, 0, 1, 1), [
-        uia.Element(1, "text", "Status", (0, 0, 1, 1), value="Exporting"),
-        uia.Element(2, "edit", "", (0, 0, 1, 1), value="hunter2", password=True),
-        uia.Element(3, "button", "", (0, 0, 1, 1))])
+    desk.snapshots[5] = Snapshot(5, (0, 0, 1, 1), [
+        Element(1, "text", "Status", (0, 0, 1, 1), value="Exporting"),
+        Element(2, "edit", "", (0, 0, 1, 1), value="hunter2", password=True),
+        Element(3, "button", "", (0, 0, 1, 1))])
     desk.docs[5] = "Body text"
-    assert watch_mod._window_text(5) == "Status Exporting\nBody text"
-    assert watch_mod._window_text(6) is None                        # UI Automation failed
+    assert watch_mod._window_text(desk.platform.accessibility, 5) == "Status Exporting\nBody text"
+    assert watch_mod._window_text(desk.platform.accessibility, 6) is None                        # UI Automation failed
 
 
 # ------------------------------------------------------------------ baselines
@@ -262,8 +261,8 @@ def test_check_folder_ignores_files_from_before(checker: Checker, tmp_path: Path
 
 # ------------------------------------------------------------------ manager
 @pytest.fixture
-def mgr(monkeypatch) -> WatchManager:  # type: ignore[no-untyped-def]
-    m = WatchManager(OWN_PID)
+def mgr(monkeypatch, desk) -> WatchManager:  # type: ignore[no-untyped-def]
+    m = WatchManager(OWN_PID, platform=desk.platform)
     m.checker.feed = FakeFeed()
     monkeypatch.setattr(m, "_ensure_thread", lambda: None)
     return m
@@ -302,12 +301,12 @@ def test_duplicate_of(mgr: WatchManager) -> None:
     assert mgr.duplicate_of(W("time", at=now + 800)) is None
 
 
-def test_save_and_restore(mgr: WatchManager) -> None:
+def test_save_and_restore(mgr: WatchManager, desk) -> None:  # type: ignore[no-untyped-def]
     mgr.add(W("time", id=3, at=time.time() + 60, then="stretch"))
     mgr.add(W("file", id=4, path="C:/x", state={"mode": "appear", "_seen": [1, 2]}))
     saved = mgr.to_list()
     assert saved[1]["state"] == {"mode": "appear"}
-    other = WatchManager(OWN_PID)
+    other = WatchManager(OWN_PID, platform=desk.platform)
     other._ensure_thread = lambda: None  # type: ignore[method-assign]
     assert other.restore(saved + [{"kind": "earthquake", "id": 9, "label": "x"}, {"nonsense": 1}]) == 2
     assert [(w.id, w.kind, w.then) for w in other.active()] == [(3, "time", "stretch"), (4, "file", "")]
@@ -388,8 +387,8 @@ def test_fire_only_once(mgr: WatchManager) -> None:
     assert fired == [1]
 
 
-def test_thread_starts_and_stops(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    m = WatchManager(OWN_PID)
+def test_thread_starts_and_stops(monkeypatch, desk) -> None:  # type: ignore[no-untyped-def]
+    m = WatchManager(OWN_PID, platform=desk.platform)
     started: list = []
     monkeypatch.setattr(m, "_loop", lambda: started.append(1))
     m.add(W("time", id=1))

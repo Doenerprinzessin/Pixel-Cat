@@ -29,6 +29,9 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
+from ..domain import app_matches, badge_count, find_windows, friendly
+from ..ports import AccessibilityPort, Platform
+
 log = logging.getLogger(__name__)
 
 KINDS = ("notification", "window_text", "window_opened", "window_closed", "file", "time")
@@ -80,17 +83,15 @@ class Watch:
         return f"{self.label} (until {day}{when:%H:%M})"
 
 
-def _window_text(hwnd: int, timeout: float = 8.0) -> str | None:
+def _window_text(a11y: AccessibilityPort, hwnd: int, timeout: float = 8.0) -> str | None:
     """All readable text of a window (names, values, document) - None if it can't be read."""
-    from ..adapters.windows import uia
-
     box: list[object] = []
 
     def work() -> None:
         try:
-            snap = uia.snapshot(hwnd, uia.READABLE, limit=400)
+            snap = a11y.snapshot(hwnd, "readable", limit=400)
             parts = [f"{e.name} {e.value}".strip() for e in snap.elements if not e.password]
-            box.append("\n".join(p for p in parts if p) + "\n" + uia.document_text(hwnd, 100_000))
+            box.append("\n".join(p for p in parts if p) + "\n" + a11y.document_text(hwnd, 100_000))
         except Exception as exc:  # noqa: BLE001
             box.append(exc)
 
@@ -109,18 +110,16 @@ def _norm(s: str) -> str:
 class Checker:
     """The checks themselves (run on the watcher thread, or once on a tool thread at the start)."""
 
-    def __init__(self, own_pid: int) -> None:
-        from ..adapters.windows.notifications import Feed
-
+    def __init__(self, own_pid: int, *, platform: Platform) -> None:
         self.own_pid = own_pid
-        self.feed = Feed()
+        self._win = platform.windows
+        self._a11y = platform.accessibility
+        self.feed = platform.notifications.open_feed()
 
     # ------------------------------------------------------------------ helpers
     def _windows(self, query: str, title_text: str = "") -> list[Any]:
-        from ..adapters.windows import control
-
-        wins = control.list_app_windows(self.own_pid)
-        hits = control.find_windows(query, wins) if query.strip() else wins
+        wins = self._win.app_windows(self.own_pid)
+        hits = find_windows(query, wins) if query.strip() else wins
         if title_text.strip():
             hits = [w for w in hits if title_text.lower() in w.title.lower()]
         return hits
@@ -129,8 +128,6 @@ class Checker:
     def baseline(self, w: Watch) -> str:
         """Record how things are now.  Returns a detail text if the awaited thing is ALREADY
         the case (then there is nothing to wait for), else ''."""
-        from ..adapters.windows import win32
-
         if w.kind == "notification":
             try:
                 w.state["last"] = self.feed.last_id()
@@ -158,7 +155,7 @@ class Checker:
             if found is False and w.gone:
                 return f"'{w.text}' isn't shown in {win.label()} right now."
             if found is None:
-                if not all(win32.user32.IsIconic(x.hwnd) for x in wins):
+                if not all(self._win.is_minimized(x.hwnd) for x in wins):
                     raise WatchError(f"I can't read the text of {wins[0].label()} (the app doesn't share it) - use "
                                      "another event (notification, window_closed) or look_at_screen")
                 w.state["note"] = ("the window is minimized - I can only read it while it isn't minimized "
@@ -175,8 +172,6 @@ class Checker:
         return ""
 
     def _app_ok(self, app_id: str, w: Watch) -> bool:
-        from ..adapters.windows.notifications import app_matches
-
         return app_matches(app_id, w.app)
 
     # ------------------------------------------------------------------ checks
@@ -194,8 +189,6 @@ class Checker:
         return f"It is {datetime.now():%H:%M} now."
 
     def _check_notification(self, w: Watch) -> str:
-        from ..adapters.windows.notifications import badge_count
-
         new = self.feed.since(int(w.state.get("last", 0)))
         if new:
             w.state["last"] = max(n.id for n in new)
@@ -218,8 +211,6 @@ class Checker:
             w.state["_badge"] = rising[0]
             return ""                             # give its pop-up a moment to arrive
         if pending:
-            from ..adapters.windows.notifications import friendly
-
             app_id, was, now = pending[0], pending[1], pending[2]
             what = f"{now} unread" if str(now).isdigit() else "a new item"
             extra = f" so I can't tell whether it is from/about '{w.text}'" if w.text else ""
@@ -228,9 +219,7 @@ class Checker:
         return ""
 
     def _check_window_closed(self, w: Watch) -> str:
-        from ..adapters.windows import win32
-
-        alive = [h for h in w.state.get("hwnds", []) if win32.user32.IsWindow(h)]
+        alive = [h for h in w.state.get("hwnds", []) if self._win.exists(h)]
         if alive:
             return ""
         names = w.state.get("names") or [w.app]
@@ -243,13 +232,12 @@ class Checker:
         w.state["hwnds"] = list(known | {x.hwnd for x in wins})[-50:]
         return f"A new window opened: {new[0].label()}." if new else ""
 
-    @staticmethod
-    def _scan_text(w: Watch, wins: list[Any]) -> tuple[bool | None, Any, str]:
+    def _scan_text(self, w: Watch, wins: list[Any]) -> tuple[bool | None, Any, str]:
         """(True: shown / False: read, not shown / None: couldn't read), the window, the line."""
         want = _norm(w.text)
         read_any = False
         for x in sorted(wins, key=lambda v: v.minimized)[:3]:
-            text = _window_text(x.hwnd)
+            text = _window_text(self._a11y, x.hwnd)
             if not text or not text.strip():
                 continue
             read_any = True
@@ -314,9 +302,9 @@ class WatchManager(QObject):
     fired = Signal(object, str, bool)      # watch, what happened, timed out
     changed = Signal()                     # the list of watches changed
 
-    def __init__(self, own_pid: int) -> None:
+    def __init__(self, own_pid: int, *, platform: Platform) -> None:
         super().__init__()
-        self.checker = Checker(own_pid)
+        self.checker = Checker(own_pid, platform=platform)
         self._lock = threading.Lock()
         self._watches: list[Watch] = []
         self._next_id = 1

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from llm_agent.agent_fakes import OWN_PID, FakeFeed
-from pixelcat.adapters.windows import control
+from pixelcat.domain import KillPlan
 from pixelcat.llm import tools as tools_mod
 from pixelcat.llm import webpage
 from pixelcat.llm.agent import ToolOutput
@@ -99,7 +99,7 @@ def test_open_url_and_search(toolbox: ToolBox, cfg, desk) -> None:  # type: igno
 
 def test_open_folder_uses_the_shell(toolbox: ToolBox, folders, desk) -> None:  # type: ignore[no-untyped-def]
     assert run(toolbox, "open_folder", folder="downloads") == f"Opened folder {folders['downloads'].resolve()}."
-    assert desk.called("startfile") == [(str(folders["downloads"].resolve()),)]
+    assert desk.called("open") == [(str(folders["downloads"].resolve()),)]
 
 
 def test_list_files(toolbox: ToolBox, folders) -> None:  # type: ignore[no-untyped-def]
@@ -115,13 +115,13 @@ def test_list_files(toolbox: ToolBox, folders) -> None:  # type: ignore[no-untyp
     assert out.endswith(" (+8 more)") and out.count(", ") == 39
 
 
-def test_settings_media_lock(toolbox: ToolBox, desk, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_settings_media_lock(toolbox: ToolBox, desk) -> None:  # type: ignore[no-untyped-def]
     assert run(toolbox, "open_settings", page="Bluetooth") == "Opened the bluetooth settings."
-    assert desk.called("launch") == [("ms-settings:bluetooth",)]
+    assert desk.called("open_settings") == [("bluetooth",)]
     assert run(toolbox, "media_control", action="pause") == "Pressed media play/pause."
     assert desk.called("media_key") == [("play_pause",)]
     assert run(toolbox, "lock_screen") == "Locked the PC."
-    monkeypatch.setattr(control, "lock_screen", lambda: False)
+    desk.platform.system.answers("lock_screen", lambda: False)
     assert run(toolbox, "lock_screen") == "Could not lock the PC."
 
 
@@ -174,26 +174,26 @@ def test_open_app_runs_the_command_without_a_shell(toolbox: ToolBox, desk, no_wa
     assert run(toolbox, "open_app", name="notepad") == "Opened notepad. (window ready)"
     assert desk.called("popen") == [(["notepad.exe"], ("close_fds", True), ("shell", False))]
     assert no_wait == [({5}, "notepad", 8.0)]
-    assert not desk.called("startfile")
+    assert not desk.called("open") and not desk.called("open_elevated")
 
 
-def test_open_app_uri_and_start_menu_use_startfile(toolbox: ToolBox, desk, no_wait) -> None:  # type: ignore[no-untyped-def]
+def test_open_app_uri_and_start_menu_are_opened_by_the_shell(toolbox: ToolBox, desk, no_wait) -> None:  # type: ignore[no-untyped-def]
     assert run(toolbox, "open_app", name="settings") == "Opened settings. (window ready)"
     desk.shortcuts["spotify"] = ("Spotify", Path("C:/Start/Spotify.lnk"))
     assert run(toolbox, "open_app", name="spotify") == "Opened 'Spotify' (Start menu). (window ready)"
-    assert desk.called("startfile") == [("ms-settings:",), (str(Path("C:/Start/Spotify.lnk")),)]
+    assert desk.called("open") == [("ms-settings:",), (str(Path("C:/Start/Spotify.lnk")),)]
     assert not desk.called("popen")
 
 
 def test_open_app_with_admin_rights(cfg, hooks, desk, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     cfg.apps["tool"] = ["C:\\Tools\\tool.exe", "--fast", "a b"]
-    tb = ToolBox(cfg, hooks.hooks(), folders=hooks.folders)
+    tb = ToolBox(cfg, hooks.hooks(), platform=hooks.platform)
     waits: list = []
     monkeypatch.setattr(tb.agent, "wait_for_window", lambda b, n, timeout=15.0: waits.append(timeout) or "")
     desk.admin_targets.add(str(cfg.apps["tool"]))
     out = run(tb, "open_app", name="tool")
     assert out == "Opened tool. Windows asks for admin rights now (UAC) - only the user can answer that."
-    assert desk.called("startfile") == [("C:\\Tools\\tool.exe", ("arguments", '--fast "a b"'))]
+    assert desk.called("open_elevated") == [("C:\\Tools\\tool.exe", ["--fast", "a b"])]
     assert waits == [20.0]
 
 
@@ -215,13 +215,13 @@ def test_open_app_refused_for_elevation_is_not_retried_silently(toolbox: ToolBox
         run(toolbox, "open_app", name="calculator")
 
 
-def test_force_end(toolbox: ToolBox, desk, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    desk.plan = control.KillPlan("chrome.exe (2 processes)", [1, 2], ["chrome.exe"])
+def test_force_end(toolbox: ToolBox, desk) -> None:  # type: ignore[no-untyped-def]
+    desk.plan = KillPlan("chrome.exe (2 processes)", [1, 2], ["chrome.exe"])
     spec, a = toolbox.prepare("force_end", {"target": "chrome"}, internal=True)
     assert toolbox.run(spec, a) == "Force-ended chrome.exe: 2 processes stopped."
     assert a["_denied"] == []
-    monkeypatch.setattr(control, "force_end", lambda plan: ([1], [2, 3]))
-    monkeypatch.setattr(control, "alive", lambda pids: [1])
+    desk.platform.processes.answers("force_end", lambda plan: ([1], [2, 3]))
+    desk.platform.processes.answers("alive", lambda pids: [1])
     out = toolbox.run(spec, a)
     assert out == ("Force-ended chrome.exe: 1 process stopped. 2 process(es) can only be ended with admin rights. "
                    "(1 still shutting down.)")
@@ -233,16 +233,16 @@ def test_force_end(toolbox: ToolBox, desk, monkeypatch) -> None:  # type: ignore
     (True, [7], "1 process(es) are still running even with admin rights."),
     (False, [], "2 process(es) need admin rights, but you said no."),
 ])
-def test_force_end_admin(monkeypatch, ok: bool, alive: list, msg: str) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(control, "force_end_elevated", lambda pids: (ok, "you said no"))
-    monkeypatch.setattr(control, "alive", lambda pids: alive)
-    assert ToolBox.force_end_admin([7, 8]) == msg
+def test_force_end_admin(toolbox: ToolBox, desk, ok: bool, alive: list, msg: str) -> None:  # type: ignore[no-untyped-def]
+    desk.platform.processes.answers("force_end_elevated", lambda pids: (ok, "you said no"))
+    desk.platform.processes.answers("alive", lambda pids: alive)
+    assert toolbox.force_end_admin([7, 8]) == msg
 
 
-def test_run_as_admin(toolbox: ToolBox, desk, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_run_as_admin(toolbox: ToolBox, desk) -> None:  # type: ignore[no-untyped-def]
     assert run(toolbox, "run_as_admin", internal=True, name="notepad") == "Started 'notepad' as administrator."
     assert desk.called("run_as_admin") == [("notepad.exe",)]
-    monkeypatch.setattr(control, "run_as_admin", lambda t: (False, "the user said no"))
+    desk.platform.apps.answers("run_as_admin", lambda t: (False, "the user said no"))
     assert run(toolbox, "run_as_admin", internal=True, name="notepad") == \
         "Couldn't start 'notepad' as admin: the user said no."
 
@@ -343,7 +343,7 @@ def test_open_file_shows_it_in_an_editor(toolbox: ToolBox, js: Path, desk, no_wa
     assert out == f"Opened sort.js in {app}. (window ready)"
     assert desk.called("popen") == [([argv0, str(js.resolve())], ("close_fds", True))]
     assert no_wait[0][1] == ("code" if app == "vscode" else "notepad")
-    assert not desk.called("startfile")
+    assert not desk.called("open") and not desk.called("open_elevated")
 
 
 def test_open_file_without_vscode(toolbox: ToolBox, js: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -377,7 +377,7 @@ def test_screen_tools_call_the_desktop_agent(toolbox: ToolBox, desk, monkeypatch
     look = run(toolbox, "look_at_screen")
     run(toolbox, "wait", seconds=2)
     assert got == [
-        ("click", (None, 5.0, 6.0, 21, "right", False), {"count": 1, "hold": 0.0, "keys": [0x11]}),
+        ("click", (None, 5.0, 6.0, 21, "right", False), {"count": 1, "hold": 0.0, "keys": ["ctrl"]}),
         ("drag", (("xy", 1.0, 2.0), ("xy", 3.0, 4.0), [], "left", [], 0.6), {}),
         ("hover", (("xy", 1.0, 1.0), 2.0), {}),
         ("zoom", (("mid", 21), "in", 2, "wheel"), {}),
@@ -402,10 +402,10 @@ def test_read_window_output(toolbox: ToolBox, desk, monkeypatch) -> None:  # typ
 
 # ------------------------------------------------------------------ wait_for / stop_waiting with the real manager
 @pytest.fixture
-def watches(monkeypatch):  # type: ignore[no-untyped-def]
+def watches(monkeypatch, desk):  # type: ignore[no-untyped-def]
     from pixelcat.llm.watch import WatchManager
 
-    mgr = WatchManager(OWN_PID)
+    mgr = WatchManager(OWN_PID, platform=desk.platform)
     monkeypatch.setattr(mgr, "_ensure_thread", lambda: None)
     mgr.checker.feed = FakeFeed()
     return mgr
@@ -413,7 +413,7 @@ def watches(monkeypatch):  # type: ignore[no-untyped-def]
 
 @pytest.fixture
 def wtb(cfg, hooks, watches) -> ToolBox:  # type: ignore[no-untyped-def]
-    return ToolBox(cfg, hooks.hooks(watches=watches), folders=hooks.folders)
+    return ToolBox(cfg, hooks.hooks(watches=watches), platform=hooks.platform)
 
 
 def test_wait_for_starts_a_watch(wtb: ToolBox, watches) -> None:  # type: ignore[no-untyped-def]
@@ -459,7 +459,7 @@ def test_wait_for_note_about_minimized_windows(wtb: ToolBox, watches, desk, monk
     from pixelcat.llm import watch
 
     desk.add_window(7, "Exporter", "exporter.exe", minimized=True)
-    monkeypatch.setattr(watch, "_window_text", lambda hwnd, timeout=8.0: None)
+    monkeypatch.setattr(watch, "_window_text", lambda a11y, hwnd, timeout=8.0: None)
     out = run(wtb, "wait_for", event="window_text", app="exporter", text="Done")
     assert out.text.endswith("Note: the window is minimized - I can only read it while it isn't minimized (behind "
                              "other windows is fine).")

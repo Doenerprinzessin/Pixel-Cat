@@ -227,7 +227,7 @@ class PixelCatApp(QObject):
                                                                   self.model_status.model == cfg.model)
                                         or self.model_status.model in self._download_ok)
         self.model_status.changed.connect(self._on_model_status)
-        self.watches = WatchManager(self.own_pid)        # long tasks: wait_for watches in the background
+        self.watches = WatchManager(self.own_pid, platform=self.platform)  # wait_for watches in the background
         self.watches.fired.connect(self._on_watch_fired)
         self.watches.changed.connect(self._on_watches_changed)
         self._wakes: list[tuple[Watch, str, bool]] = []
@@ -240,7 +240,7 @@ class PixelCatApp(QObject):
         self._promise_nudged = False
         self.toolbox = ToolBox(cfg, AppHooks(self._tool_cat_action, self._tool_set_timer, self._tool_screenshot,
                                              self._tool_clipboard, self.own_pid, watches=self.watches,
-                                             task_request=self._task_request), folders=platform.folders)
+                                             task_request=self._task_request), platform=self.platform)
         self.history: list[dict[str, Any]] = []
         self.worker: ChatWorker | None = None
         self._live_workers: set[ChatWorker] = set()

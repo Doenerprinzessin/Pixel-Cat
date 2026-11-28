@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from pixelcat.adapters.windows import control
+from pixelcat.domain import MEDIA_ACTIONS, SETTINGS_PAGES
 from pixelcat.llm import tools as tools_mod
 from pixelcat.llm.tools import CAT_ACTIONS, ToolBox, ToolError
 from pixelcat.llm.watch import KINDS
@@ -99,8 +99,8 @@ def test_schema_shape(toolbox: ToolBox) -> None:
 
 @pytest.mark.parametrize(("tool", "prop", "values"), [
     ("cat_action", "action", CAT_ACTIONS),
-    ("open_settings", "page", sorted(control.SETTINGS_PAGES)),
-    ("media_control", "action", sorted(control.MEDIA_KEYS)),
+    ("open_settings", "page", sorted(SETTINGS_PAGES)),
+    ("media_control", "action", sorted(MEDIA_ACTIONS)),
     ("window_action", "action", ["focus", "minimize", "maximize", "restore"]),
     ("wait_for", "event", list(KINDS)),
     ("click", "button", ["left", "right", "middle", "back", "forward"]),
@@ -127,16 +127,16 @@ def test_array_item_schemas(toolbox: ToolBox) -> None:
 ])
 def test_eyes_need_a_confirm_only_for_remote_models(cfg, hooks, url: str, eyes: str) -> None:
     cfg.ollama_url = url
-    tb = ToolBox(cfg, hooks.hooks(), folders=hooks.folders)
+    tb = ToolBox(cfg, hooks.hooks(), platform=hooks.platform)
     assert {n: tb.specs[n].confirm for n in EYES} == dict.fromkeys(EYES, eyes)
 
 
 def test_open_app_description_lists_whitelist_and_start_menu(cfg, hooks) -> None:
     cfg.apps = {"zeta": ["z.exe"], "alpha": ["a.exe"]}
-    desc = ToolBox(cfg, hooks.hooks(), folders=hooks.folders).specs["open_app"].description
+    desc = ToolBox(cfg, hooks.hooks(), platform=hooks.platform).specs["open_app"].description
     assert desc.startswith("Open an app by name: alpha, zeta or any app installed in the Start menu.")
     cfg.allow_start_menu_apps = False
-    desc = ToolBox(cfg, hooks.hooks(), folders=hooks.folders).specs["open_app"].description
+    desc = ToolBox(cfg, hooks.hooks(), platform=hooks.platform).specs["open_app"].description
     assert desc.startswith("Open an app by name: alpha, zeta. ")
 
 

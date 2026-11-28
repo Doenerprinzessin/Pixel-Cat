@@ -69,7 +69,7 @@ def main() -> int:  # noqa: C901 - a linear test script
         return json.loads(helper.stdout.readline())
 
     tb = ToolBox(load_config(), AppHooks(lambda a: "", lambda s, label: "", lambda: "", lambda t: "", os.getpid()),
-                 folders=build_platform().folders)
+                 platform=build_platform())
     ag = tb.agent
     start_cursor = win32.cursor_pos()
 

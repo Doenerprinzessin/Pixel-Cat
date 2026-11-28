@@ -241,7 +241,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     spec, a, out = start(event="notification", app="teams", then="tell the user")
     spec, a, out = start(event="time", minutes=120, then="remind")
     saved = json.loads(json.dumps(pet.watches.to_list()))
-    other = WatchManager(pet.own_pid)
+    other = WatchManager(pet.own_pid, platform=pet.platform)
     n = other.restore(saved)
     check("watches are saved and restored after a restart", n == 2 and [w.label for w in other.active()]
           == [w.label for w in pet.watches.active()] and "last" in other.active()[0].state)

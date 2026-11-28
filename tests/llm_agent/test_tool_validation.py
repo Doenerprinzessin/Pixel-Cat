@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pixelcat.adapters.windows import control
+from pixelcat.domain import KillPlan
 from pixelcat.llm.tools import ToolBox, ToolError
 
 
@@ -163,7 +163,7 @@ def test_open_app_start_menu_disabled(cfg, hooks, desk) -> None:  # type: ignore
     cfg.allow_start_menu_apps = False
     desk.shortcuts["spotify"] = ("Spotify", "C:/Start/Spotify.lnk")
     with pytest.raises(ToolError, match="can't find an app called 'spotify'"):
-        ToolBox(cfg, hooks.hooks(), folders=hooks.folders).prepare("open_app", {"name": "spotify"})
+        ToolBox(cfg, hooks.hooks(), platform=hooks.platform).prepare("open_app", {"name": "spotify"})
 
 
 def test_open_app_that_needs_admin_always_asks(toolbox: ToolBox, desk) -> None:  # type: ignore[no-untyped-def]
@@ -204,7 +204,7 @@ def test_close_app_takes_at_most_ten_windows(toolbox: ToolBox, desk) -> None:  #
 def test_force_end_internal(toolbox: ToolBox, desk) -> None:  # type: ignore[no-untyped-def]
     with pytest.raises(ToolError, match="no running app matches 'chrome'"):
         toolbox.prepare("force_end", {"target": "chrome"}, internal=True)
-    desk.plan = control.KillPlan("chrome.exe (3 processes)", [1, 2, 3], ["chrome.exe"])
+    desk.plan = KillPlan("chrome.exe (3 processes)", [1, 2, 3], ["chrome.exe"])
     spec, a = toolbox.prepare("force_end", {"target": "chrome"}, internal=True)
     assert a["_plan"] is desk.plan
     assert toolbox.describe(spec, a).startswith("FORCE-END chrome.exe (3 processes) right now")
@@ -249,7 +249,7 @@ def test_folder_paths_inside_and_outside(toolbox: ToolBox, folders, tmp_path) ->
 
 def test_allowed_roots_come_from_the_config(cfg, hooks, folders) -> None:  # type: ignore[no-untyped-def]
     cfg.allowed_roots = ["downloads", "no_such_alias"]
-    tb = ToolBox(cfg, hooks.hooks(), folders=hooks.folders)
+    tb = ToolBox(cfg, hooks.hooks(), platform=hooks.platform)
     assert prep(tb, "list_files", folder="downloads")["_path"] == folders["downloads"].resolve()
     assert "outside the folders I'm allowed to touch (downloads, no_such_alias)" in refused(tb, "list_files",
                                                                                             folder="desktop")
@@ -382,15 +382,13 @@ def test_open_file_picks_an_editor(toolbox: ToolBox, folders, monkeypatch, app: 
     assert prep(toolbox, "open_file", path=f"desktop/f{suffix}", app=app)["app"] == chosen
 
 
-def test_vscode_exe_lookup(desk, monkeypatch, isolated_dirs) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.adapters.windows import elevation
-
-    assert ToolBox._vscode_exe() is None
+def test_vscode_exe_lookup(toolbox: ToolBox, desk, isolated_dirs) -> None:  # type: ignore[no-untyped-def]
+    assert toolbox._vscode_exe() is None
     exe = isolated_dirs / "Code.exe"
     exe.write_text("")
     desk.shortcuts["visual studio code"] = ("Visual Studio Code", str(isolated_dirs / "VS Code.lnk"))
-    monkeypatch.setattr(elevation, "lnk_target", lambda p: (str(exe), False))
-    assert ToolBox._vscode_exe() == str(exe)
+    desk.platform.apps.answers("lnk_target", lambda p: (str(exe), False))
+    assert toolbox._vscode_exe() == str(exe)
 
 
 # ------------------------------------------------------------------ wait_for
@@ -401,7 +399,7 @@ class FakeWatches:
 
 @pytest.fixture
 def wtb(cfg, hooks) -> ToolBox:  # type: ignore[no-untyped-def]
-    return ToolBox(cfg, hooks.hooks(watches=FakeWatches()), folders=hooks.folders)
+    return ToolBox(cfg, hooks.hooks(watches=FakeWatches()), platform=hooks.platform)
 
 
 def test_wait_for_needs_the_watch_manager(toolbox: ToolBox) -> None:
@@ -442,7 +440,7 @@ def test_wait_for_unfriendly_app_name_is_kept(wtb: ToolBox) -> None:
 
 
 def test_wait_for_without_task_request(cfg, hooks) -> None:  # type: ignore[no-untyped-def]
-    tb = ToolBox(cfg, hooks.hooks(watches=FakeWatches(), task_request=False), folders=hooks.folders)
+    tb = ToolBox(cfg, hooks.hooks(watches=FakeWatches(), task_request=False), platform=hooks.platform)
     assert prep(tb, "wait_for", event="time", minutes=1)["_watch"].request == ""
 
 

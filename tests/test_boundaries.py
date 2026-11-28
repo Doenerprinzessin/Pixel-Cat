@@ -19,8 +19,10 @@ PKG = ROOT / "pixelcat"
 
 # The storage side of the core: it gets the secret store, known folders and save marks passed in (ports).
 STORAGE_CORE = ["paths.py", "persistence.py", "savecrypt.py", "chats.py", "llm/external.py"]
+# The chat's desktop tools: they get the desktop ports passed in (DesktopAgent, ToolBox, WatchManager).
+LLM_CORE = ["imaging.py", "llm/agent.py", "llm/tools.py", "llm/watch.py"]
 # The platform-independent core: it may use pixelcat.domain, never pixelcat.adapters (nor the old pixelcat.desktop).
-CORE = ["engine", "games", "sprites", "domain", "settings.py", "progress.py", *STORAGE_CORE]
+CORE = ["engine", "games", "sprites", "domain", "settings.py", "progress.py", *STORAGE_CORE, *LLM_CORE]
 WINDOWS_ONLY = {"ctypes", "winreg", "msvcrt", "_winapi"}
 # Qt glue that still calls Win32 directly; a later slice of PR 2 puts these calls behind desktop ports.
 CORE_EXCEPTIONS = {"games/qt_host.py"}
@@ -87,6 +89,12 @@ def test_core_does_not_import_adapters(path):
 def test_storage_core_makes_no_windows_calls(path):
     bad = sorted(name for name in _imports(path) if name.split(".")[0] in WINDOWS_ONLY)
     assert not bad, f"pixelcat/{_rel(path)} imports {bad}; use the storage ports instead"
+
+
+@pytest.mark.parametrize("path", _files(*LLM_CORE), ids=_rel)
+def test_llm_core_makes_no_windows_calls(path):
+    bad = sorted(name for name in _imports(path) if name.split(".")[0] in WINDOWS_ONLY)
+    assert not bad, f"pixelcat/{_rel(path)} imports {bad}; use the desktop ports instead"
 
 
 @pytest.mark.parametrize("path", _files("ports"), ids=_rel)

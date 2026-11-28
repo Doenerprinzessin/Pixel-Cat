@@ -1,12 +1,12 @@
 """Test doubles for the agent side of ``pixelcat.llm`` (imported by conftest and the tests).
 
-Every desktop call the tools and the desktop agent can reach is replaced by :class:`FakeDesktop`,
-in ONE place (:meth:`FakeDesktop.install`), so these tests are safe on a real Windows desktop and
-later PRs that move the desktop layer behind ports only need to update this file.
+Every port the tools, the desktop agent and the watches use is a :class:`~fakes.platform.FakePlatform`
+answered by :class:`FakeDesktop`, in ONE place (:meth:`FakeDesktop.install`), so these tests never touch
+a real desktop.  Tests change answers with ``desk.platform.<port>.answers(name, fn)``.
 """
 from __future__ import annotations
 
-import os
+import re
 import subprocess
 import threading
 import webbrowser
@@ -16,15 +16,37 @@ from typing import Any
 
 import pytest
 
-from pixelcat.adapters.windows import capture, control, elevation, inputs, uia, volume, win32
-from pixelcat.adapters.windows.control import AppWindow
+from fakes.platform import FakePlatform
+from pixelcat import imaging
+from pixelcat.domain import AppWindow, Element, KillPlan, Monitor, Snapshot
 from pixelcat.llm import agent as agent_mod
 from pixelcat.llm import tools as tools_mod
 from pixelcat.llm.tools import AppHooks
+from pixelcat.ports import KnownFolders
 
 OWN_PID = 4242
 SCREEN = (0, 0, 1920, 1080)
 FOLDER_ALIASES = ("desktop", "documents", "downloads", "pictures", "music", "videos")
+# what the fake InputPort.parse_combo knows: key name -> a key code (the Windows ones, so tests read familiar)
+KEY_CODES = {"ctrl": 0x11, "control": 0x11, "shift": 0x10, "alt": 0x12, "win": 0x5B, "windows": 0x5B,
+             "enter": 0x0D, "esc": 0x1B, "tab": 0x09, "space": 0x20, "delete": 0x2E, "del": 0x2E, "end": 0x23,
+             "home": 0x24, "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27}
+KEY_CODES.update({f"f{i}": 0x6F + i for i in range(1, 25)})
+
+
+def parse_combo(combo: str) -> list[int]:
+    """The fake InputPort.parse_combo: 'ctrl+s' -> [0x11, ord('S')]; ValueError for unknown keys."""
+    keys: list[int] = []
+    for p in [p.strip().lower() for p in re.split(r"\s*\+\s*", combo.strip()) if p.strip()]:
+        if p in KEY_CODES:
+            keys.append(KEY_CODES[p])
+        elif len(p) == 1 and ("a" <= p <= "z" or "0" <= p <= "9"):
+            keys.append(ord(p.upper()))
+        else:
+            raise ValueError(f"unknown key '{p}'")
+    if not keys:
+        raise ValueError("no keys given")
+    return keys
 
 
 class Clock:
@@ -45,14 +67,14 @@ class Clock:
 
 
 def el(eid: int, kind: str = "button", name: str = "", rect: tuple[int, int, int, int] = (110, 110, 150, 130),
-       **kw: Any) -> uia.Element:
-    return uia.Element(eid, kind, name, rect, **kw)
+       **kw: Any) -> Element:
+    return Element(eid, kind, name, rect, **kw)
 
 
 class FakeDesktop:
-    """A pretend desktop: windows, processes, focus, clipboard, UI Automation, input and launching.
+    """A pretend desktop behind the ports: windows, processes, focus, clipboard, accessibility, input and launching.
 
-    Everything that is "done" is recorded in ``calls`` as ``(name, *args)``."""
+    Everything that is "done" is recorded in ``calls`` as ``(name, *args)``; ``platform`` is the FakePlatform."""
 
     def __init__(self) -> None:
         self.windows: list[AppWindow] = []
@@ -72,9 +94,9 @@ class FakeDesktop:
         self.uac = False
         self.shortcuts: dict[str, tuple[str, Any]] = {}
         self.admin_targets: set[str] = set()
-        self.snapshots: dict[int, uia.Snapshot] = {}
-        self.focused: uia.Element | None = None
-        self.field_text: Any = None             # uia.focused_text result (value or callable)
+        self.snapshots: dict[int, Snapshot] = {}
+        self.focused: Element | None = None
+        self.field_text: Any = None             # focused_text result (value or callable)
         self.docs: dict[int, str] = {}
         self.clipboard: list[tuple[int, bytes]] | None = [(13, b"user clip")]
         self.clip_text: str | None = None
@@ -90,7 +112,7 @@ class FakeDesktop:
         self.private_text: str | None = None    # text the agent put on the clipboard for pasting
         self.color: Any = lambda: (255, 255, 255)   # colour of every captured picture
         self.calls: list[tuple] = []
-        self.user32: Any = None
+        self.platform: FakePlatform = FakePlatform()
         self.clock = Clock()
 
     # ------------------------------------------------------------- setup helpers
@@ -140,7 +162,7 @@ class FakeDesktop:
     def _focused_text(self, max_chars: int = 50000) -> str | None:
         return self.field_text() if callable(self.field_text) else self.field_text
 
-    def _snapshot(self, hwnd: int, kinds: Any = None, limit: int = 150) -> uia.Snapshot:
+    def _snapshot(self, hwnd: int, kinds: Any = None, limit: int = 150) -> Snapshot:
         if hwnd not in self.snapshots:
             raise OSError("no UI Automation here")
         return self.snapshots[hwnd]
@@ -182,98 +204,107 @@ class FakeDesktop:
         img.fill(QColor(*self.color()))
         return img
 
-    def _plan(self, target: str) -> control.KillPlan:
+    def _plan(self, target: str) -> KillPlan:
         if self.plan is None:
             raise ValueError(f"no running app matches '{target}'")
         return self.plan
 
-    def install(self, mp: pytest.MonkeyPatch, fake_dll: type, clock: Clock) -> None:
+    def install(self, mp: pytest.MonkeyPatch, clock: Clock, folders: KnownFolders | None = None) -> None:
         self.clock = clock
-        u = fake_dll("user32")
-        u.IsWindow.result = lambda h: int(int(h or 0) in self.alive)
-        u.IsIconic.result = lambda h: int(any(w.hwnd == h and w.minimized for w in self.windows))
-        u.IsHungAppWindow.result = lambda h: int(h in self.hung)
-        u.IsWindowVisible.result = lambda h: int(int(h or 0) in self.alive)
-        u.GetForegroundWindow.result = lambda: self.foreground
-        u.GetSystemMetrics.result = lambda i: {76: SCREEN[0], 77: SCREEN[1], 78: SCREEN[2] - SCREEN[0],
-                                               79: SCREEN[3] - SCREEN[1]}.get(i, 0)
-        u.EnumWindows.result = 1
-        self.user32 = u
-        mp.setattr(win32, "user32", u)
-        mp.setattr(win32, "window_pid", self.pid_of)
-        mp.setattr(win32, "window_text", lambda h: self.titles.get(h, ""))
-        mp.setattr(win32, "class_name", lambda h: self.classes.get(h, ""))
-        mp.setattr(win32, "frame_bounds", lambda h: self.rects.get(h))
-        mp.setattr(win32, "cursor_pos", lambda: self.cursor)
-        mp.setattr(win32, "get_exstyle", lambda h: 0)
-        mp.setattr(win32, "set_exstyle", self.record("set_exstyle"))
+        p = self.platform = FakePlatform(folders=folders) if folders is not None else FakePlatform()
 
-        mp.setattr(control, "list_app_windows", lambda own_pid: [w for w in self.windows if w.hwnd in self.alive])
-        mp.setattr(control, "process_exe", lambda pid: self.exes.get(pid, ""))
-        mp.setattr(control, "find_shortcut", lambda name: self.shortcuts.get(name.strip().lower()))
-        mp.setattr(control, "window_action", self.record("window_action"))
-        mp.setattr(control, "close_windows", self.record("close_windows", lambda ws: len(ws)))
-        mp.setattr(control, "launch", self.record("launch"))
-        mp.setattr(control, "media_key", self.record("media_key"))
-        mp.setattr(control, "lock_screen", self.record("lock_screen", True))
-        mp.setattr(control, "system_info", self.record("system_info", "RAM: 8 GB | CPU: 3%"))
-        mp.setattr(control, "plan_force_end", self.record("plan_force_end", lambda t, pid: self._plan(t)))
-        mp.setattr(control, "force_end", self.record("force_end", lambda plan: ([1, 2], [])))
-        mp.setattr(control, "alive", self.record("alive", lambda pids: []))
-        mp.setattr(control, "force_end_elevated", self.record("force_end_elevated", lambda pids: (True, "")))
-        mp.setattr(control, "run_as_admin", self.record("run_as_admin", lambda t: (True, "")))
+        p.display.returns("virtual_screen", SCREEN)
+        p.display.returns("monitors", [Monitor(1, SCREEN, SCREEN, 96, True, "fake")])
 
-        mp.setattr(elevation, "needs_admin", lambda t: str(t) in self.admin_targets)
-        mp.setattr(elevation, "uac_prompt_open", lambda: self.uac)
-        mp.setattr(elevation, "lnk_target", lambda p: ("", False))
+        win = p.windows
+        win.answers("exists", lambda h: int(h or 0) in self.alive)
+        win.answers("is_visible", lambda h: int(h or 0) in self.alive)
+        win.answers("is_minimized", lambda h: any(w.hwnd == h and w.minimized for w in self.windows))
+        win.answers("is_hung", lambda h: h in self.hung)
+        win.answers("foreground", lambda: self.foreground)
+        win.answers("pid", self.pid_of)
+        win.answers("title", lambda h: self.titles.get(h, ""))
+        win.answers("class_name", lambda h: self.classes.get(h, ""))
+        win.answers("frame_bounds", lambda h: self.rects.get(h))
+        win.answers("rect", lambda h: self.rects.get(h) or (0, 0, 0, 0))
+        win.answers("app_windows", lambda own_pid: [w for w in self.windows if w.hwnd in self.alive])
+        win.answers("window_action", self.record("window_action"))
+        win.answers("close_windows", self.record("close_windows", lambda ws: len(ws)))
+        win.answers("active_popup", lambda h: self.popups.get(h, h))
+        win.answers("window_at", self._window_at)
+        win.answers("same_app", self._same_app)
+        win.answers("is_foreground", lambda h: self._same_app(self.foreground, h))
+        win.answers("bring_to_front", self._bring)
+        win.answers("own_click_through", self.record("own_click_through", []))
+        win.answers("end_own_click_through", self.record("end_own_click_through"))
 
-        mp.setattr(volume, "get_volume", lambda: self.volume)
-        mp.setattr(volume, "set_volume", self.record("set_volume", lambda p: p))
-        mp.setattr(volume, "set_mute", self.record("set_mute"))
+        proc = p.processes
+        proc.answers("process_exe", lambda pid: self.exes.get(pid, ""))
+        proc.answers("plan_force_end", self.record("plan_force_end", lambda t, pid: self._plan(t)))
+        proc.answers("force_end", self.record("force_end", lambda plan: ([1, 2], [])))
+        proc.answers("alive", self.record("alive", lambda pids: []))
+        proc.answers("force_end_elevated", self.record("force_end_elevated", lambda pids: (True, "")))
+        proc.answers("is_elevated", lambda pid: pid in self.elevated)
+        proc.answers("self_elevated", lambda: False)
+        proc.answers("uac_prompt_open", lambda: self.uac)
 
-        mp.setattr(inputs, "active_popup", lambda h: self.popups.get(h, h))
-        mp.setattr(inputs, "window_at", self._window_at)
-        mp.setattr(inputs, "root_of", lambda h: h)
-        mp.setattr(inputs, "same_app", self._same_app)
-        mp.setattr(inputs, "is_foreground", lambda h: self._same_app(self.foreground, h))
-        mp.setattr(inputs, "bring_to_front", self._bring)
-        mp.setattr(inputs, "is_elevated", lambda pid: pid in self.elevated)
-        mp.setattr(inputs, "self_elevated", lambda: False)
-        mp.setattr(inputs, "click", self.record("click"))
-        mp.setattr(inputs, "scroll", self.record("scroll"))
-        mp.setattr(inputs, "move_cursor", self.record("move_cursor"))
-        mp.setattr(inputs, "drag", self.record("drag", lambda *a, **k: self.drag_result))
-        mp.setattr(inputs, "glide", self.record("glide", lambda *a, **k: self.glide_result))
-        mp.setattr(inputs, "pinch", self.record("pinch", lambda *a, **k: self.pinch_result))
-        mp.setattr(inputs, "holding", self._holding)
-        mp.setattr(inputs, "press_combo", self._press_combo)
-        mp.setattr(inputs, "type_text", self._type_text)
-        mp.setattr(inputs, "_wait", self._wait)
-        mp.setattr(inputs, "backup_clipboard", lambda: self.clipboard)
-        mp.setattr(inputs, "write_clipboard", self.record("write_clipboard", True))
-        mp.setattr(inputs, "set_clipboard_private_text", self._set_private)
-        mp.setattr(inputs, "clear_clipboard", self.record("clear_clipboard"))
-        mp.setattr(inputs, "clipboard_sequence", lambda: self.clip_seq)
-        mp.setattr(inputs, "clipboard_has_format", lambda f: f in self.clip_formats)
-        mp.setattr(inputs, "get_clipboard_text", lambda: self.clip_text)
-        mp.setattr(inputs, "passthrough_until", 0.0)
+        apps = p.apps
+        apps.answers("find_shortcut", lambda name: self.shortcuts.get(name.strip().lower()))
+        apps.answers("needs_admin", lambda t: str(t) in self.admin_targets)
+        apps.answers("lnk_target", lambda path: ("", False))
+        apps.answers("run_as_admin", self.record("run_as_admin", lambda t: (True, "")))
+        apps.answers("open", self.record("open"))
+        apps.answers("open_elevated", self.record("open_elevated"))
+        apps.answers("open_settings", self.record("open_settings"))
 
-        mp.setattr(uia, "snapshot", self._snapshot)
-        mp.setattr(uia, "focused_element", lambda: self.focused)
-        mp.setattr(uia, "focused_text", self._focused_text)
-        mp.setattr(uia, "document_text", lambda h, n=8000: self.docs.get(h, "")[:n])
+        system = p.system
+        system.answers("media_key", self.record("media_key"))
+        system.answers("lock_screen", self.record("lock_screen", True))
+        system.answers("system_info", self.record("system_info", "RAM: 8 GB | CPU: 3%"))
+        system.answers("get_volume", lambda: self.volume)
+        system.answers("set_volume", self.record("set_volume", lambda pct: pct))
+        system.answers("set_mute", self.record("set_mute"))
 
-        mp.setattr(capture, "grab", self._image)
-        mp.setattr(capture, "grab_without", self._image)
-        mp.setattr(capture, "grab_window", lambda h, frame: self._image(frame))
-        mp.setattr(capture, "excluding", lambda pid: nullcontext())
-        mp.setattr(capture, "draw_marks", self.record("draw_marks"))
+        inp = p.input
+        inp.answers("cursor_pos", lambda: self.cursor)
+        inp.answers("click", self.record("click"))
+        inp.answers("scroll", self.record("scroll"))
+        inp.answers("move_cursor", self.record("move_cursor"))
+        inp.answers("drag", self.record("drag", lambda *a, **k: self.drag_result))
+        inp.answers("glide", self.record("glide", lambda *a, **k: self.glide_result))
+        inp.answers("pinch", self.record("pinch", lambda *a, **k: self.pinch_result))
+        inp.answers("holding", self._holding)
+        inp.answers("parse_combo", parse_combo)
+        inp.answers("press_combo", self._press_combo)
+        inp.answers("type_text", self._type_text)
 
+        clip = p.clipboard
+        clip.answers("backup", lambda: self.clipboard)
+        clip.answers("write", self.record("write_clipboard", True))
+        clip.answers("set_private_text", self._set_private)
+        clip.answers("clear", self.record("clear_clipboard"))
+        clip.answers("sequence", lambda: self.clip_seq)
+        clip.answers("has", lambda kind: kind in self.clip_formats)
+        clip.answers("text", lambda: self.clip_text)
+
+        a11y = p.accessibility
+        a11y.answers("snapshot", self._snapshot)
+        a11y.answers("focused_element", lambda: self.focused)
+        a11y.answers("focused_text", self._focused_text)
+        a11y.answers("document_text", lambda h, n=8000: self.docs.get(h, "")[:n])
+
+        cap = p.capture
+        cap.answers("grab", self._image)
+        cap.answers("grab_without", self._image)
+        cap.answers("grab_window", lambda h, frame: self._image(frame))
+        cap.answers("excluding", lambda pid: nullcontext())
+
+        p.notifications.answers("open_feed", FakeFeed)
+
+        mp.setattr(imaging, "draw_marks", self.record("draw_marks"))
         mp.setattr(agent_mod, "time", clock)
-        mp.setattr(agent_mod, "control_monitor", lambda x, y: SCREEN)
-
+        mp.setattr(agent_mod, "_wait", self._wait)
         mp.setattr(webbrowser, "open", self.record("browser"))
-        mp.setattr(os, "startfile", self.record("startfile"), raising=False)
         mp.setattr(tools_mod, "subprocess", SimpleNamespace(Popen=self.record("popen"),
                                                             list2cmdline=subprocess.list2cmdline))
 
@@ -283,7 +314,7 @@ def _inside(r: tuple[int, int, int, int], x: int, y: int) -> bool:
 
 
 class FakeFeed:
-    """Stands in for notifications.Feed (the Windows notification database)."""
+    """A NotificationFeed (the system's notification list)."""
 
     def __init__(self) -> None:
         self.items: list = []
@@ -308,7 +339,8 @@ class Hooks:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
         self.request = "the user's request"
-        self.folders: Any = None            # the KnownFolders port for the ToolBox (set by the hooks fixture)
+        self.folders: Any = None            # the KnownFolders port (set by the hooks fixture)
+        self.platform: Any = None           # the FakePlatform for the ToolBox (set by the hooks fixture)
 
     def hooks(self, watches: Any = None, task_request: bool = True) -> AppHooks:
         return AppHooks(

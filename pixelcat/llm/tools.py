@@ -38,11 +38,12 @@ from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import urlparse
 
 from .. import paths
+from ..domain import MEDIA_ACTIONS, MODIFIERS, MOUSE_BUTTONS, SETTINGS_PAGES, find_windows, friendly
 from ..settings import Config
 from .agent import AgentError, DesktopAgent, ToolOutput
 
 if TYPE_CHECKING:
-    from ..ports import KnownFolders
+    from ..ports import Platform
 
 log = logging.getLogger(__name__)
 
@@ -71,8 +72,7 @@ AGENT_TOOLS = {"look_at_screen", "read_window", "click", "type_text", "replace_t
 # the chat's eyes on the screen: read-only, so auto mode doesn't count them as actions
 SCREEN_EYES = {"look_at_screen", "read_window", "watch_screen"}
 # keys that may be held while using the mouse
-HELD_KEYS = {"ctrl": 0x11, "control": 0x11, "strg": 0x11, "shift": 0x10, "alt": 0x12, "win": 0x5B, "windows": 0x5B,
-             "meta": 0x5B, "cmd": 0x5B}
+HELD_KEYS = MODIFIERS
 # shortcuts that close things / lock the PC: always a real confirmation (no ALWAYS)
 CLOSING_KEYS = {"alt+f4", "ctrl+w", "ctrl+shift+w", "ctrl+q", "ctrl+f4", "shift+delete", "win+l"}
 # shortcuts that open a command line or system menus: ask even in auto mode
@@ -112,12 +112,13 @@ class AppHooks:
 
 
 class ToolBox:
-    def __init__(self, cfg: Config, hooks: AppHooks, *, folders: KnownFolders) -> None:
+    def __init__(self, cfg: Config, hooks: AppHooks, *, platform: Platform, agent: DesktopAgent | None = None) -> None:
         self.cfg = cfg
         self.hooks = hooks
-        self.folders = folders                # the user's real Documents, Desktop ... (the platform's)
+        self.platform = platform
+        self.folders = platform.folders       # the user's real Documents, Desktop ... (the platform's)
         self.specs: dict[str, ToolSpec] = {}
-        self.agent = DesktopAgent(cfg, hooks.own_pid)
+        self.agent = agent if agent is not None else DesktopAgent(cfg, hooks.own_pid, platform=platform)
         self._admin_seen: set[str] = set()   # apps Windows refused to start without admin rights
         self._register()
 
@@ -128,9 +129,6 @@ class ToolBox:
         self.specs[name] = ToolSpec(name, desc, props, required, confirm, run, describe, llm, background, group)
 
     def _register(self) -> None:
-        from ..adapters.windows import control
-        from ..adapters.windows.inputs import BUTTONS
-
         apps = sorted(self.cfg.apps)
         s = {"type": "string"}
         start_menu = " or any app installed in the Start menu" if self.cfg.allow_start_menu_apps else ""
@@ -138,7 +136,7 @@ class ToolBox:
         self._add("get_time", "Get the current local date and time.", {}, [], "none",
                   self._get_time, lambda a: "tell the time")
         self._add("system_info", "Battery, RAM, CPU, disk space and uptime.", {}, [], "none",
-                  lambda a: control.system_info(), lambda a: "check the system")
+                  lambda a: self.platform.system.system_info(), lambda a: "check the system")
         self._add("list_windows", "List the open app windows (app name and title).", {}, [], "none",
                   self._list_windows, lambda a: "list open windows")
         self._add("list_files", "List files in a folder (aliases as for open_folder).", {"folder": s}, ["folder"], "none",
@@ -180,10 +178,10 @@ class ToolBox:
                   "pictures, music, videos, notes, or a path inside them.", {"folder": s}, ["folder"], "soft",
                   self._open_folder, lambda a: f"open the folder {a['_path']}")
         self._add("open_settings", "Open a Windows Settings page.",
-                  {"page": {"type": "string", "enum": sorted(control.SETTINGS_PAGES)}}, ["page"], "soft",
+                  {"page": {"type": "string", "enum": sorted(SETTINGS_PAGES)}}, ["page"], "soft",
                   self._open_settings, lambda a: f"open the {a['page']} settings")
         self._add("media_control", "Control music/video playback (like the keyboard media keys).",
-                  {"action": {"type": "string", "enum": sorted(control.MEDIA_KEYS)}}, ["action"], "soft",
+                  {"action": {"type": "string", "enum": sorted(MEDIA_ACTIONS)}}, ["action"], "soft",
                   self._media, lambda a: f"press media {a['action'].replace('_', '/')}")
         self._add("copy_to_clipboard", "Copy text to the clipboard.", {"text": s}, ["text"], "soft",
                   lambda a: self.hooks.set_clipboard(a["text"]), lambda a: f"copy {len(a['text'])} characters to your clipboard")
@@ -201,7 +199,7 @@ class ToolBox:
                   "(default 'notes').", {"folder": s, "filename": s, "content": s}, ["filename", "content"], "hard",
                   self._create_note, lambda a: f"create the file {a['_target']} ({len(a['content'])} characters)")
         self._add("lock_screen", "Lock the PC (Windows+L).", {}, [], "hard",
-                  lambda a: "Locked the PC." if control.lock_screen() else "Could not lock the PC.",
+                  lambda a: "Locked the PC." if self.platform.system.lock_screen() else "Could not lock the PC.",
                   lambda a: "lock your PC")
         # seeing and using the desktop ---------------------------------------------------
         eyes = "none" if self._local_model() else "soft"
@@ -222,7 +220,7 @@ class ToolBox:
                   "back, forward. clicks: 2 = double-click, 3 = triple-click (selects a line or paragraph). keys = "
                   "held while clicking ('ctrl' opens a link in a new tab / adds to a selection, 'shift' selects a "
                   "range). hold = seconds to keep the button pressed (a long press).",
-                  {"element": num, "x": pos, "y": pos, "button": {"type": "string", "enum": list(BUTTONS)},
+                  {"element": num, "x": pos, "y": pos, "button": {"type": "string", "enum": list(MOUSE_BUTTONS)},
                    "clicks": num, "double": {"type": "boolean"}, "keys": mods, "hold": {"type": "number"}}, [], "soft",
                   self._click, lambda a: f"{a['_verb']} {a['_what']}", background=True, group="desktop")
         self._add("drag", "DRAG like a hand on the mouse: press at one place, move, let go at another. Moves game "
@@ -384,28 +382,22 @@ class ToolBox:
                     continue
                 raise ToolError(f"missing argument '{req}'")
         if name == "open_app":
-            from ..adapters.windows import control
-
             key = str(a["name"]).strip().lower()
             if key in self.cfg.apps:
                 a["_target"], a["_label"] = list(self.cfg.apps[key]), f"the app '{key}'"
             else:
-                hit = control.find_shortcut(key) if self.cfg.allow_start_menu_apps else None
+                hit = self.platform.apps.find_shortcut(key) if self.cfg.allow_start_menu_apps else None
                 if hit is None:
                     raise ToolError(f"I can't find an app called '{a['name']}'")
                 a["_target"], a["_label"] = hit[1], f"'{hit[0]}' (Start menu)"
             a["name"] = key
-            from ..adapters.windows import elevation
-
-            if elevation.needs_admin(a["_target"]) or str(a["_target"]) in self._admin_seen:
+            if self.platform.apps.needs_admin(a["_target"]) or str(a["_target"]) in self._admin_seen:
                 a["_admin"] = True
                 a["_confirm"] = "hard"          # no ALWAYS for admin things
                 a["_force_confirm"] = True      # ...and asked even in auto mode
         elif name in ("window_action", "close_app"):
-            from ..adapters.windows import control
-
             target = str(a["target"]).strip()
-            wins = control.find_windows(target, control.list_app_windows(self.hooks.own_pid))
+            wins = find_windows(target, self.platform.windows.app_windows(self.hooks.own_pid))
             if not wins:
                 raise ToolError(f"no open window matches '{target}'")
             if name == "close_app":
@@ -427,20 +419,16 @@ class ToolBox:
             except AgentError as exc:
                 raise ToolError(str(exc)) from None
         elif name == "force_end":
-            from ..adapters.windows import control
-
             try:
-                a["_plan"] = control.plan_force_end(str(a["target"]), self.hooks.own_pid)
+                a["_plan"] = self.platform.processes.plan_force_end(str(a["target"]), self.hooks.own_pid)
             except ValueError as exc:
                 raise ToolError(str(exc)) from None
         elif name == "run_as_admin":
-            from ..adapters.windows import control
-
             key = str(a["name"]).strip().lower()
             if key in self.cfg.apps and not re.match(r"^[a-z][a-z0-9+.-]*:", self.cfg.apps[key][0], re.I):
                 a["_target"], a["_label"] = self.cfg.apps[key][0], f"'{key}'"
             else:
-                hit = control.find_shortcut(key)
+                hit = self.platform.apps.find_shortcut(key)
                 if hit is None:
                     raise ToolError(f"I can't find an app called '{a['name']}'")
                 if isinstance(hit[1], str) and hit[1].startswith("shell:"):
@@ -452,18 +440,14 @@ class ToolBox:
                 raise ToolError("empty search")
             a["query"] = q[:300]
         elif name == "open_settings":
-            from ..adapters.windows import control
-
             page = str(a["page"]).strip().lower()
-            if page not in control.SETTINGS_PAGES:
+            if page not in SETTINGS_PAGES:
                 raise ToolError(f"unknown settings page '{page}'")
             a["page"] = page
         elif name == "media_control":
-            from ..adapters.windows import control
-
             act = str(a["action"]).strip().lower().replace("/", "_").replace(" ", "_")
             act = {"play": "play_pause", "pause": "play_pause", "prev": "previous", "skip": "next"}.get(act, act)
-            if act not in control.MEDIA_KEYS:
+            if act not in MEDIA_ACTIONS:
                 raise ToolError(f"unknown media action '{act}'")
             a["action"] = act
         elif name == "copy_to_clipboard":
@@ -594,13 +578,10 @@ class ToolBox:
                 app = "vscode" if p.suffix.lower() in CODE_EXT and self._vscode_exe() else "notepad"
             a["_path"], a["app"] = p, "vscode" if app == "code" else app
 
-    @staticmethod
-    def _vscode_exe() -> str | None:
-        from ..adapters.windows import control, elevation
-
-        hit = control.find_shortcut("visual studio code")
+    def _vscode_exe(self) -> str | None:
+        hit = self.platform.apps.find_shortcut("visual studio code")
         if hit is not None and str(hit[1]).lower().endswith(".lnk"):
-            exe, _runas = elevation.lnk_target(hit[1])
+            exe, _runas = self.platform.apps.lnk_target(hit[1])
             if exe.lower().endswith("code.exe") and os.path.isfile(exe):
                 return exe
         guess = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe")
@@ -636,34 +617,31 @@ class ToolBox:
         return max(lo, min(hi, v)) if v == v else default
 
     @staticmethod
-    def _held(a: dict[str, Any]) -> list[int]:
+    def _held(a: dict[str, Any]) -> list[str]:
         """Keys held down during a mouse action (ctrl-click, shift-drag...)."""
         raw = str(a.get("keys") or "").strip().lower()
         if raw in ("", "none", "no", "nothing"):
             return []
-        out: list[int] = []
+        out: list[str] = []
         for part in re.split(r"[\s+,]+", raw):
             if not part:
                 continue
-            vk = HELD_KEYS.get(part)
-            if vk is None:
+            key = HELD_KEYS.get(part)
+            if key is None:
                 raise ToolError("keys: only ctrl, shift, alt and win can be held with the mouse "
                                 "(to hold other keys use press_keys with hold)")
-            if vk not in out:
-                out.append(vk)
+            if key not in out:
+                out.append(key)
         return out
 
     @staticmethod
-    def _held_note(keys: list[int]) -> str:
-        names = {0x11: "ctrl", 0x10: "shift", 0x12: "alt", 0x5B: "win"}
-        return " holding " + "+".join(names[k] for k in keys) if keys else ""
+    def _held_note(keys: list[str]) -> str:
+        return " holding " + "+".join(keys) if keys else ""
 
     def _spot_arg(self, a: dict[str, Any], prefix: str, verb: str,
                   required: bool = True) -> tuple[tuple, int, str] | None:
         """``{prefix}element`` or ``{prefix}x``/``{prefix}y`` -> (ref for the agent, the window there, a
         description).  The window is the one at that spot now when the screenshot was of the whole screen."""
-        from ..adapters.windows import inputs, win32
-
         ag = self.agent
         eid = self._element_arg(a, prefix + "element")
         if eid is not None:
@@ -688,8 +666,8 @@ class ToolBox:
             raise ToolError(str(exc).replace("x/y", f"{prefix}x/{prefix}y")) from None
         hwnd = ag.shot.hwnd
         if not hwnd:
-            at = inputs.window_at(px, py)
-            window = at if at and win32.window_pid(at) != self.hooks.own_pid else 0
+            at = self.platform.windows.window_at(px, py)
+            window = at if at and self.platform.windows.pid(at) != self.hooks.own_pid else 0
             return ("xy", x, y), window, f"{int(x)},{int(y)} on the screen"
         return ("xy", x, y), hwnd, f"{int(x)},{int(y)} in {ag.describe_hwnd(hwnd)}"
 
@@ -727,8 +705,7 @@ class ToolBox:
         return pts
 
     def _prepare_watch(self, a: dict[str, Any]) -> None:
-        from ..adapters.windows import control, win32
-        from .agent import SENSITIVITY, control_monitor
+        from .agent import SENSITIVITY
 
         ag = self.agent
         until = str(a.get("until") or "change").strip().lower()
@@ -748,20 +725,20 @@ class ToolBox:
         hwnd, screen = 0, None
         if target.lower() in ("screen", "the screen", "whole screen", "desktop", "monitor"):
             if shot is not None and not shot.hwnd:
-                screen = control_monitor(shot.origin[0] + 4, shot.origin[1] + 4)
+                screen = ag.control_monitor(shot.origin[0] + 4, shot.origin[1] + 4)
         elif target:
             self._target(a)
             hwnd = a["_hwnd"]
-        elif shot is not None and (not shot.hwnd or win32.user32.IsWindow(shot.hwnd)):
+        elif shot is not None and (not shot.hwnd or self.platform.windows.exists(shot.hwnd)):
             hwnd = shot.hwnd
             if not hwnd:
-                screen = control_monitor(shot.origin[0] + 4, shot.origin[1] + 4)
+                screen = ag.control_monitor(shot.origin[0] + 4, shot.origin[1] + 4)
         else:
-            wins = [w for w in control.list_app_windows(self.hooks.own_pid) if not w.minimized]
-            if wins and (r := win32.frame_bounds(wins[0].hwnd)):
-                screen = control_monitor((r[0] + r[2]) // 2, (r[1] + r[3]) // 2)
+            wins = [w for w in self.platform.windows.app_windows(self.hooks.own_pid) if not w.minimized]
+            if wins and (r := self.platform.windows.frame_bounds(wins[0].hwnd)):
+                screen = ag.control_monitor((r[0] + r[2]) // 2, (r[1] + r[3]) // 2)
         if not hwnd and screen is None:
-            screen = control_monitor(*win32.cursor_pos())
+            screen = ag.control_monitor(*self.platform.input.cursor_pos())
         if until in ("text", "gone") and not hwnd:
             raise ToolError(f"until='{until}' needs a window to read (target)")
         area = None
@@ -799,12 +776,10 @@ class ToolBox:
             else:
                 a["_hwnd"], a["_label"] = 0, "your screen"
         elif name == "click":
-            from ..adapters.windows.inputs import BUTTONS
-
             button = str(a.get("button") or "left").strip().lower()
             button = {"primary": "left", "secondary": "right", "wheel": "middle", "x1": "back", "x2": "forward",
                       "mouse4": "back", "mouse5": "forward"}.get(button, button)
-            if button not in BUTTONS:
+            if button not in MOUSE_BUTTONS:
                 raise ToolError("button must be left, right, middle, back or forward")
             count = int(self._num(a, "clicks", 1, 1, 3))
             if str(a.get("double")).lower() in ("true", "1", "yes"):
@@ -901,8 +876,6 @@ class ToolBox:
             if ag.is_command_line(a["_hwnd"]):
                 a["_force_confirm"] = True
         elif name == "press_keys":
-            from ..adapters.windows import inputs
-
             raw = str(a["keys"]).strip()
             parts = [p for p in re.split(r"[\s,;]+", re.sub(r"\s*\+\s*", "+", raw)) if p]
             if not parts or len(parts) > 20:
@@ -910,7 +883,7 @@ class ToolBox:
             combos = []
             for p in parts:
                 try:
-                    combos.append((p.lower(), inputs.parse_combo(p)))
+                    combos.append((p.lower(), self.platform.input.parse_combo(p)))
                 except ValueError as exc:
                     raise ToolError(str(exc)) from None
             a["_combos"], a["_keys"] = combos, " ".join(c[0] for c in combos)
@@ -952,7 +925,6 @@ class ToolBox:
             a["seconds"] = max(0.5, min(10.0, secs))
 
     def _prepare_wait(self, a: dict[str, Any]) -> None:  # noqa: C901 - one branch per event
-        from ..adapters.windows.notifications import friendly
         from .watch import DEFAULT_MINUTES, KINDS, MAX_MINUTES, Watch
 
         if self.hooks.watches is None:
@@ -1260,14 +1232,14 @@ class ToolBox:
         before = {w.hwnd for w in self.agent.windows()}
         target = a["_target"]
         if not isinstance(target, list):  # Start-menu shortcut or Store app (shell:AppsFolder\\AppID)
-            os.startfile(str(target))     # (needs-admin apps were confirmed by the user: Windows shows UAC)
+            self.platform.apps.open(str(target))     # (needs-admin apps were confirmed by the user: Windows shows UAC)
             msg = f"Opened {a['_label']}."
         else:
             first = target[0]
             if re.match(r"^[a-z][a-z0-9+.-]*:", first, re.I) and not re.match(r"^[a-z]:\\", first, re.I):
-                os.startfile(first)  # protocol URI such as ms-settings: or https:
+                self.platform.apps.open(first)  # protocol URI such as ms-settings: or https:
             elif a.get("_admin"):
-                os.startfile(first, arguments=subprocess.list2cmdline(target[1:]))  # Windows shows its UAC prompt
+                self.platform.apps.open_elevated(first, target[1:])  # Windows shows its UAC prompt
             else:
                 try:
                     subprocess.Popen(target, shell=False, close_fds=True)
@@ -1282,63 +1254,46 @@ class ToolBox:
             msg += " Windows asks for admin rights now (UAC) - only the user can answer that."
         return msg + self.agent.wait_for_window(before, a["name"], timeout=20.0 if a.get("_admin") else 8.0)
 
-    @staticmethod
-    def _force_end(a: dict[str, Any]) -> str:
-        from ..adapters.windows import control
-
+    def _force_end(self, a: dict[str, Any]) -> str:
         plan = a["_plan"]
         name = ", ".join(plan.exes[:3])
-        ended, denied = control.force_end(plan)
+        ended, denied = self.platform.processes.force_end(plan)
         a["_denied"] = denied   # the app asks the user before using admin rights for these
         msg = f"Force-ended {name}: {len(ended)} process{'es' if len(ended) != 1 else ''} stopped."
         if denied:
             msg += f" {len(denied)} process(es) can only be ended with admin rights."
-        left = control.alive(ended)
+        left = self.platform.processes.alive(ended)
         if left:
             msg += f" ({len(left)} still shutting down.)"
         return msg
 
-    @staticmethod
-    def force_end_admin(denied: list[int]) -> str:
+    def force_end_admin(self, denied: list[int]) -> str:
         """Second step of /force end, only after the user said yes to using admin rights."""
-        from ..adapters.windows import control
-
-        ok, why = control.force_end_elevated(denied)
-        still = control.alive(denied)
+        ok, why = self.platform.processes.force_end_elevated(denied)
+        still = self.platform.processes.alive(denied)
         if ok and not still:
             return f"With admin rights: the remaining {len(denied)} process(es) are gone too."
         if ok:
             return f"{len(still)} process(es) are still running even with admin rights."
         return f"{len(denied)} process(es) need admin rights, but {why}."
 
-    @staticmethod
-    def _run_as_admin(a: dict[str, Any]) -> str:
-        from ..adapters.windows import control
-
-        ok, why = control.run_as_admin(a["_target"])
+    def _run_as_admin(self, a: dict[str, Any]) -> str:
+        ok, why = self.platform.apps.run_as_admin(a["_target"])
         return f"Started {a['_label']} as administrator." if ok else f"Couldn't start {a['_label']} as admin: {why}."
 
     def _list_windows(self, _a: dict[str, Any]) -> str:
-        from ..adapters.windows import control
-
-        wins = control.list_app_windows(self.hooks.own_pid)
+        wins = self.platform.windows.app_windows(self.hooks.own_pid)
         if not wins:
             return "No app windows are open."
         return "Open windows: " + " | ".join(w.label() for w in wins[:25])
 
-    @staticmethod
-    def _window_action(a: dict[str, Any]) -> str:
-        from ..adapters.windows import control
-
-        control.window_action(a["_win"], a["action"])
+    def _window_action(self, a: dict[str, Any]) -> str:
+        self.platform.windows.window_action(a["_win"], a["action"])
         past = {"focus": "Switched to", "minimize": "Minimized", "maximize": "Maximized", "restore": "Restored"}
         return f"{past[a['action']]} {a['_win'].label()}."
 
-    @staticmethod
-    def _close_app(a: dict[str, Any]) -> str:
-        from ..adapters.windows import control
-
-        n = control.close_windows(a["_wins"])
+    def _close_app(self, a: dict[str, Any]) -> str:
+        n = self.platform.windows.close_windows(a["_wins"])
         return f"Asked {n} window(s) to close: " + "; ".join(w.label() for w in a["_wins"])
 
     def _search_web(self, a: dict[str, Any]) -> str:
@@ -1359,18 +1314,12 @@ class ToolBox:
         first = text.split("\n", 1)[0].removeprefix("Web page:").strip()
         return ToolOutput(text, display=f"🌐 Read {first or a['url']}")
 
-    @staticmethod
-    def _open_settings(a: dict[str, Any]) -> str:
-        from ..adapters.windows import control
-
-        control.launch(control.SETTINGS_PAGES[a["page"]])
+    def _open_settings(self, a: dict[str, Any]) -> str:
+        self.platform.apps.open_settings(a["page"])
         return f"Opened the {a['page']} settings."
 
-    @staticmethod
-    def _media(a: dict[str, Any]) -> str:
-        from ..adapters.windows import control
-
-        control.media_key(a["action"])
+    def _media(self, a: dict[str, Any]) -> str:
+        self.platform.system.media_key(a["action"])
         return f"Pressed media {a['action'].replace('_', '/')}."
 
     @staticmethod
@@ -1378,9 +1327,8 @@ class ToolBox:
         webbrowser.open(a["url"], new=2)
         return f"Opened {a['url']} in the browser."
 
-    @staticmethod
-    def _open_folder(a: dict[str, Any]) -> str:
-        os.startfile(str(a["_path"]))
+    def _open_folder(self, a: dict[str, Any]) -> str:
+        self.platform.apps.open(str(a["_path"]))
         return f"Opened folder {a['_path']}."
 
     @staticmethod
@@ -1399,24 +1347,15 @@ class ToolBox:
             fh.write(a["content"])
         return f"Created {target}."
 
-    @staticmethod
-    def _get_volume(_a: dict[str, Any]) -> str:
-        from ..adapters.windows import volume
-
-        level, muted = volume.get_volume()
+    def _get_volume(self, _a: dict[str, Any]) -> str:
+        level, muted = self.platform.system.get_volume()
         return f"Volume is {level}%{' (muted)' if muted else ''}."
 
-    @staticmethod
-    def _set_volume(a: dict[str, Any]) -> str:
-        from ..adapters.windows import volume
+    def _set_volume(self, a: dict[str, Any]) -> str:
+        return f"Volume set to {self.platform.system.set_volume(a['level'])}%."
 
-        return f"Volume set to {volume.set_volume(a['level'])}%."
-
-    @staticmethod
-    def _mute(a: dict[str, Any]) -> str:
-        from ..adapters.windows import volume
-
-        volume.set_mute(a["muted"])
+    def _mute(self, a: dict[str, Any]) -> str:
+        self.platform.system.set_mute(a["muted"])
         return "Sound muted." if a["muted"] else "Sound unmuted."
 
     def _set_timer(self, a: dict[str, Any]) -> str:
