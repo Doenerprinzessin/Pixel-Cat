@@ -111,6 +111,21 @@ def test_start_quiet_and_at_the_saved_place(make_app) -> None:  # type: ignore[n
     assert pet.brain.state == S.LOAFING and pet.brain.x == 500
 
 
+def test_the_note_about_an_unreadable_save_goes_with_the_app(make_app, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # (ProgressIO is no QObject: without the app as the timer's context the note would still pop up after the app
+    # was deleted)
+    from PySide6.QtCore import QTimer
+
+    from pixelcat import persistence
+
+    later: list[tuple] = []
+    monkeypatch.setattr(QTimer, "singleShot", lambda *a: later.append(a))
+    monkeypatch.setattr(persistence, "last_load", "unreadable")
+    pet = make_app()
+    pet.start()
+    assert (3000, pet, pet.progress_io.tell_unreadable_save) in later
+
+
 def test_a_saved_place_off_every_screen_is_ignored(make_app) -> None:  # type: ignore[no-untyped-def]
     pet = make_app(SavedState(autostart_asked=True, pos_x=-9000, pos_y=200))
     pet.start()

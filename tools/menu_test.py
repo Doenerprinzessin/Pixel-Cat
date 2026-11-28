@@ -507,7 +507,7 @@ def main() -> int:
         pops.append((title, text, ok, cancel, picture, fp))
         return fp
 
-    pet._popup = fake_popup  # type: ignore[method-assign]
+    pet.popups.popup = fake_popup  # type: ignore[method-assign]
     pet.selftest = 0
     m._activate(row("game:laser"))
     check("the first time a game is played, a little window explains it first", bool(pops) and not began

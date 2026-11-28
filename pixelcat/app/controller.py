@@ -271,7 +271,7 @@ class PixelCatApp(QObject):
         if self.saved.watches and not self.selftest:
             self.watches.restore(self.saved.watches)   # long tasks from before a restart keep going
         if persistence.last_load == "unreadable" and not self.selftest:
-            QTimer.singleShot(3000, self.progress_io.tell_unreadable_save)
+            QTimer.singleShot(3000, self, self.progress_io.tell_unreadable_save)   # (dropped if the app goes first)
         if self.selftest:
             QTimer.singleShot(int(self.selftest * 1000), self._selftest_finish)
         if warm_model and self.cfg.preload_on_start and not self.selftest:
