@@ -36,7 +36,7 @@ log = logging.getLogger("pixelcat.app")   # (the app's logger name; tests look f
 class ChatUI(QObject):
     """The chat window (``chat``; None until it's first needed) and the saved chats (``chats``).  ``chat_id``,
     ``chat_created``: the open chat in the chat history (None, 0: not saved yet); ``chat_sig``: what was saved last
-    (unchanged: not written again).  A new chat or a saved chat opened (the controller) sets them too.
+    (unchanged: not written again).  A new chat or a saved chat opened (the session) sets them too.
 
     The window's buttons call back into the controller at call time: ``on_user_message(text)``, ``cancel_chat()``,
     ``new_chat()``, ``set_auto_mode(on)``, ``cancel_watch(wid)``, ``open_saved_chat(cid)``; and ``save()``,
