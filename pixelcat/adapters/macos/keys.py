@@ -53,6 +53,15 @@ KEYCODES.update({f"f{i}": code for i, code in enumerate(
 KEYCODES.update({name: MODIFIERS[canon][0] for name, canon in MODIFIER_NAMES.items()})
 KEYCODES.update({name: MEDIA_BASE + t for name, t in NX_KEYTYPE.items()})
 
+# every other name parse_combo knows for a key -> its canonical name (a modifier's, else the key code's first
+# name above): the Mac profile's key_aliases, so the confirmation lists match any spelling ("strg+cmd+q")
+_FIRST: dict[int, str] = {}
+for _name, _code in KEYCODES.items():
+    _FIRST.setdefault(_code, _name)
+ALIASES: dict[str, str] = {name: canon for name, canon in MODIFIER_NAMES.items() if name != canon}
+ALIASES.update({name: _FIRST[code] for name, code in KEYCODES.items()
+                if name not in MODIFIER_NAMES and _FIRST[code] != name})
+
 # names that stand for one character (looked up in the layout)
 CHAR_NAMES = {"plus": "+", "minus": "-", "comma": ",", "period": ".", "dot": "."}
 

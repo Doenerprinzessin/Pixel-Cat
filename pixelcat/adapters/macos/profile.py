@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from ...domain import WINDOWS, Profile
+from . import keys
 
 _OPEN = "/usr/bin/open"
 
-# key names the user (or the model) may write -> the canonical names the ports know (domain.MODIFIERS)
-KEY_ALIASES = (("command", "win"), ("cmd", "win"), ("meta", "win"), ("option", "alt"), ("opt", "alt"))
+# key names the user (or the model) may write -> the canonical names the ports know (domain.MODIFIERS): every
+# alias the Mac keyboard input accepts ("cmd", "option", "strg", "escape", "spacebar", "back", "del" ...)
+KEY_ALIASES = tuple(keys.ALIASES.items())
 
 _normalize = Profile(key_aliases=KEY_ALIASES).normalize_combo
 
@@ -15,6 +17,8 @@ CLOSING_KEYS = {_normalize(k) for k in WINDOWS.closing_keys} | {
     "win+q", "win+w", "shift+win+w", "alt+win+w",       # quit the app, close the window / all windows
     "ctrl+win+q", "shift+win+q", "alt+shift+win+q",     # lock the screen, log out
     "win+delete", "shift+win+delete", "alt+shift+win+delete",   # move to the Bin, empty the Bin
+    "win+backspace", "shift+win+backspace", "alt+shift+win+backspace",   # (the Mac's Delete key is backspace)
+    "alt+win+delete", "alt+win+backspace",              # delete at once, without the Bin
 }
 # shortcuts that open a command line or system menus: ask even in auto mode
 SYSTEM_KEYS = {_normalize(k) for k in WINDOWS.system_keys} | {
