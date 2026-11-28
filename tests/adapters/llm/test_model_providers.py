@@ -113,6 +113,19 @@ def test_error_text_the_providers_own_errors_speak_for_themselves() -> None:
             assert prov.error_text(exc, "fallback") == (str(exc) if exc in own[p] else "fallback"), (p, exc)
 
 
+def test_a_module_still_being_imported_counts_as_not_loaded(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import types
+
+    # (another thread's import puts the module in sys.modules before its names are there)
+    for name in ("copilot_client", "github_signin", "ant_tool", "chatgpt_signin"):
+        full = f"pixelcat.adapters.llm.{name}"
+        monkeypatch.setitem(sys.modules, full, types.ModuleType(full))
+    for prov in PROVIDERS.values():
+        assert not prov.active()
+        prov.shutdown(0.1)
+        assert prov.error_text(RuntimeError("x"), "fallback") == "fallback"
+
+
 def test_copilot_shutdown_stops_the_runtime_once_it_was_loaded(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from pixelcat.adapters.llm import copilot_client
 

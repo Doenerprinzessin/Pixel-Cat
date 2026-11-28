@@ -157,9 +157,10 @@ def test_ext_auth(pet, p: str, creds: dict, settings: dict, auth: str) -> None: 
     (Kind("ext_offline"), "couldn't reach the provider"), (type("APITimeoutError", (Exception,), {})(), "couldn't reach"),
     (type("PermissionDeniedError", (Exception,), {})(), "isn't allowed"), (ValueError("boom"), "That didn't work: boom")])
 def test_key_problems(exc: Exception, text: str) -> None:
-    from pixelcat.app import PixelCatApp
+    from pixelcat.adapters.llm import build_providers
 
-    assert text in PixelCatApp._key_problem(exc)
+    for p in ("anthropic", "openai"):                    # (the API-key providers tell them the same way)
+        assert text in build_providers()[p].key_problem(exc)
 
 
 @pytest.mark.parametrize(("exc", "text"), [
@@ -167,9 +168,9 @@ def test_key_problems(exc: Exception, text: str) -> None:
     (Kind("ext_offline"), "couldn't reach GitHub"), (Kind("install", "x" * 300), "x" * 200),
     (Kind("other", "weird"), "That didn't work: weird")])
 def test_copilot_problems(exc: Exception, text: str) -> None:
-    from pixelcat.app import PixelCatApp
+    from pixelcat.adapters.llm import build_providers
 
-    got = PixelCatApp._copilot_problem(exc)
+    got = build_providers()["copilot"].key_problem(exc)
     assert text in got and len(got) <= 200 + 30
 
 
@@ -591,3 +592,53 @@ def test_the_model_banner_for_a_chatgpt_plan(pet) -> None:  # type: ignore[no-un
     pet._show_model_banner()
     assert chat.model_bar.isVisibleTo(chat) and "Using ChatGPT plan" in chat.model_bar.text()
     assert external.OPENAI.usage_url in chat.model_bar.text()
+
+
+# ---------------------------------------------------------------- the providers' descriptions are the injected ones
+def _providers(**changes):  # type: ignore[no-untyped-def]
+    """The real providers, OpenAI's description changed (``changes``: for the others, by key)."""
+    import dataclasses
+
+    from pixelcat.adapters.llm import build_providers
+
+    providers = build_providers()
+    for p, fields in changes.items():
+        providers[p].info = dataclasses.replace(providers[p].info, **fields)
+    return providers
+
+
+ZED = {"brand": "Zed", "name": "ZedCo", "key_state": "Zed key in", "key_removed": "The Zed key is gone.",
+       "out_of_credits": "Zed credits are gone.", "usage_url": "https://zed.example/usage"}
+
+
+def test_the_menu_popups_and_banner_tell_the_injected_description(make_app, sync_background, app_env) -> None:  # type: ignore[no-untyped-def]
+    pet = make_app(providers=_providers(openai=ZED))
+    sync_background(pet)
+    pet.creds.set("openai_key", "k")
+    pet._ext_p("openai")["models"] = MODELS
+    menu = {k.key: k for k in pet._external_menu().children}
+    assert menu["ext_openai"].label == "Zed (ZedCo)" and menu["ext_anthropic"].label == "Claude (Anthropic)"
+    assert menu["ext_openai"].children[0].label == "Zed key in"
+    assert [i.label for i in pet._ext_chat_items()] == ["Zed models"]
+    _task(pet)
+    pet._limit_popup("openai", {"why": "rate"})
+    assert "ZedCo's rate limit" in pet._popups[-1].text.text() and "ZedCo's rate limit" in pet.chat.msgs[-1].text
+    pet._limit_popup("openai", {"why": "credits"})
+    assert "Zed credits are gone." in pet._popups[-1].text.text()
+    pet._limit_popup("openai", {"why": "plan"})
+    pet._popups[-1].ok.click()
+    assert app_env.opened_urls[-1] == "https://zed.example/usage"
+    pet.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r"})
+    pet._ext_p("openai")["auth"] = "chatgpt"
+    pet.cfg.model = "openai:m1"
+    pet._show_model_banner()
+    assert "https://zed.example/usage" in pet.chat.model_bar.text()
+    pet._ext_disconnect("openai", only_key=True)
+    assert pet._popups[-1].title == "Zed" and pet._popups[-1].text.text().endswith("The Zed key is gone.</p>")
+
+
+def test_a_provider_without_a_sign_in_offers_none(make_app) -> None:  # type: ignore[no-untyped-def]
+    pet = make_app(providers=_providers(anthropic={"signin_kind": ""}))
+    keys = [k.key for k in pet._provider_menu("anthropic").children]
+    assert "ext:key:anthropic" in keys and not [k for k in keys if k.startswith("ext:signin:")]
+    assert "ext:signin:openai" in [k.key for k in pet._provider_menu("openai").children]

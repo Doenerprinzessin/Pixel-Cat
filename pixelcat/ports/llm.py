@@ -251,3 +251,7 @@ class ModelProvider(Protocol):
     def error_text(self, exc: BaseException, fallback: str) -> str:
         """What to show for a failure: the provider's own errors say it themselves, others get ``fallback``."""
         ...
+
+    def key_problem(self, exc: BaseException) -> str:
+        """What to show when a key / token was refused, or the model list couldn't be loaded with it."""
+        ...

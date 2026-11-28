@@ -40,7 +40,7 @@ from .llm.tools import SCREEN_EYES, AppHooks, ToolBox, ToolError, ToolSpec
 from .llm.watch import Watch, WatchManager
 from .logsetup import RateLimitedLogger
 from .persistence import SavedState, save_state
-from .ports import ChatRequest, ModelProvider, Platform
+from .ports import ChatRequest, ModelProvider, Platform, ProviderInfo
 from .settings import Config
 from .sprites.library import SpriteLibrary
 from .ui.ball import BallOverlay
@@ -212,7 +212,7 @@ class PixelCatApp(QObject):
         self._gh_wait_pop: Any = None
         self._cop_pop: Any = None
         self._quota_t = 0.0
-        for _p in external.PROVIDERS:                    # the external models' names (for labels)
+        for _p in self._external:                        # the external models' names (for labels)
             for _m in self._ext_models(_p):
                 external.NAMES[f"{_p}:{_m['id']}"] = _m["name"]
         self.menu.triggered.connect(self._on_menu)
@@ -1016,7 +1016,7 @@ class PixelCatApp(QObject):
         ext = external.parse(tag)
         if ext:
             if not self._ext_auth(ext[0]):
-                self.chat.add("info", f"{external.PROVIDERS[ext[0]].brand} models aren't connected - Settings > "
+                self.chat.add("info", f"{self.providers[ext[0]].info.brand} models aren't connected - Settings > "
                                       "AI model > External AI models.")
                 return
             self._set_chat_model(None if tag == self.cfg.model else tag)
@@ -1070,6 +1070,11 @@ class PixelCatApp(QObject):
         return next(prov for prov in self.providers.values() if prov.info.local)
 
     @property
+    def _external(self) -> dict[str, ProviderInfo]:
+        """The external (online) providers' descriptions by key, in the settings' order."""
+        return {p: prov.info for p, prov in self.providers.items() if not prov.info.local}
+
+    @property
     def _credit_p(self) -> str:
         """The provider whose plan counts AI credits (Copilot): the credit limit and the plan's quota are its."""
         return next(p for p, prov in self.providers.items() if prov.info.credits)
@@ -1097,7 +1102,7 @@ class PixelCatApp(QObject):
     def _external_menu(self) -> MenuItem:
         """Settings -> AI model -> External AI models."""
         st = self.saved.ext_settings
-        kids = [self._provider_menu(p) for p in external.PROVIDERS]
+        kids = [self._provider_menu(p) for p in self._external]
         kids.append(MenuItem("ext:thinking", "Thinking", checked=bool(st.get("thinking", True)), separator_before=True))
         kids.append(MenuItem("ext_effort", "Effort", "bolt_on", children=[
             MenuItem(f"ext:effort:{k}", v, radio=True, checked=st.get("effort", "medium") == k)
@@ -1108,7 +1113,7 @@ class PixelCatApp(QObject):
                         note="BEST" if self._advice().online else "")
 
     def _provider_menu(self, p: str) -> MenuItem:
-        prov = external.PROVIDERS[p]
+        prov = self.providers[p].info
         auth = self._ext_auth(p)
         b = self._budget(p)
         fmt = external.fmt_tokens
@@ -1297,8 +1302,9 @@ class PixelCatApp(QObject):
 
         b = self._budget(p)
         fmt = external.fmt_tokens
-        dlg = AmountDialog(f"Token limit for {external.PROVIDERS[p].brand} models",
-                           f"How many tokens may I use for {external.PROVIDERS[p].brand} models "
+        brand = self.providers[p].info.brand
+        dlg = AmountDialog(f"Token limit for {brand} models",
+                           f"How many tokens may I use for {brand} models "
                            f"{external.PERIODS[b.period].lower()}? For example <b>3.5M</b>, <b>750k</b> or "
                            f"<b>2000000</b> - from {fmt(external.MIN_LIMIT)} up to {fmt(external.MAX_LIMIT)}.",
                            "e.g. 3.5M", fmt(b.limit) if b.limit else "")
@@ -1403,9 +1409,7 @@ class PixelCatApp(QObject):
             if isinstance(res, Exception):
                 log.warning("couldn't load the %s models: %s", p, res)
                 if announce:
-                    self._popup("Models", self._paras([html.escape(
-                        self._copilot_problem(res) if prov.info.key_kind == "token" else self._key_problem(res))]),
-                        "OK")
+                    self._popup("Models", self._paras([html.escape(prov.key_problem(res))]), "OK")
                 return
             self._set_ext_models(p, res)
             log.info("%s: %d models", p, len(res))
@@ -1416,7 +1420,7 @@ class PixelCatApp(QObject):
         self._in_background(work, got)
 
     def _ext_connected(self, p: str) -> None:
-        prov = external.PROVIDERS[p]
+        prov = self.providers[p].info
         n = len(self._ext_models(p))
         pop = self._popup(f"{prov.brand} is connected", self._paras([
             f"{n} {prov.brand} models are ready." if n else f"{prov.brand} is ready.",
@@ -1429,17 +1433,6 @@ class PixelCatApp(QObject):
         self._open_menu()
         self.menu.expanded = set(keys)
         self.menu.refresh(self._menu_items())
-
-    @staticmethod
-    def _key_problem(exc: Exception) -> str:
-        name, kind = type(exc).__name__, getattr(exc, "kind", "")
-        if "Authentication" in name or kind == "auth":
-            return "That key wasn't accepted - check that you copied all of it."
-        if "Connection" in name or "Timeout" in name or kind == "ext_offline":
-            return "I couldn't reach the provider - is the internet on?"
-        if "PermissionDenied" in name:
-            return "That key isn't allowed to use the models."
-        return f"That didn't work: {str(exc)[:160]}"
 
     def _ask_key(self, p: str) -> None:
         prov = self.providers[p].info
@@ -1478,7 +1471,7 @@ class PixelCatApp(QObject):
             if isinstance(res, Exception):
                 log.info("%s key refused: %s", p, type(res).__name__)
                 try:
-                    dlg.checked(False, self._key_problem(res))
+                    dlg.checked(False, prov.key_problem(res))
                 except RuntimeError:
                     pass                                 # (the dialog was closed meanwhile)
                 return
@@ -1681,9 +1674,10 @@ class PixelCatApp(QObject):
 
     # ---------------------------------------------------------------- GitHub Copilot
     def _signin_available(self, p: str) -> bool:
-        """Whether "Sign in with ..." can be offered (GitHub's needs this build's app id)."""
+        """Whether "Sign in with ..." can be offered: the provider has one (GitHub's needs this build's app id)."""
         prov = self.providers[p]
-        return prov.info.signin_kind != "device" or prov.signin().available()
+        kind = prov.info.signin_kind
+        return bool(kind) and (kind != "device" or prov.signin().available())
 
     def _runtime_ready(self, p: str, then: Any) -> None:
         """Copilot needs GitHub's runtime (about 100 MB): get it first if it isn't here yet."""
@@ -1742,7 +1736,7 @@ class PixelCatApp(QObject):
             if isinstance(res, Exception):
                 log.info("GitHub token refused: %s", getattr(res, "kind", "") or type(res).__name__)
                 try:
-                    dlg.checked(False, self._copilot_problem(res))
+                    dlg.checked(False, prov.key_problem(res))
                 except RuntimeError:
                     pass                                 # (the dialog was closed meanwhile)
                 return
@@ -1761,18 +1755,6 @@ class PixelCatApp(QObject):
             if prov.info.credits:
                 self._copilot_quota(force=True)
         self._in_background(lambda: prov.check_key(key), got)
-
-    @staticmethod
-    def _copilot_problem(exc: Exception) -> str:
-        kind = getattr(exc, "kind", "")
-        if kind == "auth":
-            return "GitHub didn't accept that token - check that you copied all of it (and that it hasn't expired)."
-        if kind == "denied":
-            return ("That can't use Copilot. A token needs the Copilot Requests permission (Account permissions), and "
-                    "your Copilot plan or organization has to allow it.")
-        if kind == "ext_offline":
-            return "I couldn't reach GitHub - is the internet on?"
-        return str(exc)[:200] if kind == "install" else f"That didn't work: {str(exc)[:160]}"
 
     def _device_signin(self, p: str) -> None:
         pop = self._popup("Sign in with GitHub", self._paras([
@@ -1926,7 +1908,7 @@ class PixelCatApp(QObject):
             stop()
 
     def _ext_disconnect(self, p: str, only_key: bool = False) -> None:
-        prov = external.PROVIDERS[p]
+        prov = self.providers[p].info
         auth = self._ext_auth(p)
         s = self._ext_p(p)
         if only_key or auth == "key":
@@ -1967,7 +1949,7 @@ class PixelCatApp(QObject):
     def _ext_chat_items(self) -> list[MenuItem]:
         """The chat's model menu: the connected providers' models."""
         out = []
-        for p, prov in external.PROVIDERS.items():
+        for p, prov in self._external.items():
             ms = self._ext_models(p) if self._ext_auth(p) else []
             if ms:
                 out.append(MenuItem(f"chatmodels_{p}", f"{prov.brand} models", "chat", separator_before=not out,
@@ -2000,7 +1982,7 @@ class PixelCatApp(QObject):
         w = QtChatWorker(functools.partial(self.providers[p].new_chat, req), provider=p, model=mid, local=False)
         if prov.credits:
             w.credits.connect(self._on_copilot_credits)
-            w.permission.connect(self._copilot_permission)
+        w.permission.connect(self._copilot_permission)          # (only Copilot's own tools ask)
         w.used.connect(self._on_ext_used)
         w.status.connect(self._on_status)
         return w
@@ -2065,7 +2047,7 @@ class PixelCatApp(QObject):
     def _limit_card(self, p: str) -> None:
         assert self.chat is not None
         b = self._budget(p)
-        prov = external.PROVIDERS[p]
+        prov = self.providers[p].info
         fmt = external.fmt_tokens
         used, allowed, nxt = b.used(), b.allowed(), b.next_allowed()
         text = (f"🐾 <b>Token limit reached.</b> I've used {fmt(used)} of your {fmt(allowed)}-token limit for "
@@ -2083,7 +2065,7 @@ class PixelCatApp(QObject):
             b = self._budget(p)
             new = b.raise_limit()
             self.save()
-            self.chat.add("info", f"Okay - the {external.PROVIDERS[p].brand} limit is {external.fmt_tokens(new)} until "
+            self.chat.add("info", f"Okay - the {self.providers[p].info.brand} limit is {external.fmt_tokens(new)} until "
                                   f"it resets {external.fmt_reset(b.reset_at())}.")
             self._request()
         elif key == "switch":
@@ -2099,7 +2081,8 @@ class PixelCatApp(QObject):
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
 
-        prov = external.PROVIDERS.get(p, external.ANTHROPIC)
+        ext = self._external
+        prov = ext.get(p) or external.ANTHROPIC     # (an unknown provider: told Anthropic's way)
         why = info.get("why", "")
         ok, url = "SWITCH MODEL", None
         if why == "own":
@@ -2132,7 +2115,7 @@ class PixelCatApp(QObject):
             ok, url = "COPILOT SETTINGS", prov.usage_url
         elif why == "credits":
             title = "Credits used up"
-            lines = [external.PROVIDERS.get(p, external.OPENAI).out_of_credits]
+            lines = [(ext.get(p) or external.OPENAI).out_of_credits]
             ok, url = "OPEN BILLING", external.BILLING.get(p)
         else:
             title = "Spend limit reached"
@@ -2160,7 +2143,7 @@ class PixelCatApp(QObject):
             return
         text = self.model_status.banner()
         ext = external.parse(self._effective_model())
-        prov = external.PROVIDERS[ext[0]] if ext else None
+        prov = self.providers[ext[0]].info if ext else None
         if (text is None and prov is not None and prov.signin_kind == "browser"
                 and self._ext_auth(prov.key) == "chatgpt"):
             self.chat.set_model_banner("Using ChatGPT plan", ("Manage usage", prov.usage_url))

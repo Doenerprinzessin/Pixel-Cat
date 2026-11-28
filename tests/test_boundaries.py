@@ -170,6 +170,13 @@ def _top(name: str) -> str:
     return name.split(".")[0]
 
 
+def _not_for_the_llm_adapter(name: str) -> bool:
+    """Another adapter (any ``pixelcat.adapters.*`` but the llm one; the package itself is just its parent) or the
+    wiring: the model providers load neither, whether they import it at the top or in a function."""
+    return ((_is(name, "pixelcat.adapters") and name != "pixelcat.adapters" and not _is(name, "pixelcat.adapters.llm"))
+            or _is(name, "pixelcat.bootstrap"))
+
+
 def _stdlib(name: str) -> bool:
     return _top(name) in sys.stdlib_module_names and _top(name) not in WIN32
 
@@ -299,9 +306,9 @@ def test_the_llm_adapter_exists():
 @pytest.mark.parametrize("path", LLM_ADAPTER, ids=_rel)
 def test_llm_adapter_is_qt_free(path):
     bad = sorted(name for name in _scan(path).imports
-                 if _top(name) in QT or name in QT_MODULES | QT_VIA_MODULES or _is(name, "pixelcat.adapters.windows")
-                 or _is(name, "pixelcat.adapters.null") or _is(name, "pixelcat.bootstrap"))
-    assert not bad, f"pixelcat/{_rel(path)} imports {bad}; the model providers stay Qt-free (the app bridges to Qt)"
+                 if _top(name) in QT or name in QT_MODULES | QT_VIA_MODULES or _not_for_the_llm_adapter(name))
+    assert not bad, (f"pixelcat/{_rel(path)} imports {bad}; the model providers stay Qt-free (the app bridges to Qt) "
+                     "and use no other adapter")
 
 
 @pytest.mark.parametrize("path", LLM_ADAPTER, ids=_rel)
@@ -343,6 +350,23 @@ def test_import_scanner_sees_relative_lazy_typing_and_dynamic_imports(tmp_path):
     assert scan.dynamic == [14] and scan.startfile == [15, 16]
     (pkg / "y.py").write_text("from os import startfile\n", encoding="utf-8")
     assert _scan(pkg / "y.py", tmp_path).startfile
+
+
+def test_the_llm_adapter_check_sees_another_adapter_imported_in_a_function(tmp_path):
+    pkg = tmp_path / "pixelcat" / "adapters" / "llm"
+    pkg.mkdir(parents=True)
+    src = pkg / "z.py"
+    src.write_text(textwrap.dedent("""
+        from . import base
+        from .. import llm
+        def f():
+            import pixelcat.adapters.macos
+            from .. import windows
+            from ... import bootstrap
+            from ...adapters.llm import signin
+    """), encoding="utf-8")
+    bad = {name for name in _scan(src, tmp_path).imports if _not_for_the_llm_adapter(name)}
+    assert bad == {"pixelcat.adapters.macos", "pixelcat.adapters.windows", "pixelcat.bootstrap"}
 
 
 # ---- runtime: what importing a module really loads ------------------------------------------------------------------
@@ -431,7 +455,5 @@ def test_null_adapter_loads_without_win32_qt_or_the_windows_adapter():
 def test_llm_adapter_loads_without_win32_qt_or_another_adapter(name):
     res = _probes()[name]
     assert res["error"] is None, res["error"]
-    assert not [m for m in res["loaded"] if _top(m) in QT or (_is(m, "pixelcat.adapters")
-                                                             and not _is(m, "pixelcat.adapters.llm")
-                                                             and m != "pixelcat.adapters")]
+    assert not [m for m in res["loaded"] if _top(m) in QT or _not_for_the_llm_adapter(m)]
     assert not [m for m, by in res["events"] if _top(m) in WIN32 and _is(by, "pixelcat")]

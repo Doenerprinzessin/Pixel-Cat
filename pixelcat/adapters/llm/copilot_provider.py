@@ -69,13 +69,30 @@ class CopilotProvider(ProviderBase):
 
         return GitHubSignIn()
 
+    def key_problem(self, exc: BaseException) -> str:
+        kind = getattr(exc, "kind", "")
+        if kind == "auth":
+            return "GitHub didn't accept that token - check that you copied all of it (and that it hasn't expired)."
+        if kind == "denied":
+            return ("That can't use Copilot. A token needs the Copilot Requests permission (Account permissions), and "
+                    "your Copilot plan or organization has to allow it.")
+        if kind == "ext_offline":
+            return "I couldn't reach GitHub - is the internet on?"
+        return str(exc)[:200] if kind == "install" else f"That didn't work: {str(exc)[:160]}"
+
+    @staticmethod
+    def _client_shutdown() -> Callable[[float], None] | None:
+        """The loaded client's shutdown - None while it isn't loaded, or is still being imported on another thread
+        (it is in sys.modules before its names are)."""
+        return getattr(sys.modules.get(CLIENT), "shutdown", None)
+
     def active(self) -> bool:
-        return CLIENT in sys.modules             # (never used: nothing runs, and the SDK isn't loaded for it)
+        return self._client_shutdown() is not None   # (never used: nothing runs, and the SDK isn't loaded for it)
 
     def shutdown(self, timeout: float) -> None:
-        mod = sys.modules.get(CLIENT)
-        if mod is not None:
-            mod.shutdown(timeout)
+        stop = self._client_shutdown()
+        if stop is not None:
+            stop(timeout)
 
     def self_check(self) -> str:
         from copilot._cli_version import CLI_VERSION

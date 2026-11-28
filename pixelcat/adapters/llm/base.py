@@ -12,7 +12,7 @@ class ProviderBase:
     """No plan quota, nothing to install, no conversation of its own, no sign-in, nothing to stop."""
 
     # (module, exception class): failures whose message is meant for the user.  Looked up in sys.modules only:
-    # an exception of a module that was never loaded can't be one of them.
+    # an exception of a module that was never loaded (or is still being loaded) can't be one of them.
     own_errors: tuple[tuple[str, str], ...] = ()
 
     def effort_levels(self, model_info: dict[str, Any]) -> list[str] | None:
@@ -51,7 +51,17 @@ class ProviderBase:
 
     def error_text(self, exc: BaseException, fallback: str) -> str:
         for module, name in self.own_errors:
-            mod = sys.modules.get(module)
-            if mod is not None and isinstance(exc, getattr(mod, name)):
+            cls = getattr(sys.modules.get(module), name, None)   # (None too while it is still being imported)
+            if isinstance(cls, type) and isinstance(exc, cls):
                 return str(exc)
         return fallback
+
+    def key_problem(self, exc: BaseException) -> str:
+        name, kind = type(exc).__name__, getattr(exc, "kind", "")      # (the SDKs' errors, and the clients' kinds)
+        if "Authentication" in name or kind == "auth":
+            return "That key wasn't accepted - check that you copied all of it."
+        if "Connection" in name or "Timeout" in name or kind == "ext_offline":
+            return "I couldn't reach the provider - is the internet on?"
+        if "PermissionDenied" in name:
+            return "That key isn't allowed to use the models."
+        return f"That didn't work: {str(exc)[:160]}"
