@@ -15,10 +15,10 @@
 from __future__ import annotations
 
 import logging
-import re
 import threading
 import time
 
+from ...domain.profile import split_combo as _split_combo
 from . import _objc
 
 log = logging.getLogger(__name__)
@@ -145,16 +145,8 @@ def char_keys(ch: str) -> list[int] | None:
 
 def split_combo(combo: str) -> list[str]:
     """'ctrl+shift+s' -> ['ctrl', 'shift', 's'] (lower case; '+' itself is 'plus': 'ctrl++', 'ctrl + +', '+');
-    ValueError if empty."""
-    text = re.sub(r"\s*\+\s*", "+", combo.strip().lower())
-    if text == "+":
-        return ["plus"]
-    if text.endswith("++"):
-        text = text[:-2] + "+plus"
-    parts = [p.strip() for p in text.split("+") if p.strip()]
-    if not parts:
-        raise ValueError("no keys given")
-    return parts
+    ValueError if empty.  The same split as the profile's safety check (``domain.profile.split_combo``)."""
+    return _split_combo(combo)
 
 
 def parse_combo(combo: str) -> list[int]:

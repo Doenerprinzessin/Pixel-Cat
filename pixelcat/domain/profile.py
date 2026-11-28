@@ -7,6 +7,7 @@ its users know them.  Every default is exactly what the cat says and does on Win
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 MODIFIER_ORDER = ("ctrl", "alt", "shift", "win")    # how normalize_combo sorts the held keys
@@ -15,6 +16,21 @@ MODIFIER_ORDER = ("ctrl", "alt", "shift", "win")    # how normalize_combo sorts 
 _CLOSING_KEYS = frozenset({"alt+f4", "ctrl+w", "ctrl+shift+w", "ctrl+q", "ctrl+f4", "shift+delete", "win+l"})
 # shortcuts that open a command line or system menus: ask even in auto mode
 _SYSTEM_KEYS = frozenset({"win+r", "win+x", "ctrl+shift+esc", "ctrl+alt+delete", "ctrl+alt+del", "win+ctrl+d"})
+
+
+def split_combo(combo: str) -> list[str]:
+    """'ctrl+shift+s' -> ['ctrl', 'shift', 's'] (lower case, empty segments dropped: 'cmd++q' is cmd+q; '+'
+    itself is 'plus': 'ctrl++', 'ctrl + +', '+'); ValueError if empty.  The Mac keyboard input parses combos
+    with it too, so a combo's safety check reads the keys that get pressed."""
+    text = re.sub(r"\s*\+\s*", "+", combo.strip().lower())
+    if text == "+":
+        return ["plus"]
+    if text.endswith("++"):
+        text = text[:-2] + "+plus"
+    parts = [p.strip() for p in text.split("+") if p.strip()]
+    if not parts:
+        raise ValueError("no keys given")
+    return parts
 
 
 @dataclass(frozen=True)
@@ -69,8 +85,27 @@ class Profile:
         :data:`MODIFIER_ORDER` ("cmd+option+esc" -> "alt+win+esc").  Without aliases (Windows) it stays as it is."""
         if not self.key_aliases:
             return combo
+        return self._normalized(self._keys(combo))
+
+    def combo_names(self, combo: str) -> set[str]:
+        """The shortcuts a combo presses, normalized: the whole combo and, for every key that isn't a held key,
+        that key with the held keys written before it (keys are pressed in order: "cmd+q+w" presses cmd+q and
+        cmd+w, "q+cmd" no shortcut).  Without aliases (Windows) just ``{combo}``."""
+        if not self.key_aliases:
+            return {combo}
+        parts = self._keys(combo)
+        return {self._normalized(parts)} | {self._normalized([m for m in parts[:i] if m in MODIFIER_ORDER] + [k])
+                                            for i, k in enumerate(parts) if k not in MODIFIER_ORDER}
+
+    def _keys(self, combo: str) -> list[str]:
         aliases = dict(self.key_aliases)
-        parts = [aliases.get(k, k) for k in combo.split("+")]
+        try:
+            return [aliases.get(k, k) for k in split_combo(combo)]
+        except ValueError:
+            return [combo]
+
+    @staticmethod
+    def _normalized(parts: list[str]) -> str:
         held, key = parts[:-1], parts[-1:]
         mods = [m for m in MODIFIER_ORDER if m in held]
         return "+".join(mods + [k for k in held if k not in MODIFIER_ORDER] + key)

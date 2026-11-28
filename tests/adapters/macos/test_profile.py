@@ -1,6 +1,11 @@
 """pixelcat.adapters.macos.profile: the Mac's words and shortcuts."""
 from __future__ import annotations
 
+import itertools
+
+import pytest
+
+from pixelcat.adapters.macos import keys
 from pixelcat.adapters.macos.profile import MAC
 
 
@@ -37,3 +42,38 @@ def test_any_spelling_of_a_closing_or_system_shortcut_asks_first():
         assert MAC.normalize_combo(combo) in MAC.closing_keys, combo
     for combo in ("cmd+option+escape", "cmd+spacebar", "super+space", "ctrl+alt+entf", "windows+r"):
         assert MAC.normalize_combo(combo) in MAC.system_keys, combo
+
+
+BYPASSES = ["cmd++q", "cmd++space", "+cmd+q", "cmd+q+", "cmd+option++esc", "ctrl+cmd++q", "cmd + + q", " cmd+q ",
+            "CMD++Q", "Cmd+Option++Esc", "+CMD+SPACE+", "cmd+q+w", "cmd+a+q", "cmd+shift++w"]
+CLOSING = {"cmd++q", "+cmd+q", "cmd+q+", "ctrl+cmd++q", "cmd + + q", " cmd+q ", "CMD++Q", "cmd+q+w", "cmd+a+q",
+           "cmd+shift++w"}
+
+
+@pytest.mark.parametrize("combo", BYPASSES)
+def test_empty_segments_and_extra_keys_dont_hide_a_closing_or_system_shortcut(combo: str) -> None:
+    names = MAC.combo_names(combo)
+    assert bool(names & MAC.closing_keys) == (combo in CLOSING), names
+    assert bool(names & MAC.system_keys) == (combo not in CLOSING), names
+
+
+@pytest.mark.parametrize(("combo", "normalized"), [
+    ("cmd++q", "win+q"), ("+cmd+q", "win+q"), ("cmd+q+", "win+q"), ("cmd + + q", "win+q"), (" CMD+Q ", "win+q"),
+    ("cmd+option++esc", "alt+win+esc"), ("ctrl+cmd++q", "ctrl+win+q"), ("cmd++space", "win+space"),
+    ("cmd++", "win+plus"), ("cmd + +", "win+plus"), ("+", "plus"),
+])
+def test_normalize_combo_reads_a_combo_as_the_keyboard_input_does(combo: str, normalized: str) -> None:
+    assert MAC.normalize_combo(combo) == normalized
+
+
+def test_combos_that_press_the_same_keys_are_checked_alike(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(keys, "layout_table", lambda: dict(keys.ANSI))
+    combos = BYPASSES + ["cmd+q", "cmd+space", "cmd+option+esc", "ctrl+cmd+q", "command+q", "super+q", "q+cmd",
+                         "cmd++", "cmd+plus", "cmd+s", "cmd+shift+w", "shift+cmd+w", "option+cmd+escape", "+"]
+    for a, b in itertools.combinations(combos, 2):
+        if keys.parse_combo(a) == keys.parse_combo(b):
+            na, nb = MAC.combo_names(a), MAC.combo_names(b)
+            assert (bool(na & MAC.closing_keys), bool(na & MAC.system_keys)) == \
+                (bool(nb & MAC.closing_keys), bool(nb & MAC.system_keys)), (a, b)
+            assert MAC.normalize_combo(a) == MAC.normalize_combo(b), (a, b)
+    assert not MAC.combo_names("q+cmd") & (MAC.closing_keys | MAC.system_keys)    # q is down before cmd

@@ -57,9 +57,11 @@ def test_the_windows_shortcut_sets_and_tables_are_the_old_ones():
     assert WINDOWS.window_aliases is None and WINDOWS.window_alias_map() is None
 
 
-@pytest.mark.parametrize("combo", ["win+ctrl+d", "ctrl+alt+delete", "cmd+q", "Alt+F4"])
+@pytest.mark.parametrize("combo", ["win+ctrl+d", "ctrl+alt+delete", "cmd+q", "Alt+F4", "ctrl++w", "+alt+f4", " ctrl+q ",
+                                   "ctrl+w+q", "+", ""])
 def test_windows_keeps_combos_as_written(combo: str) -> None:
     assert WINDOWS.normalize_combo(combo) == combo
+    assert WINDOWS.combo_names(combo) == {combo}
 
 
 @pytest.mark.parametrize(("combo", "normalized"), [

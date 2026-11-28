@@ -13,6 +13,7 @@ import pytest
 from llm_agent.agent_fakes import OWN_PID, el, parse_combo
 from pixelcat.adapters.macos.profile import MAC
 from pixelcat.domain import WINDOWS, PermissionNeeded, Snapshot, find_windows
+from pixelcat.domain.profile import split_combo
 from pixelcat.llm import prompt, replies
 from pixelcat.llm import tools as tools_mod
 from pixelcat.llm import watch as watch_mod
@@ -28,7 +29,7 @@ NO_PICTURES = PermissionNeeded("screen_recording", "macOS hasn't allowed Pixel C
 def _mac_keys(combo: str) -> list[int]:
     """The fake parse_combo, knowing the Mac's key names too (as the macOS InputPort does)."""
     aliases = MAC.key_alias_map()
-    return parse_combo("+".join(aliases.get(k, k) for k in combo.lower().split("+")))
+    return parse_combo("+".join(aliases.get(k, k) for k in split_combo(combo)))
 
 
 @pytest.fixture
@@ -124,6 +125,9 @@ def test_mac_window_names(mac_tb: ToolBox, desk) -> None:  # type: ignore[no-unt
     ("control+command+q", True, False), ("opt+shift+cmd+q", True, False), ("alt+f4", True, False),
     ("cmd+option+esc", False, True), ("option+command+esc", False, True), ("cmd+space", False, True),
     ("cmd+s", False, False), ("ctrl+s", False, False), ("cmd+n", False, False),
+    ("cmd++q", True, False), ("+cmd+q", True, False), ("cmd+q+", True, False), ("ctrl+cmd++q", True, False),
+    ("cmd + + q", True, False), ("CMD++Q", True, False), ("cmd+q+w", True, False), ("cmd+s cmd++w", True, False),
+    ("cmd++space", False, True), ("cmd+option++esc", False, True), ("+cmd+space+", False, True),
 ])
 def test_mac_closing_and_system_shortcuts(mac_tb: ToolBox, desk, keys: str, hard: bool, force: bool) -> None:  # type: ignore[no-untyped-def]
     desk.platform.input.answers("parse_combo", _mac_keys)

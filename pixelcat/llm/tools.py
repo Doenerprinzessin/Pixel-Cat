@@ -896,8 +896,8 @@ class ToolBox:
             a["_hold"] = min(hold, 60.0 / len(combos))
             a["_held"] = f" (held {a['_hold']:g} s)" if a["_hold"] >= 0.1 else ""
             self._target(a)
-            names = {self.profile.normalize_combo(c[0].replace("control", "ctrl").replace("windows", "win"))
-                     for c in combos}
+            names = set().union(*(self.profile.combo_names(c[0].replace("control", "ctrl").replace("windows", "win"))
+                                  for c in combos))
             if names & self.profile.closing_keys:
                 a["_confirm"] = "hard"
             if names & self.profile.system_keys or ag.is_command_line(a["_hwnd"]):
