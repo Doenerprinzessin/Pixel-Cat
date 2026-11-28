@@ -185,25 +185,25 @@ def app_checks() -> None:
     pet._on_user_message("hello")
     check("...a message gets that hint instead of waiting for a local AI", pet.worker is None
           and not pet._task_active and ONLINE_ONLY in pet.chat.msgs[-1].text)
-    items = {i.key: i for i in pet._menu_items()}
+    items = {i.key: i for i in pet.menus.menu_items()}
     ai = next(c for c in items["settings"].children if c.key == "set_model")
     notes = {c.key: c.note for c in ai.children}
     check("...the menu: External AI models marked BEST; the models too big for this PC marked so",
           notes.get("ext") == "BEST" and "TOO BIG" in notes["model:qwen3.5:35b-a3b"]
           and "BEST" not in notes["model:qwen3.5:0.8b"], str({k: v for k, v in notes.items() if "qwen3.5:3" in k}))
-    pet._set_default_model("qwen3.5:0.8b")
+    pet.model_choice.set_default_model("qwen3.5:0.8b")
     from pixelcat.settings import user_settings
     check("...picking a local model as the default switches back to a local AI",
           pet.cfg.ai_mode == "local" and user_settings().get("ai_mode") == "local")
     pet.chat.hide()
-    pet.chat_model = None
+    pet.chat_state.chat_model = None
     pet.cfg.model = "qwen3.5:35b-a3b"
     pet._too_big_said = False
     n = len(pet.chat.msgs)
     pet.open_chat()
     said = [m.text for m in pet.chat.msgs[n:]]
     check("a model too big for this PC: not loaded at start, and the chat says what suits it better",
-          pet._model_fit("qwen3.5:35b-a3b") == "too_big" and any("too big for this PC" in t for t in said),
+          pet.model_choice.model_fit("qwen3.5:35b-a3b") == "too_big" and any("too big for this PC" in t for t in said),
           said[-1][:80] if said else "")
     pet.chat.hide()
 

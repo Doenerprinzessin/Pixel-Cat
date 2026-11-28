@@ -53,7 +53,7 @@ def name_and_chat_checks(pet, m, row) -> None:  # type: ignore[no-untyped-def]  
     pet.provider_settings.show_amount_dialog = dialogs.append  # type: ignore[method-assign]   (not shown)
     m.close = lambda: None                                     # type: ignore[method-assign]
     m.expanded = {"settings"}
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m._layout()
     m._activate(row("set_name"))
     dlg = dialogs[-1] if dialogs else None
@@ -67,7 +67,7 @@ def name_and_chat_checks(pet, m, row) -> None:  # type: ignore[no-untyped-def]  
           and dlg.field.maxLength() == 20 and naming.check("Müsli Ü")[0] == "Müsli Ü")
     dlg.field.setText("  Mochi  ")
     dlg._save()
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     item = next(c for it in m.items for c in it.children if c.key == "set_name")
     tray = {a.text() for a in pet.tray.menu.actions()}
     check("'Mochi': saved, and the menu title, the Name item and the tray say so",
@@ -93,13 +93,13 @@ def name_and_chat_checks(pet, m, row) -> None:  # type: ignore[no-untyped-def]  
     u = chat.u
     for auto in (False, True):
         chat.auto_mode = auto
-        pet.set_cat_name("Sir Fluffington III")
+        pet.menus.set_cat_name("Sir Fluffington III")
         title = chat._title_text()
         room = chat._auto_rect().x() - 17 * u - ((theme.text_size("AUTO", u)[0] + 2 * u) if auto else 0)
         check(f"a long name fits the title bar ({'auto mode' if auto else 'normal'}): {title!r}",
               theme.text_size(title, u)[0] <= room and title.startswith("SIR"), f"{theme.text_size(title, u)[0]} <= {room}")
     chat.auto_mode = False
-    pet.set_cat_name("")
+    pet.menus.set_cat_name("")
     tray = {a.text() for a in pet.tray.menu.actions()}
     chat._flush()
     check("an empty name: back to Pixel Cat everywhere", m.title == "PIXEL CAT" and chat._title_text() == "MEOW CHAT"
@@ -208,7 +208,7 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     chat.add("user", "Plan my trip to Rome please")
     chat.add("info", "👀 Looked at the screen")
     chat.add("cat", "Here is your Rome plan: the Colosseum first.")
-    pet.chat_effort = "high"
+    pet.chat_state.chat_effort = "high"
     pet._store_chat()
     idx = pet.chats.index()
     files = list(folder.glob("*.chat"))
@@ -228,7 +228,7 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     check("an unchanged chat isn't written again", files[0].read_bytes() == raw)
     pet.new_chat()
     check("a new chat: the old one stays saved, the effort goes back to the default",
-          pet.history == [] and pet._chat_id is None and pet.chat_effort is None and len(pet.chats.index()) == 1)
+          pet.history == [] and pet._chat_id is None and pet.chat_state.chat_effort is None and len(pet.chats.index()) == 1)
     chat.mousePressEvent(QMouseEvent(QMouseEvent.Type.MouseButtonPress, QPointF(chat._hist_rect().center()),
                                      QPointF(chat.mapToGlobal(chat._hist_rect().center())), Qt.MouseButton.LeftButton,
                                      Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
@@ -243,7 +243,7 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     chat.hist_search.setText("")
     chat._history_link(QUrl(f"open:{cid}"))
     check("clicking a chat reopens it: the messages, what the AI remembers, its effort",
-          pet._chat_id == cid and len(pet.history) == 4 and pet.chat_effort == "high" and not chat.history_shown
+          pet._chat_id == cid and len(pet.history) == 4 and pet.chat_state.chat_effort == "high" and not chat.history_shown
           and [m.role for m in chat.msgs][:3] == ["user", "info", "cat"] and "remember it" in chat.msgs[-1].text,
           str([(m.role, m.text[:30]) for m in chat.msgs]))
     before = files[0].read_bytes()
@@ -309,13 +309,13 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     pet.open_saved_chat("20200102-000000-abcd")
     pet.accounts.auth = real_auth                        # type: ignore[method-assign]
     check("a chat whose model isn't there any more opens with the default model (and says so)",
-          pet.chat_model is None and "isn't available" in chat.msgs[-1].text, chat.msgs[-1].text)
+          pet.chat_state.chat_model is None and "isn't available" in chat.msgs[-1].text, chat.msgs[-1].text)
     pet.chats.delete_all()
     pet.new_chat()
 
     # ---- effort, from the chat's model button
     def effort_menu():  # type: ignore[no-untyped-def]
-        return pet._model_menu_items()[-1]
+        return pet.model_choice.model_menu_items()[-1]
 
     real_model = pet.cfg.model
     pet.cfg.model = "qwen3.5:35b-a3b"                # (a local default, whatever this PC uses)
@@ -324,47 +324,47 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
           m.key == "chateffort" and [c.key for c in m.children] == [
               "chateffort:default", "chateffort:low", "chateffort:medium", "chateffort:high"]
           and m.children[1].note == "NO THINKING" and m.children[0].checked, str([c.label for c in m.children]))
-    pet._on_model_menu("chateffort:high")
-    check("High: this chat always thinks; the button shows it", pet.chat_effort == "high" and pet._think_now() is True
+    pet.model_choice.on_model_menu("chateffort:high")
+    check("High: this chat always thinks; the button shows it", pet.chat_state.chat_effort == "high" and pet._think_now() is True
           and chat.model_btn.text().endswith("· HIGH") and chat._model_temp and effort_menu().children[3].checked,
           chat.model_btn.text())
-    pet._on_model_menu("chateffort:low")
+    pet.model_choice.on_model_menu("chateffort:low")
     low = pet._think_now()
-    pet._on_model_menu("chateffort:medium")
+    pet.model_choice.on_model_menu("chateffort:medium")
     pet.history[:] = [{"role": "user", "content": "hi"}]
     planning = pet._think_now()
     pet.history.append({"role": "user", "content": "[tool result for wait] ok", "_tool": True})
     routine = pet._think_now()
     check("Low never thinks; Medium thinks when planning, not for routine steps",
           low is False and planning is True and routine is False)
-    pet._on_model_menu("chateffort:default")
-    check("Default goes back", pet.chat_effort is None and not chat._model_temp)
+    pet.model_choice.on_model_menu("chateffort:default")
+    check("Default goes back", pet.chat_state.chat_effort is None and not chat._model_temp)
     pet.accounts.ext_p("anthropic")["models"] = [{"id": "claude-t", "name": "Claude T", "effort": ["low", "medium", "high"]},
                                          {"id": "claude-n", "name": "Claude N", "effort": []}]
     pet.accounts.ext_p("copilot")["models"] = [{"id": "gpt-c", "name": "GPT C", "efforts": ["low", "medium", "high", "xhigh"]}]
     looks = {}
     for tag in ("anthropic:claude-t", "anthropic:claude-n", "copilot:gpt-c", "openai:gpt-o"):
-        pet.chat_model = tag
+        pet.chat_state.chat_model = tag
         looks[tag] = [c.key.split(":")[1] for c in effort_menu().children]
     check("online models: only the levels the model has", looks == {
         "anthropic:claude-t": ["default", "low", "medium", "high"], "anthropic:claude-n": ["none"],
         "copilot:gpt-c": ["default", "low", "medium", "high", "xhigh"],
         "openai:gpt-o": ["default", "low", "medium", "high", "xhigh", "max"]}, str(looks))
-    pet.chat_model = "anthropic:claude-t"
+    pet.chat_state.chat_model = "anthropic:claude-t"
     pet.saved.ext_settings["thinking"] = False
     pet.saved.ext_settings["effort"] = "low"
-    base = pet._ext_think_effort()
+    base = pet.model_choice.ext_think_effort()
     pet._local_command("/effort max")
-    refused = pet.chat_effort is None and "low, medium, high" in chat.msgs[-1].text
+    refused = pet.chat_state.chat_effort is None and "low, medium, high" in chat.msgs[-1].text
     pet._local_command("/effort high")
     check("an online model gets this chat's effort (thinking on); /effort sets it, only to levels it has",
-          base == (False, "low") and refused and pet._ext_think_effort() == (True, "high"), chat.msgs[-1].text)
+          base == (False, "low") and refused and pet.model_choice.ext_think_effort() == (True, "high"), chat.msgs[-1].text)
     pet.saved.ext_settings.pop("thinking")
     pet.saved.ext_settings.pop("effort")
-    pet.chat_model = None
+    pet.chat_state.chat_model = None
     pet.new_chat()
     pet.cfg.model = real_model
-    check("a new chat starts with the default effort", pet.chat_effort is None)
+    check("a new chat starts with the default effort", pet.chat_state.chat_effort is None)
     shutil.rmtree(folder, ignore_errors=True)
 
 
@@ -397,7 +397,7 @@ def main() -> int:
     def row(key: str) -> int:
         return next(i for i, (it, _d, _r) in enumerate(m._rows) if it.key == key)
 
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m.expanded.clear()
     top = [it.key for it in m.items]
     check("on top: Pause, Chat, Minigames, Cosmetics, Settings, Quit",
@@ -464,13 +464,13 @@ def main() -> int:
     from pixelcat.ui import theme
 
     looks: list[tuple] = []
-    real_set = pet._set_look
-    pet._set_look = lambda k, v: (looks.append((k, v)), theme.configure(**{k: v}))  # type: ignore[method-assign]
+    real_set = pet.menus.set_look
+    pet.menus.set_look = lambda k, v: (looks.append((k, v)), theme.configure(**{k: v}))  # type: ignore[method-assign]
     m._activate(row("style:midnight"))
     check("clicking a style applies it at once and the menu stays open (style saved)",
           looks == [("style", "midnight")] and theme.current().key == "midnight" and not closed)
     m._activate(row("style:catchat"))
-    pet._set_look = real_set  # type: ignore[method-assign]
+    pet.menus.set_look = real_set  # type: ignore[method-assign]
     # a model that isn't downloaded: asks first
     asked: list[str] = []
     pet.open_chat = pet._ensure_chat  # type: ignore[method-assign]   (not shown on screen)
@@ -485,7 +485,7 @@ def main() -> int:
     from pixelcat import progress
 
     m.expanded = {"games"}
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m._layout()
     began: list[str] = []
     real_begin = pet.minigames._begin_game
@@ -539,7 +539,7 @@ def main() -> int:
     pet.saved.xp = progress.xp_to_reach(12)
     first = next(k for kind, k in progress.REWARDS if kind == "hat")
     m.expanded = {"cosmetics", "hats", f"hatgroup:{hat_art.HATS[first].group}"}
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m._layout()
     closed.clear()
     m._activate(row(f"hat:{first}"))
@@ -554,14 +554,14 @@ def main() -> int:
     m._activate(row(locked))
     check(f"a locked hat ({locked[4:]}) can't be worn", pet.saved.hat == "")
     m.expanded = {"cosmetics", "skins"}
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m._layout()
     m._activate(row("skin:snow"))
     check("Cosmetics -> Skins: the cat changes skin at once", pet.sprites.skin.key == "snow" and not closed)
     m._activate(row("skin:galaxy"))
     check("a locked skin can't be picked", pet.sprites.skin.key == "snow")
     m.expanded = {"cosmetics", "pass"}
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m._layout()
     stages = [it for it, _d, _r in m._rows if it.key.startswith("pass:")]
     check("the Cat Pass lists the stages around you: what each unlocks, how much XP is still needed",
@@ -570,7 +570,7 @@ def main() -> int:
           str([(it.label, it.note) for it in stages]))
     render("menu_cosmetics.png")
     m.expanded = {"cosmetics", "hats", "hatgroup:magic"}
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     render("menu_hats.png")
     # a menu taller than the screen scrolls
     from PySide6.QtCore import QPoint, QPointF
@@ -579,7 +579,7 @@ def main() -> int:
     m.u = 3
     m._work = (0, 0, 1200, 700)
     m.expanded = {"cosmetics", "hats", "hatgroup:magic"}
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m._reposition()
     tall = m._content_h
     check("a menu taller than the screen fits on it and scrolls", m.height() <= 700 and m._scroll_max > 0
@@ -605,19 +605,19 @@ def main() -> int:
     pet.world.refresh_windows()                       # the cat needs its world (monitors, windows) to play
     pet.brain.place(pet.brain.smap.floors[0].x1 + 400, pet.brain.smap.floors[0].y - 1)
     m.expanded = {"games"}
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m._layout()
     closed.clear()
     m._activate(row("game:ball"))
     check("clicking Play ball closes the menu and starts the game", bool(closed) and pet.game.active)
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m._layout()
     label = next(c.label for it in m.items for c in it.children if c.key == "stopgame")
     check("during a game it says 'Stop playing ball'", label == "Stop playing ball", label)
     pet.game.stop(poof=False)
     # keyboard: arrows move, Enter folds a section
     m.expanded.clear()
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m._layout()
     m._hover = -1
     for _ in range(3):
@@ -626,7 +626,7 @@ def main() -> int:
     check("keyboard: arrow keys and Enter open Minigames", "games" in m.expanded)
     m._hover = -1
     m.expanded = {"cosmetics", "pass"}
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m._layout()
     seen = set()
     for _ in range(len(m._rows) + 2):
@@ -639,7 +639,7 @@ def main() -> int:
     from PySide6.QtGui import QMouseEvent
 
     m.expanded = set()
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m._work = (0, 0, 1920, 1080)
     m._avoid = (900, 500, 996, 596)
     m._user_pos = None

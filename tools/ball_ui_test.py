@@ -148,7 +148,7 @@ def main() -> int:  # noqa: C901 - a linear test script
         pet.world._set_hidden(False)
         pump(0.5)
         check("...and it comes back afterwards", bw.isVisible())
-        pet._open_menu()
+        pet.menus.open_menu()
         label = next((c.label for it in pet.menu.items for c in [it, *it.children] if c.key == "stopgame"), "")
         pet.menu.close()
         check("the menu says 'Stop playing ball' during a game", label == "Stop playing ball", label)

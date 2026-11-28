@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, QPoint, QRect, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from .. import naming, paths, persistence, progress
@@ -49,26 +49,22 @@ from ..ui.ledges import LedgeFinder
 from ..llm import external, models
 from ..llm.model_status import model_on_disk
 from ..ui import theme
-from ..ui.menu import MenuItem, PixelMenu
+from ..ui.menu import PixelMenu
 from ..ui.overlay import CatOverlay
 from ..ui.tray import Tray
-from .. import games as minigames
 from ..games.qt_host import QtHost
-from ..sprites import hats as hat_art
 from . import context
 from .accounts import Accounts
 from .popups import Popups, paras
+from .menus import Menus
 from .minigames import Minigames
+from .models_menu import ModelChoice
 from .progress_io import ProgressIO
 from .provider_settings import ProviderSettings
-from .state import GameState, WorldState
+from .state import ChatState, GameState, WorldState
 from .world import World
 
 log = logging.getLogger("pixelcat.app")   # (the name it had as pixelcat/app.py; tests look for it)
-
-# a chat's effort with a local model: how much it thinks (shown next to each level)
-LOCAL_EFFORTS = {"low": "NO THINKING", "medium": "THINKS WHEN PLANNING", "high": "ALWAYS THINKS"}
-EFFORT_SHORT = {"low": "LOW", "medium": "MED", "high": "HIGH", "xhigh": "XHIGH", "max": "MAX"}   # the model button
 
 
 class ToolThread(QThread):
@@ -124,7 +120,7 @@ class PixelCatApp(QObject):
         self.ball_win = BallOverlay(self.game, self.sprites, self.t, windows=self.platform.windows,
                                     input=self.platform.input)
         theme.configure(saved.ui_style, saved.ui_accent, saved.ui_size, saved.ui_font)   # the user's look
-        theme.on_change(self._on_style_changed)
+        theme.on_change(lambda: self.menus.on_style_changed())   # (the menus are made below)
         naming.set_name(saved.cat_name)                                                  # Settings -> Name...
         # the minigames: their things (mice, shelves, the laser dot...) are small windows of their own
         self.game_state = GameState()                  # the running minigame (the world reads it too)
@@ -142,14 +138,12 @@ class PixelCatApp(QObject):
         self.menu.title = naming.title().upper()
         self.model_menu = PixelMenu(self.sprites)        # the chat's model button
         self.model_menu.title = "MODEL FOR THIS CHAT"
-        self.model_menu.triggered.connect(self._on_model_menu)
-        self.chat_model: str | None = None               # this chat only (None: the default)
-        self.chat_effort: str | None = None              # this chat's effort (None: the default)
+        self.model_menu.triggered.connect(lambda key: self.model_choice.on_model_menu(key))
+        self.chat_state = ChatState()                    # this chat's own model and effort (None: the default)
         self.chats = ChatStore(secrets=platform.secrets)  # the chat history (%APPDATA%\PixelCat\chats)
         self._chat_id: str | None = None                 # the open chat's id there (None: not saved yet)
         self._chat_created = 0.0
         self._chat_sig = ""                              # what was saved last (unchanged: not written again)
-        self._download_ok: set[str] = set()              # models the user said yes to downloading
         self.creds = external.Credentials(secrets=platform.secrets)  # API keys and sign-ins (keys.dat, encrypted)
         self.accounts = Accounts(providers, saved, self.creds, save=lambda: self.save())   # the providers' accounts
         self.popups = Popups(self.sprites, self.platform.windows, anchor=lambda: self._popup_anchor(),
@@ -157,15 +151,15 @@ class PixelCatApp(QObject):
         self.progress_io = ProgressIO(saved, self.popups, platform.folders, self.menu, self.game,   # export / import
                                       save=lambda: self.save(), stop_minigame=lambda: self.minigames.stop_minigame(),
                                       show_progress=lambda: self._show_progress(),
-                                      menu_items=lambda: self._menu_items())
+                                      menu_items=lambda: self.menus.menu_items())
         self._resume_after_switch = False                # token limit: go on once another model is picked
         self._ext_notes: set[str] = set()
         self.provider_settings = ProviderSettings(   # the providers' menus, key and limit dialogs, sign-ins
             self.accounts, providers, self.creds, saved, cfg, self.popups, self.menu, self.overlay, parent=self,
             save=lambda: self.save(), ui_unit=lambda mon: self.world.ui_unit(mon),
             cat_monitor=lambda: self.world.cat_monitor(),
-            menu_items=lambda: self._menu_items(), open_menu_at=lambda keys: self._open_menu_at(keys),
-            advice=lambda: self._advice(), credit_budget=lambda: self._credit_budget(),
+            menu_items=lambda: self.menus.menu_items(), open_menu_at=lambda keys: self.menus.open_menu_at(keys),
+            advice=lambda: self.model_choice.advice(), credit_budget=lambda: self._credit_budget(),
             ext_disconnect=lambda p, only_key=False: self._ext_disconnect(p, only_key=only_key),
             drop_copilot_chat=lambda: self._drop_copilot_chat(),
             copilot_quota=lambda force=False: self._copilot_quota(force=force),
@@ -188,7 +182,7 @@ class PixelCatApp(QObject):
             rebuild_world=lambda: self.world.rebuild_world(), cat_monitor=lambda: self.world.cat_monitor(),
             ui_unit=lambda mon: self.world.ui_unit(mon), hidden_fullscreen=lambda: self.world_state.hidden_fullscreen,
             selftest=lambda: self.selftest, quitting=lambda: self._quitting,
-            reward_picture=lambda kind, key, u, hat_scale: self._reward_picture(kind, key, u, hat_scale))
+            reward_picture=lambda kind, key, u, hat_scale: self.menus.reward_picture(kind, key, u, hat_scale))
         self.game.on_end = self.minigames.game_ended
 
         # chat / tools state
@@ -196,7 +190,7 @@ class PixelCatApp(QObject):
         self._status_notifier = QtNotifier()           # (the status changes in a background thread)
         self.model_status = ModelStatus(cfg, may_download=lambda: (self.saved.model_download_ok and
                                                                   self.model_status.model == cfg.model)
-                                        or self.model_status.model in self._download_ok,
+                                        or self.model_status.model in self.model_choice.download_ok,
                                         notify=self._status_notifier.changed.emit)
         self._status_notifier.changed.connect(self._on_model_status)
         self.watches = WatchManager(self.own_pid, platform=self.platform)  # wait_for watches in the background
@@ -234,6 +228,16 @@ class PixelCatApp(QObject):
             self.game, self.host, self.ledges, self.menu, self.model_menu, self.popups, self.tray, self.watches,
             self.model_status, self.minigames, self.platform.display, self.platform.windows, self.rl, self.own_pid,
             parent=self, chat=lambda: self.chat, quiet=lambda: self.quiet, tick_timer=lambda: self.tick_timer)
+        self.model_choice = ModelChoice(   # the default model, and this chat's model and effort (its button)
+            self.chat_state, cfg, saved, providers, self.accounts, self.model_status, self.model_menu, self.brain,
+            self.world_state, self.world, self.platform.system, parent=self, chat=lambda: self.chat,
+            open_chat=lambda: self.open_chat(), show_model_banner=lambda: self._show_model_banner(),
+            switched=lambda: self._switched_model())
+        self.menus = Menus(   # the cat's menu, the look and the cat's name
+            saved, cfg, self.brain, self.overlay, self.sprites, self.menu, self.tray, self.hud, self.world_state,
+            self.world, self.minigames, self.provider_settings, self.model_choice, self.platform.autostart,
+            parent=self, save=lambda: self.save(), chat=lambda: self.chat, quiet=lambda: self.quiet,
+            renamed=lambda: setattr(self, "_copilot_stale", True))
 
         # overlay input -> brain
         ov = self.overlay
@@ -243,7 +247,7 @@ class PixelCatApp(QObject):
         ov.drag_started.connect(self.world.on_drag_start)
         ov.dragged.connect(self.world.on_drag)
         ov.dropped.connect(self.world.on_drop)
-        ov.menu_requested.connect(self._open_menu)
+        ov.menu_requested.connect(self.menus.open_menu)
 
         # timers
         self.tick_timer = self._timer(int(1000 / self.t.fps_active), self.world.tick)
@@ -296,7 +300,7 @@ class PixelCatApp(QObject):
         if self.selftest:
             QTimer.singleShot(int(self.selftest * 1000), self._selftest_finish)
         if warm_model and self.cfg.preload_on_start and not self.selftest:
-            if self._model_fit(self.cfg.model) == "too_big":
+            if self.model_choice.model_fit(self.cfg.model) == "too_big":
                 log.info("not loading %s at start: it's too big for this PC (it would make it lag)", self.cfg.model)
             else:
                 QTimer.singleShot(3000, self.model_status.ensure)   # after the cat is on screen
@@ -385,417 +389,7 @@ class PixelCatApp(QObject):
             self.quit_timer.stop()
             self.quit()
 
-    # ================================================================ menu
-    def _open_menu(self) -> None:
-        if self.world_state.hidden_fullscreen:
-            return
-        if self.overlay.is_pressing() or self.brain.state == S.HELD:
-            self.overlay.cancel_press()  # never open a popup while the cat is carried
-            if self.brain.state == S.HELD:
-                self.brain.drop(0.0, 0.0)
-            return
-        b = self.brain
-        self.menu.items = self._menu_items()
-        self.menu.subtitle = b.state.value.replace("_", " ")
-        mon = monitor_at(self.world_state.monitors, b.x, b.y - 1)
-        self.menu.popup_near(self.overlay.cat_rect(), mon.work, self.world.ui_unit(mon))
-        QTimer.singleShot(60, self.world.refresh_windows)       # the menu is something to sit on, too
-
-    def _menu_items(self) -> list[MenuItem]:
-        """Pause, Chat and Quit on top; everything else in the Minigames, Cosmetics and Settings sections."""
-        b = self.brain
-        games = self._game_items()
-        settings = [
-            MenuItem("set_name", "Name...", "paw", note=naming.custom().upper()),
-            MenuItem("set_style", "Style", "paint", children=[
-                MenuItem(f"style:{k}", s.name, radio=True, checked=theme.choice("style") == k)
-                for k, s in theme.STYLES.items()]),
-            MenuItem("set_accent", "Accent color", "dot", children=[
-                MenuItem(f"accent:{k}", "Style's own" if k == "default" else k.capitalize(),
-                         swatch=QColor(theme.STYLES[theme.choice("style")].accent if v is None else v[0]),
-                         checked=theme.choice("accent") == k)
-                for k, v in theme.ACCENTS.items()]),
-            MenuItem("set_size", "Size", "plus", children=[
-                MenuItem(f"size:{k}", k.capitalize(), radio=True, checked=theme.choice("size") == k)
-                for k in theme.SIZES]),
-            MenuItem("set_font", "Font", "chat", children=[
-                MenuItem(f"font:{k}", {"default": "Style's own", "pixel": "Pixel", "clean": "Clean"}[k], radio=True,
-                         checked=theme.choice("font") == k) for k in theme.FONTS]),
-            MenuItem("set_model", "AI model", "bolt_on", children=self._model_items("model:", self.cfg.model)
-                     + [self.provider_settings.external_menu()]),
-            MenuItem("progress", "Your progress", "disk", children=[
-                MenuItem("export", "Export progress...", "export"),
-                MenuItem("import", "Import progress...", "import")]),
-            MenuItem("quiet", "Quiet mode", checked=self.quiet, separator_before=True),
-            MenuItem("autostart", "Start with Windows", checked=self.platform.autostart.enabled()),
-            MenuItem("automode", "Chat auto mode", checked=self.saved.auto_mode),
-            MenuItem("preload_ai", "Load AI at start", checked=self.cfg.preload_on_start),
-            MenuItem("explore", "Sit inside windows", checked=self.cfg.explore_windows)]
-        return [
-            MenuItem("pause", "Resume" if b.paused else "Pause", "play" if b.paused else "pause"),
-            MenuItem("chat", "Chat", "chat"),
-            MenuItem("games", "Minigames", "gamepad", children=games, separator_before=True),
-            MenuItem("cosmetics", "Cosmetics", "hat", children=self._cosmetic_items()),
-            MenuItem("settings", "Settings", "gear", children=settings),
-            MenuItem("quit", "Quit", "power", separator_before=True),
-        ]
-
-    def _game_items(self) -> list[MenuItem]:
-        """Every minigame: locked ones show the Cat Pass stage that unlocks them."""
-        st = self.saved
-        running = self.minigames.running_game()
-        out: list[MenuItem] = []
-        for key in minigames.ORDER:
-            title = minigames.title(key)
-            if key == running:
-                out.append(MenuItem("stopgame", "Stop playing ball" if key == "ball" else f"Stop {title}", "close"))
-            elif not progress.is_unlocked(st.xp, "game", key):
-                out.append(MenuItem(f"game:{key}", title, minigames.ICONS[key], locked=True,
-                                    note=f"STAGE {progress.stage_of('game', key)}"))
-            else:
-                plays = st.plays if key == "ball" else st.game_plays.get(key, 0)
-                out.append(MenuItem(f"game:{key}", title, minigames.ICONS[key], note="NEW!" if not plays
-                                    else self._best_note(key)))
-        out.append(MenuItem("feed", "Feed", "fish", separator_before=True))
-        return out
-
-    def _best_note(self, key: str) -> str:
-        if key == "ball":
-            return f"BEST {self.saved.best_round}" if self.saved.best_round else ""
-        best = self.saved.game_best.get(key)
-        if best is None:
-            return ""
-        return f"BEST {best:g} S" if minigames.GAMES[key].lower_is_better else f"BEST {best:g}"
-
-    def _cosmetic_items(self) -> list[MenuItem]:
-        """The Cat Pass (stages and what they unlock), skins and hats."""
-        st = self.saved
-        ps = progress.state(st.xp)
-        u = self.minigames.game_unit()
-        hat_scale = max(1, (9 * u + 2) // 13)
-        stages = [MenuItem("pass_total", f"{st.xp} XP in total", "star", info=True,
-                           note=(f"NEXT STAGE IN {ps.cost - ps.into} XP" if ps.cost else "ALL DONE!"))]
-        hi = min(progress.MAX_STAGE, max(ps.stage + 5, 8))
-        lo = max(2, hi - 7)
-        for n in range(lo, hi + 1):
-            kind, key = progress.REWARDS[n - 2]
-            got = n <= ps.stage
-            need = progress.xp_to_reach(n) - st.xp
-            stages.append(MenuItem(f"pass:{n}", f"{n}. {progress.name_of(kind, key)}", "star", info=True,
-                                   locked=not got, note=progress.kind_label(kind, key).upper() if got
-                                   else f"{need} XP",
-                                   picture=self._reward_picture(kind, key, u, hat_scale)))
-        skins = []
-        for key, name in progress.SKINS.items():
-            ok = progress.is_unlocked(st.xp, "skin", key)
-            skins.append(MenuItem(f"skin:{key}", name, radio=True, checked=st.skin == key, locked=not ok,
-                                  note="" if ok else f"STAGE {progress.stage_of('skin', key)}",
-                                  picture=self.sprites.skin_icon(key, 9 * u)))
-        hats = [MenuItem("hat:", "No hat", radio=True, checked=not st.hat)]
-        for group, title in hat_art.GROUPS.items():      # 115 hats: in groups, in unlock order
-            keys = sorted((k for k, h in hat_art.HATS.items() if h.group == group),
-                          key=lambda k: progress.stage_of("hat", k))
-            rows, got = [], 0
-            for key in keys:
-                ok = progress.is_unlocked(st.xp, "hat", key)
-                got += ok
-                tier = hat_art.TIERS.get(hat_art.HATS[key].tier, "")
-                note = (tier.upper() if tier in ("rare", "epic", "legendary") else "") if ok \
-                    else f"STAGE {progress.stage_of('hat', key)}"
-                rows.append(MenuItem(f"hat:{key}", progress.HATS[key], radio=True, checked=st.hat == key,
-                                     locked=not ok, note=note, picture=self.sprites.hat(key, hat_scale, False)))
-            worn = " - WEARING" if st.hat in keys else ""
-            hats.append(MenuItem(f"hatgroup:{group}", title, "hat", note=f"{got}/{len(keys)}{worn}", children=rows))
-        return [MenuItem("pass", "Cat Pass", "star", note=f"STAGE {ps.stage}", bar=ps.fraction, children=stages),
-                MenuItem("skins", "Skins", "skin", children=skins),
-                MenuItem("hats", "Hats", "hat", children=hats)]
-
-    def _reward_picture(self, kind: str, key: str, u: int, hat_scale: int) -> QPixmap | None:
-        try:
-            if kind == "skin":
-                return self.sprites.skin_icon(key, 9 * u)
-            if kind == "hat":
-                return self.sprites.hat(key, hat_scale, False)
-            return self.sprites.icon(minigames.ICONS.get(key, "gamepad"), u)
-        except Exception:  # noqa: BLE001
-            return None
-
-    def _advice(self) -> Any:
-        """What suits this PC (looked at once)."""
-        if getattr(self, "_pc_advice", None) is None:
-            self._hw = self.platform.system.hardware()
-            self._pc_advice = models.advise(self._hw)
-        return self._pc_advice
-
-    def _model_fit(self, tag: str) -> str:
-        m = models.find(tag)
-        if m is None:
-            return "ok"
-        self._advice()
-        return models.fit(m, self._hw)
-
-    def _model_items(self, prefix: str, current: str) -> list[MenuItem]:
-        """One radio item per model: name, download size, whether it is here and how it suits this PC."""
-        adv = self._advice()
-        best = adv.model.tag if adv.model is not None and not adv.online else ""
-        out = []
-        for m in models.MODELS:
-            note = f"{m.download_gb:g} GB"
-            if model_on_disk(m.tag):
-                note += " READY"
-            fit = models.fit(m, self._hw)
-            if fit == "too_big":
-                note += " TOO BIG"
-            elif fit == "slow":
-                note += " SLOW"
-            if m.tag == best:
-                note += " BEST"
-            out.append(MenuItem(prefix + m.tag, f"{m.name} {m.short}", radio=True,
-                                checked=models.find(current) is m if models.find(current) else False, note=note))
-        return out
-
-    def _on_style_changed(self) -> None:
-        """Settings -> Style/Accent/Size/Font: every window takes the new look at once."""
-        if self.chat is not None:
-            self.chat.restyle()
-        self.tray.restyle()
-        if self.menu.isVisible():
-            mon = monitor_at(self.world_state.monitors, self.brain.x, self.brain.y - 1)
-            self.menu.refresh(self._menu_items(), self.world.ui_unit(mon))
-        else:
-            self.menu.update()
-        hud = getattr(self, "hud", None)
-        if hud is not None:
-            hud.restyle()
-
-    def _set_look(self, kind: str, value: str) -> None:
-        setattr(self.saved, f"ui_{kind}", value)
-        self.save()
-        theme.configure(**{kind: value})
-        log.info("look: %s = %s", kind, value)
-
-    # ---------------------------------------------------------------- AI model choice
-    def _effective_model(self) -> str:
-        return self.chat_model or self.cfg.model
-
-    def _update_model_chip(self) -> None:
-        if self.chat is None:
-            return
-        m = models.find(self._effective_model())
-        short = m.short if m else external.short_label(self._effective_model())
-        if self.chat_effort:
-            short += " · " + EFFORT_SHORT.get(self.chat_effort, self.chat_effort.upper())
-        tip = (f"This chat uses {models.label(self._effective_model())}"
-               + (f" with {external.EFFORTS.get(self.chat_effort, self.chat_effort)} effort" if self.chat_effort else "")
-               + f" - click to change the model or the effort. The default is {models.label(self.cfg.model)} "
-               "(Settings -> AI model).")
-        self.chat.set_model_chip(short, self.chat_model is not None or self.chat_effort is not None, tip)
-
-    def _choose_default_model(self, tag: str) -> None:
-        if tag == self.cfg.model:
-            return
-        ext = external.parse(tag)
-        if ext:
-            if self.accounts.auth(ext[0]):
-                self._set_default_model(tag)
-            return
-        if model_on_disk(tag):
-            self._set_default_model(tag)
-            return
-        m = models.find(tag)
-        self.open_chat()
-        assert self.chat is not None
-        size = f" ({m.download_gb:g} GB)" if m else ""
-        self.chat.ask_confirm(f"download {models.label(tag)}{size} and make it the default model",
-                              lambda ans, t=tag: self._set_default_model(t, download=True) if ans == "yes"
-                              else self.chat.add("info", f"Okay, the default stays {models.label(self.cfg.model)}."))
-
-    def _set_default_model(self, tag: str, download: bool = False) -> None:
-        from ..settings import save_user_setting
-
-        self.cfg.model = tag
-        save_user_setting("model", tag)
-        if models.find(tag) is not None and self.cfg.ai_mode != "local":
-            self.cfg.ai_mode = "local"
-            save_user_setting("ai_mode", "local")
-        if download:
-            self._download_ok.add(tag)
-        log.info("default model: %s", tag)
-        if self.chat is not None:
-            self.chat.add("info", f"Default AI model: {models.label(tag)}" +
-                          (" - downloading it now, the bar above shows how far it is." if download else "."))
-        self.model_status.ensure(force=True)
-        self._update_model_chip()
-
-    def _open_model_menu(self) -> None:
-        """The chat's model button: pick a model (and the effort) for this chat only."""
-        if self.chat is None:
-            return
-        self.model_menu.items = self._model_menu_items()
-        g = self.chat.model_btn.mapToGlobal(self.chat.model_btn.rect().topLeft())
-        mon = monitor_at(self.world_state.monitors, self.brain.x, self.brain.y - 1)
-        r = (g.x(), g.y(), g.x() + self.chat.model_btn.width(), g.y() + self.chat.model_btn.height())
-        self.model_menu.popup_near(r, mon.work, self.world.ui_unit(mon))
-
-    def _model_menu_items(self) -> list[MenuItem]:
-        items = [MenuItem("chatmodel:default", f"Default ({models.label(self.cfg.model)})", radio=True,
-                          checked=self.chat_model is None)]
-        items += self._model_items("chatmodel:", self.chat_model or "")
-        items += self._ext_chat_items()
-        items.append(self._effort_menu())
-        return items
-
-    def _on_model_menu(self, key: str) -> None:
-        if key.startswith("chateffort:"):
-            level = key.split(":", 1)[1]
-            if level != "none":
-                self._set_chat_effort(None if level == "default" else level)
-            if self.model_menu.isVisible():
-                self.model_menu.refresh(self._model_menu_items())
-            return
-        if not key.startswith("chatmodel:"):
-            return
-        self.model_menu.close()
-        tag = key.split(":", 1)[1]
-        self._choose_chat_model(None if tag == "default" else tag)
-
-    # ---------------------------------------------------------------- effort (this chat)
-    def _effort_levels(self) -> list[str] | None:
-        """The effort levels the chat's model has (None: it has none to pick)."""
-        ext = external.parse(self._effective_model())
-        if not ext:
-            return self.accounts.local.effort_levels({})
-        p, mid = ext
-        return self.providers[p].effort_levels(self.accounts.info(p, mid))
-
-    def _default_effort(self) -> str:
-        """The effort a chat has without its own: Settings (online models) or the thinking setting."""
-        if external.parse(self._effective_model()):
-            return str(self.saved.ext_settings.get("effort", "medium"))
-        mode = self.cfg.think
-        if isinstance(mode, str) and mode.lower() != "auto":
-            mode = mode.lower() in ("true", "on", "yes")
-        return "high" if mode is True else "low" if mode is False else "medium"
-
-    def _effort_menu(self) -> MenuItem:
-        levels = self._effort_levels()
-        local = not external.parse(self._effective_model())
-        cur = self.chat_effort
-        if levels is None:
-            kids = [MenuItem("chateffort:none", "This model has no effort levels", info=True)]
-        else:
-            dflt = external.EFFORTS.get(self._default_effort(), "Medium")
-            kids = [MenuItem("chateffort:default", f"Default ({dflt})", radio=True, checked=cur is None)]
-            kids += [MenuItem(f"chateffort:{e}", external.EFFORTS[e], radio=True, checked=cur == e,
-                              note=LOCAL_EFFORTS[e] if local else "") for e in levels]
-        return MenuItem("chateffort", "Effort", "bolt_on", children=kids, separator_before=True,
-                        note=external.EFFORTS[cur].upper() if cur in external.EFFORTS else "DEFAULT")
-
-    def _set_chat_effort(self, level: str | None) -> None:
-        if level is not None and level not in external.EFFORTS:
-            return
-        if level == self.chat_effort:
-            return
-        self.chat_effort = level
-        self._update_model_chip()
-        log.info("chat effort: %s", level or "default")
-        if self.chat is None:
-            return
-        if level is None:
-            self.chat.add("info", f"This chat uses the default effort again "
-                                  f"({external.EFFORTS.get(self._default_effort(), 'Medium')}).")
-            return
-        local = not external.parse(self._effective_model())
-        how = {"low": " - no thinking, the fastest answers", "medium": " - I think when I plan a task",
-               "high": " - I always think first"}.get(level, " - I always think first") if local else ""
-        if not local and not self.saved.ext_settings.get("thinking", True):
-            how = " (thinking is on for this chat, although it's off in Settings)"
-        self.chat.add("info", f"This chat now uses {external.EFFORTS[level]} effort{how}. A new chat goes back "
-                              "to the default.")
-
-    def _ext_think_effort(self) -> tuple[bool, str]:
-        """Thinking and effort for an online model: this chat's effort, else Settings."""
-        st = self.saved.ext_settings
-        if self.chat_effort is not None:
-            return True, self.chat_effort
-        return bool(st.get("thinking", True)), str(st.get("effort", "medium"))
-
-    def _choose_chat_model(self, tag: str | None) -> None:
-        assert self.chat is not None
-        ext = external.parse(tag)
-        if ext:
-            if not self.accounts.auth(ext[0]):
-                self.chat.add("info", f"{self.providers[ext[0]].info.brand} models aren't connected - Settings > "
-                                      "AI model > External AI models.")
-                return
-            self._set_chat_model(None if tag == self.cfg.model else tag)
-            return
-        if tag is not None and models.find(tag) is None:
-            self.chat.add("info", "I don't know that model. Models: " +
-                          ", ".join(f"{m.name} ({m.short})" for m in models.MODELS) + ".")
-            return
-        if tag is not None and models.find(tag).tag == self.cfg.model:
-            tag = None
-        if tag is not None and not model_on_disk(models.find(tag).tag):
-            m = models.find(tag)
-            self.chat.ask_confirm(f"download {models.label(m.tag)} ({m.download_gb:g} GB) for this chat",
-                                  lambda ans, t=m.tag: (self._download_ok.add(t), self._set_chat_model(t))
-                                  if ans == "yes" else self.chat.add("info", "Okay, no download."))
-            return
-        self._set_chat_model(models.find(tag).tag if tag else None)
-
-    def _set_chat_model(self, tag: str | None) -> None:
-        self.chat_model = tag
-        self.model_status.override = tag
-        self.model_status.ensure(force=True)
-        self._update_model_chip()
-        if self.chat is not None:
-            self.chat.add("info", f"This chat now uses {models.label(tag)}. A new chat goes back to the default, "
-                                  f"{models.label(self.cfg.model)}." if tag else
-                          f"This chat uses the default model again: {models.label(self.cfg.model)}.")
-            self._show_model_banner()
-        if self._resume_after_switch:                    # (the token limit: go on with the new model)
-            self._resume_after_switch = False
-            if self._task_active and self.worker is None and self.chat is not None:
-                QTimer.singleShot(0, self._request)
-
-    # ---------------------------------------------------------------- external AI models
-    def _ask_name(self) -> None:
-        """Settings -> Name...: the cat's own name (empty: none, as before)."""
-        from ..ui.dialogs import NameDialog
-
-        dlg = NameDialog("Your cat's name", "What should I be called? The chat, the menu, the tray and the "
-                         f"notifications show it - up to {naming.MAX_LEN} letters, numbers or spaces. "
-                         f"Leave it empty and I'm just {naming.APP} again.", naming.custom(), naming.MAX_LEN)
-        dlg.submitted.connect(lambda text, d=dlg: self._check_name(text, d))
-        self.provider_settings.show_amount_dialog(dlg)
-
-    def _check_name(self, text: str, dlg: Any) -> None:
-        name, problem = naming.check(text)
-        try:
-            dlg.checked(not problem, problem)
-        except RuntimeError:
-            return                                       # (the dialog was closed meanwhile)
-        if not problem:
-            self.set_cat_name(name)
-
-    def set_cat_name(self, name: str) -> None:
-        """A new name for the cat: everything that shows it follows at once; the AI hears it with the
-        next message (Copilot's session keeps its instructions, so it gets a fresh one then)."""
-        self.saved.cat_name = naming.set_name(name)
-        self.save()
-        self.menu.title = naming.title().upper()
-        self.tray.rename()
-        if self.chat is not None:
-            self.chat.rename()
-        self._copilot_stale = True
-        log.info("the cat's name: %s", self.saved.cat_name or "(none)")
-
-    def _open_menu_at(self, keys: list[str]) -> None:
-        self._open_menu()
-        self.menu.expanded = set(keys)
-        self.menu.refresh(self._menu_items())
-
+    # ================================================================ external AI models
     def _credit_budget(self) -> external.CreditBudget:
         return external.CreditBudget(self.accounts.ext_p(self.accounts.credit_p),
                                      self.saved.ext_usage.setdefault("copilot_credits", {}))
@@ -825,7 +419,7 @@ class PixelCatApp(QObject):
                 if isinstance(q, dict) and q.get("total") and not q.get("unlimited") else "")
         text = (f"🐾 <b>Copilot credit limit reached.</b> I've used {fc(used)} of the {fc(allowed)} AI credits you gave "
                 f"me for Copilot models this month{html.escape(plan)}. Switch to another model, or keep going with "
-                f"{html.escape(models.label(self._effective_model()))} and raise my credit limit to {fc(nxt)} until it "
+                f"{html.escape(models.label(self.model_choice.effective_model()))} and raise my credit limit to {fc(nxt)} until it "
                 f"resets {html.escape(external.fmt_reset(cb.reset_at()))}.")
         log.info("copilot credit limit reached: %.1f of %.1f", used, allowed)
         self.chat.ask_choice(text, [("switch", "SWITCH MODEL"), ("raise", f"RAISE TO {fc(nxt).upper()}"),
@@ -858,7 +452,7 @@ class PixelCatApp(QObject):
                 self.accounts.ext_p(cp)["quota"] = q
                 self.save()
                 if self.menu.isVisible():
-                    self.menu.refresh(self._menu_items())
+                    self.menu.refresh(self.menus.menu_items())
         self.popups.in_background(lambda: prov.quota(self.creds, auth, start=force), got)
 
     def _copilot_chat(self, p: str) -> Any:
@@ -921,23 +515,12 @@ class PixelCatApp(QObject):
         self.save()
         if not self.accounts.auth(p):
             if (external.parse(self.cfg.model) or ("",))[0] == p:
-                self._set_default_model(models.DEFAULT)
-            if (external.parse(self.chat_model) or ("",))[0] == p:
-                self.chat_model = None
+                self.model_choice.set_default_model(models.DEFAULT)
+            if (external.parse(self.chat_state.chat_model) or ("",))[0] == p:
+                self.chat_state.chat_model = None
                 self.model_status.override = None
-                self._update_model_chip()
+                self.model_choice.update_model_chip()
         self.popups.popup(prov.brand, paras([msg]), "OK")
-
-    def _ext_chat_items(self) -> list[MenuItem]:
-        """The chat's model menu: the connected providers' models."""
-        out = []
-        for p, prov in self.accounts.external.items():
-            ms = self.accounts.models(p) if self.accounts.auth(p) else []
-            if ms:
-                out.append(MenuItem(f"chatmodels_{p}", f"{prov.brand} models", "chat", separator_before=not out,
-                                    children=[MenuItem(f"chatmodel:{p}:{m['id']}", m["name"], radio=True,
-                                                       checked=self.chat_model == f"{p}:{m['id']}") for m in ms]))
-        return out
 
     def _ext_worker(self, p: str, mid: str, msgs: list[dict[str, Any]]) -> Any:
         """The request for an external model - or None (not connected, or the token limit)."""
@@ -952,7 +535,7 @@ class PixelCatApp(QObject):
         if not self._ext_gate(p):
             return None
         st = self.saved.ext_settings
-        think, effort = self._ext_think_effort()
+        think, effort = self.model_choice.ext_think_effort()
         tools = self.toolbox.schemas() if self.cfg.enable_tools else None
         req = ChatRequest(mid, msgs, tools, think, effort, self.creds, auth, info=self.accounts.info(p, mid))
         if prov.credits and not self._credit_gate():
@@ -1034,7 +617,7 @@ class PixelCatApp(QObject):
         used, allowed, nxt = b.used(), b.allowed(), b.next_allowed()
         text = (f"🐾 <b>Token limit reached.</b> I've used {fmt(used)} of your {fmt(allowed)}-token limit for "
                 f"{prov.brand} models {external.PERIOD_WORD[b.period]}. Switch to another model, or keep going with "
-                f"{html.escape(models.label(self._effective_model()))} and raise the limit to {fmt(nxt)} until it "
+                f"{html.escape(models.label(self.model_choice.effective_model()))} and raise the limit to {fmt(nxt)} until it "
                 f"resets {html.escape(external.fmt_reset(b.reset_at()))}.")
         log.info("%s token limit reached: %d of %d", p, used, allowed)
         self.chat.ask_choice(text, [("switch", "SWITCH MODEL"), ("raise", f"RAISE TO {fmt(nxt).upper()}"),
@@ -1053,7 +636,7 @@ class PixelCatApp(QObject):
         elif key == "switch":
             self._resume_after_switch = True
             self.chat.add("info", "Pick the model to go on with (the button next to SEND).")
-            self._open_model_menu()
+            self.model_choice.open_model_menu()
         else:
             self.chat.add("info", "Okay, I stopped here. Say 'continue' when you want me to go on.")
             self._end_task()
@@ -1115,16 +698,23 @@ class PixelCatApp(QObject):
             if yes and not url and self._task_active:
                 self._resume_after_switch = True
                 self.open_chat()
-                self._open_model_menu()
+                self.model_choice.open_model_menu()
             elif self._task_active and not self._resume_after_switch:
                 self._end_task()
         pop.answered.connect(answer)
+
+    def _switched_model(self) -> None:
+        """Another model was picked for this chat (the model menu): a task stopped at the token limit goes on."""
+        if self._resume_after_switch:                    # (the token limit: go on with the new model)
+            self._resume_after_switch = False
+            if self._task_active and self.worker is None and self.chat is not None:
+                QTimer.singleShot(0, self._request)
 
     def _show_model_banner(self) -> None:
         if self.chat is None:
             return
         text = self.model_status.banner()
-        ext = external.parse(self._effective_model())
+        ext = external.parse(self.model_choice.effective_model())
         prov = self.providers[ext[0]].info if ext else None
         if (text is None and prov is not None and prov.signin_kind == "browser"
                 and self.accounts.auth(prov.key) == "chatgpt"):
@@ -1140,12 +730,12 @@ class PixelCatApp(QObject):
                 return
             for kind in ("style", "accent", "size", "font"):
                 if key.startswith(kind + ":"):
-                    self._set_look(kind, key.split(":", 1)[1])
+                    self.menus.set_look(kind, key.split(":", 1)[1])
                     return
             if key.startswith("model:"):
-                self._choose_default_model(key.split(":", 1)[1])
+                self.model_choice.choose_default_model(key.split(":", 1)[1])
                 if self.menu.isVisible():
-                    self.menu.refresh(self._menu_items())
+                    self.menu.refresh(self.menus.menu_items())
                 return
             if key.startswith("game:"):
                 self.minigames.start_minigame(key.split(":", 1)[1])
@@ -1168,7 +758,7 @@ class PixelCatApp(QObject):
                 self.open_chat()
             elif key == "set_name":
                 self.menu.close()
-                self._ask_name()
+                self.menus.ask_name()
             elif key == "feed":
                 b.feed()
             elif key == "play":
@@ -1217,7 +807,7 @@ class PixelCatApp(QObject):
                 self.quit()
             self.world.sync_tray()
             if self.menu.isVisible():
-                self.menu.refresh(self._menu_items())   # a toggled setting shows its new state
+                self.menu.refresh(self.menus.menu_items())   # a toggled setting shows its new state
         except Exception:  # noqa: BLE001
             log.exception("menu action %s failed", key)
 
@@ -1255,7 +845,7 @@ class PixelCatApp(QObject):
             self.chat.new_chat_requested.connect(self.new_chat)
             self.chat.auto_toggled.connect(lambda: self.set_auto_mode(not self.saved.auto_mode))
             self.chat.watch_cancel_requested.connect(self._cancel_watch)
-            self.chat.model_menu_requested.connect(self._open_model_menu)
+            self.chat.model_menu_requested.connect(self.model_choice.open_model_menu)
             self.chat.history_toggled.connect(self._toggle_history)
             self.chat.history_open.connect(self.open_saved_chat)
             self.chat.history_delete.connect(self._delete_saved_chat)
@@ -1263,7 +853,7 @@ class PixelCatApp(QObject):
             self.chat.set_auto_mode(self.saved.auto_mode)
             self.chat.set_watches([(w.id, w.short()) for w in self.watches.active()])
             self._show_model_banner()
-            self._update_model_chip()
+            self.model_choice.update_model_chip()
         return self.chat
 
     def _save_chat_layout(self) -> None:
@@ -1288,10 +878,10 @@ class PixelCatApp(QObject):
     def open_chat(self) -> None:
         self._ensure_chat()
         assert self.chat is not None
-        if not getattr(self, "_too_big_said", False) and self._model_fit(self._effective_model()) == "too_big":
+        if not getattr(self, "_too_big_said", False) and self.model_choice.model_fit(self.model_choice.effective_model()) == "too_big":
             self._too_big_said = True
-            m = models.find(self._effective_model())
-            adv = self._advice()
+            m = models.find(self.model_choice.effective_model())
+            adv = self.model_choice.advice()
             better = ("an online AI (Settings → AI model → External AI models)" if adv.online or adv.model is None
                       else f"{adv.model.name} {adv.model.short} (marked BEST in Settings → AI model)")
             self.chat.add("info", f"Heads up: {m.name} {m.short} is too big for this PC - while it runs, the PC gets "
@@ -1316,13 +906,13 @@ class PixelCatApp(QObject):
         self.history.clear()
         self._chat_id, self._chat_created, self._chat_sig = None, 0.0, ""
         self._drop_copilot_chat()
-        if self.chat_model is not None or self.chat_effort is not None:   # (a new chat: the defaults)
-            self.chat_effort = None
-            if self.chat_model is not None:
-                self.chat_model = None
+        if self.chat_state.chat_model is not None or self.chat_state.chat_effort is not None:   # (a new chat: the defaults)
+            self.chat_state.chat_effort = None
+            if self.chat_state.chat_model is not None:
+                self.chat_state.chat_model = None
                 self.model_status.override = None
                 self.model_status.ensure(force=True)
-            self._update_model_chip()
+            self.model_choice.update_model_chip()
         self._sent = None
         self._pending_calls.clear()
         self._tool_round = 0
@@ -1338,7 +928,7 @@ class PixelCatApp(QObject):
         assert self.chat is not None
         shape = ([(m.role, m.text) for m in self.chat.msgs], [(m.get("role"), len(str(m.get("content") or "")),
                                                                 len(m.get("tool_calls") or [])) for m in self.history],
-                 self.chat_model, self.chat_effort)
+                 self.chat_state.chat_model, self.chat_state.chat_effort)
         return hashlib.sha1(json.dumps(shape, default=str).encode("utf-8")).hexdigest()
 
     def _store_chat(self) -> None:
@@ -1352,8 +942,8 @@ class PixelCatApp(QObject):
             return
         data = {"id": self._chat_id or new_id(), "created": self._chat_created or time.time(),
                 "msgs": [[m.role, m.text] for m in self.chat.msgs if not (m.role == "cat" and m.text == GREETING)],
-                "history": self.history, "model": self._effective_model(), "chat_model": self.chat_model,
-                "chat_effort": self.chat_effort}
+                "history": self.history, "model": self.model_choice.effective_model(), "chat_model": self.chat_state.chat_model,
+                "chat_effort": self.chat_state.chat_effort}
         try:
             self.chats.save(data)
         except Exception:  # noqa: BLE001 - the chat keeps working without its history
@@ -1396,15 +986,15 @@ class PixelCatApp(QObject):
         if isinstance(tag, str) and tag:
             ext = external.parse(tag)
             if (self.accounts.auth(ext[0]) if ext else models.find(tag) is not None and model_on_disk(tag)):
-                self.chat_model = tag
+                self.chat_state.chat_model = tag
                 self.model_status.override = tag
                 self.model_status.ensure(force=True)
             else:
                 notes.append(f"It used {models.label(tag)}, which isn't available now - so it uses the default, "
                              f"{models.label(self.cfg.model)}.")
         eff = data.get("chat_effort")
-        self.chat_effort = eff if eff in external.EFFORTS else None
-        self._update_model_chip()
+        self.chat_state.chat_effort = eff if eff in external.EFFORTS else None
+        self.model_choice.update_model_chip()
         self._show_model_banner()
         chat.load([(r, t) for r, t in data.get("msgs") or [] if isinstance(r, str) and isinstance(t, str)])
         when = datetime.fromtimestamp(float(data.get("updated") or time.time()))
@@ -1526,18 +1116,18 @@ class PixelCatApp(QObject):
             arg = cmd[7:].strip()
             arg = {"default": "", "normal": "medium", "med": "medium", "extra high": "xhigh", "extra": "xhigh",
                    "x-high": "xhigh", "maximum": "max"}.get(arg, arg)
-            levels = self._effort_levels()
+            levels = self.model_choice.effort_levels()
             if cmd == "/effort" or (arg and arg not in external.EFFORTS):
-                now = external.EFFORTS.get(self.chat_effort or "", "") or \
-                    f"the default ({external.EFFORTS.get(self._default_effort(), 'Medium')})"
+                now = external.EFFORTS.get(self.chat_state.chat_effort or "", "") or \
+                    f"the default ({external.EFFORTS.get(self.model_choice.default_effort(), 'Medium')})"
                 pick = ", ".join(e for e in levels) if levels else "none - this model has no effort levels"
                 self.chat.add("info", f"This chat's effort: {now}. /effort LEVEL changes it for this chat "
                                       f"({pick}), /effort default goes back. Or use the model button next to SEND.")
             elif arg and levels is not None and arg not in levels:
-                self.chat.add("info", f"{models.label(self._effective_model())} has these effort levels: "
+                self.chat.add("info", f"{models.label(self.model_choice.effective_model())} has these effort levels: "
                                       f"{', '.join(levels)}.")
             else:
-                self._set_chat_effort(arg or None)
+                self.model_choice.set_chat_effort(arg or None)
             return True
         if cmd == "/permissions":
             allowed = ", ".join(self.saved.auto_approved_tools) or "none"
@@ -1554,12 +1144,12 @@ class PixelCatApp(QObject):
             assert self.chat is not None
             arg = cmd[6:].strip()
             if not arg:
-                self.chat.add("info", f"This chat uses {models.label(self._effective_model())}. "
+                self.chat.add("info", f"This chat uses {models.label(self.model_choice.effective_model())}. "
                                       "Pick another for this chat with the model button next to SEND or /model NAME "
                                       "(" + ", ".join(m.short for m in models.MODELS) + "); /model default goes back. "
                                       "The default model is in Settings -> AI model.")
             else:
-                self._choose_chat_model(None if arg == "default" else arg)
+                self.model_choice.choose_chat_model(None if arg == "default" else arg)
             return True
         if cmd in ("/getmodel", "/get model", "/downloadmodel", "/download-model"):
             assert self.chat is not None
@@ -1674,7 +1264,7 @@ class PixelCatApp(QObject):
         """How many tokens a request may hold: ``num_ctx`` for local models (and Copilot, which
         keeps its own context); Claude and ChatGPT: the model's own maximum - smaller if the
         provider said a request was too long."""
-        ext = external.parse(self._effective_model())
+        ext = external.parse(self.model_choice.effective_model())
         if not ext:
             return self.cfg.num_ctx
         p, mid = ext
@@ -1803,7 +1393,7 @@ class PixelCatApp(QObject):
         sys_msg = {"role": "system", "content": build_system_prompt(self.toolbox.names() if self.cfg.enable_tools else [],
                                                                     naming.ai())}
         msgs = [sys_msg] + self._context()
-        ext = external.parse(self._effective_model())
+        ext = external.parse(self.model_choice.effective_model())
         if ext:
             if self.providers[ext[0]].max_input(ext[1], self.accounts.info(*ext)) is not None:
                 # (how big this request is, if it turns out too long)
@@ -1812,7 +1402,7 @@ class PixelCatApp(QObject):
             if worker is None:
                 return
         else:
-            if self.cfg.ai_mode == "online" and self.chat_model is None:
+            if self.cfg.ai_mode == "online" and self.chat_state.chat_model is None:
                 from ..llm.model_status import ONLINE_ONLY
 
                 self.chat.add("info", ONLINE_ONLY)
@@ -1820,7 +1410,7 @@ class PixelCatApp(QObject):
                 return
             tools = self.toolbox.schemas() if (self.cfg.enable_tools and self.native_tools) else None
             think = self._think_now()
-            req = ChatRequest(self._effective_model(), msgs, tools, think, cfg=self.cfg)
+            req = ChatRequest(self.model_choice.effective_model(), msgs, tools, think, cfg=self.cfg)
             local = self.accounts.local
             worker = QtChatWorker(functools.partial(local.new_chat, req), provider=local.info.key,
                                   model=req.model, local=True)
@@ -1839,7 +1429,7 @@ class PixelCatApp(QObject):
         """'auto': think when a request starts (planning) or after a failed step (recovering);
         routine steps (type the next item, press a key) stay fast.  This chat's effort decides
         first: low = never, medium = 'auto', high and up = always."""
-        eff = self.chat_effort
+        eff = self.chat_state.chat_effort
         mode = self.cfg.think if eff is None else "auto" if eff == "medium" else eff != "low"
         if not isinstance(mode, str):
             return mode
@@ -1990,7 +1580,7 @@ class PixelCatApp(QObject):
             self._request()  # retry using the text tool protocol
             return
         self.chat.end_cat()
-        self.chat.add("error", friendly_error(kind, detail, self._effective_model(), self.cfg.ollama_url))
+        self.chat.add("error", friendly_error(kind, detail, self.model_choice.effective_model(), self.cfg.ollama_url))
         self._end_task()
 
     def _next_call(self) -> None:

@@ -183,7 +183,7 @@ def main() -> int:
         # menu at the far left/top edge
         pet.brain.x, pet.brain.y = mon.work[0] + 20, mon.work[1] + 60
         ov.sync(ov.scale)
-        pet._open_menu()
+        pet.menus.open_menu()
         g3 = pet.menu.geometry()
         check("menu at screen corner stays on-screen", g3.left() >= wl and g3.top() >= wt and g3.right() < wr
               and g3.bottom() < wb, str(g3.getRect()))

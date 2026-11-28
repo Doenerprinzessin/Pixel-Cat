@@ -81,7 +81,7 @@ def test_credit_limit(pet) -> None:  # type: ignore[no-untyped-def]
 
 def test_the_open_menu_shows_the_new_setting(pet) -> None:  # type: ignore[no-untyped-def]
     pet.start()
-    pet._open_menu()
+    pet.menus.open_menu()
     pet._on_menu("ext:limit:copilot:0")
     assert pet.menu.isVisible()
     ext = next(c for c in pet.menu.items[4].children if c.key == "set_model").children[-1]
@@ -352,7 +352,7 @@ def test_a_failed_reload_says_why(bg, monkeypatch) -> None:  # type: ignore[no-u
 def test_removing_a_key_goes_back_to_the_default_model(bg, app_env) -> None:  # type: ignore[no-untyped-def]
     bg.creds.set("anthropic_key", "k")
     bg.accounts.ext_p("anthropic")["models"] = MODELS
-    bg._choose_default_model("anthropic:m1")
+    bg.model_choice.choose_default_model("anthropic:m1")
     assert bg.cfg.model == "anthropic:m1"
     bg._on_menu("ext:out:anthropic")
     assert bg.creds.get("anthropic_key") is None and bg.accounts.auth("anthropic") == ""
@@ -388,12 +388,12 @@ def test_signing_out_of_github_and_removing_the_token(bg) -> None:  # type: igno
     bg.creds.set("copilot_signin", {"token": "t"})
     bg.creds.set("copilot_key", "k")
     s.update(auth="signin", login="octocat", quota={"total": 5})
-    bg.chat_model = "copilot:m1"
+    bg.chat_state.chat_model = "copilot:m1"
     bg._on_menu("ext:out:copilot")
     assert bg.creds.get("copilot_signin") is None and bg.accounts.auth("copilot") == "key"
-    assert "quota" not in s and s["login"] == "octocat" and bg.chat_model == "copilot:m1"
+    assert "quota" not in s and s["login"] == "octocat" and bg.chat_state.chat_model == "copilot:m1"
     bg._ext_disconnect("copilot", only_key=True)
-    assert bg.accounts.auth("copilot") == "" and "login" not in s and bg.chat_model is None
+    assert bg.accounts.auth("copilot") == "" and "login" not in s and bg.chat_state.chat_model is None
     assert bg.popups.open[-1].text.text().endswith("The GitHub token is removed.</p>")
 
 
@@ -461,7 +461,7 @@ def test_raising_the_token_limit_goes_on(pet, monkeypatch) -> None:  # type: ign
 
 def test_switching_or_stopping_at_the_token_limit(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     opened: list[bool] = []
-    monkeypatch.setattr(pet, "_open_model_menu", lambda: opened.append(True))
+    monkeypatch.setattr(pet.model_choice, "open_model_menu", lambda: opened.append(True))
     _task(pet)
     pet._limit_answer("openai", "switch")
     assert pet._resume_after_switch and opened == [True]
@@ -515,12 +515,12 @@ def test_choosing_a_local_model_that_isnt_downloaded_asks_first(pet, app_env) ->
     assert pet.chat is not None and pet.chat.isVisible() and pet.cfg.model == "qwen3.5:35b-a3b"
     assert "download Medium (9B) (6.6 GB) and make it the default model" in pet.chat.confirm_label.text()
     pet.chat.yes_btn.click()
-    assert pet.cfg.model == "qwen3.5:9b" and "qwen3.5:9b" in pet._download_ok
+    assert pet.cfg.model == "qwen3.5:9b" and "qwen3.5:9b" in pet.model_choice.download_ok
 
 
 def test_a_local_default_model_switches_back_to_local_ai(pet, app_env) -> None:  # type: ignore[no-untyped-def]
     pet.cfg.ai_mode = "online"
-    pet._set_default_model("qwen3.5:4b")
+    pet.model_choice.set_default_model("qwen3.5:4b")
     assert app_env.user_settings == [("model", "qwen3.5:4b"), ("ai_mode", "local")] and app_env.ensures == [True]
 
 
@@ -535,53 +535,53 @@ def test_effort_levels(pet, model: str, info: dict, levels) -> None:  # type: ig
     if ext:
         pet.accounts.ext_p(ext[0])["models"] = [{"id": ext[1], "name": "M", **info}]
     pet.cfg.model = model
-    assert pet._effort_levels() == levels
+    assert pet.model_choice.effort_levels() == levels
 
 
 @pytest.mark.parametrize(("think", "default"), [("auto", "medium"), (True, "high"), (False, "low"), ("on", "high"),
                                                 ("off", "low")])
 def test_default_effort_of_local_models(pet, think, default: str) -> None:  # type: ignore[no-untyped-def]
     pet.cfg.think = think
-    assert pet._default_effort() == default
+    assert pet.model_choice.default_effort() == default
 
 
 def test_default_effort_of_online_models_comes_from_settings(pet) -> None:  # type: ignore[no-untyped-def]
     pet.cfg.model = "openai:m1"
     pet.saved.ext_settings["effort"] = "xhigh"
-    assert pet._default_effort() == "xhigh"
-    assert pet._ext_think_effort() == (True, "xhigh")
+    assert pet.model_choice.default_effort() == "xhigh"
+    assert pet.model_choice.ext_think_effort() == (True, "xhigh")
     pet.saved.ext_settings["thinking"] = False
-    assert pet._ext_think_effort() == (False, "xhigh")
-    pet.chat_effort = "low"
-    assert pet._ext_think_effort() == (True, "low")
+    assert pet.model_choice.ext_think_effort() == (False, "xhigh")
+    pet.chat_state.chat_effort = "low"
+    assert pet.model_choice.ext_think_effort() == (True, "low")
 
 
 def test_this_chats_model_and_effort(pet) -> None:  # type: ignore[no-untyped-def]
     chat = pet._ensure_chat()
     assert chat.model_btn.text() == "35B"
-    pet._on_model_menu("chateffort:high")
-    assert pet.chat_effort == "high" and chat.model_btn.text() == "35B · HIGH"
+    pet.model_choice.on_model_menu("chateffort:high")
+    assert pet.chat_state.chat_effort == "high" and chat.model_btn.text() == "35B · HIGH"
     assert "This chat now uses High effort - I always think first." in chat.msgs[-1].text
-    pet._on_model_menu("chateffort:default")
-    assert pet.chat_effort is None and chat.model_btn.text() == "35B"
-    pet._on_model_menu("chatmodel:qwen3.5:9b")
+    pet.model_choice.on_model_menu("chateffort:default")
+    assert pet.chat_state.chat_effort is None and chat.model_btn.text() == "35B"
+    pet.model_choice.on_model_menu("chatmodel:qwen3.5:9b")
     assert "download Medium (9B)" in chat.confirm_label.text()
     chat.no_btn.click()
-    assert pet.chat_model is None and chat.msgs[-1].text == "Okay, no download."
+    assert pet.chat_state.chat_model is None and chat.msgs[-1].text == "Okay, no download."
 
 
 def test_a_connected_external_model_for_this_chat(pet, app_env) -> None:  # type: ignore[no-untyped-def]
     chat = pet._ensure_chat()
-    pet._on_model_menu("chatmodel:anthropic:m1")
-    assert pet.chat_model is None and "aren't connected" in chat.msgs[-1].text
+    pet.model_choice.on_model_menu("chatmodel:anthropic:m1")
+    assert pet.chat_state.chat_model is None and "aren't connected" in chat.msgs[-1].text
     pet.creds.set("anthropic_key", "k")
     pet.accounts.ext_p("anthropic")["models"] = [{"id": "m1", "name": "Claude One"}]
     external.NAMES["anthropic:m1"] = "Claude One"
-    pet._on_model_menu("chatmodel:anthropic:m1")
-    assert pet.chat_model == "anthropic:m1" and pet.model_status.override == "anthropic:m1"
+    pet.model_choice.on_model_menu("chatmodel:anthropic:m1")
+    assert pet.chat_state.chat_model == "anthropic:m1" and pet.model_status.override == "anthropic:m1"
     assert chat.model_btn.styleSheet() != "" and app_env.ensures[-1] is True
     pet.new_chat()
-    assert pet.chat_model is None and pet.model_status.override is None
+    assert pet.chat_state.chat_model is None and pet.model_status.override is None
 
 
 def test_the_model_banner_for_a_chatgpt_plan(pet) -> None:  # type: ignore[no-untyped-def]
@@ -619,7 +619,7 @@ def test_the_menu_popups_and_banner_tell_the_injected_description(make_app, sync
     menu = {k.key: k for k in pet.provider_settings.external_menu().children}
     assert menu["ext_openai"].label == "Zed (ZedCo)" and menu["ext_anthropic"].label == "Claude (Anthropic)"
     assert menu["ext_openai"].children[0].label == "Zed key in"
-    assert [i.label for i in pet._ext_chat_items()] == ["Zed models"]
+    assert [i.label for i in pet.model_choice.ext_chat_items()] == ["Zed models"]
     _task(pet)
     pet._limit_popup("openai", {"why": "rate"})
     assert "ZedCo's rate limit" in pet.popups.open[-1].text.text() and "ZedCo's rate limit" in pet.chat.msgs[-1].text

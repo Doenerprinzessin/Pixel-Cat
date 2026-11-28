@@ -225,9 +225,9 @@ def test_chat_commands(chat_pet, workers, cmd: str, reply: str) -> None:  # type
 
 def test_effort_command(chat_pet) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "/effort high")
-    assert chat_pet.chat_effort == "high"
+    assert chat_pet.chat_state.chat_effort == "high"
     _say(chat_pet, "/effort default")
-    assert chat_pet.chat_effort is None
+    assert chat_pet.chat_state.chat_effort is None
 
 
 def test_auto_and_permission_commands(chat_pet) -> None:  # type: ignore[no-untyped-def]
@@ -321,7 +321,7 @@ def test_the_context_is_extended_during_a_task(pet) -> None:  # type: ignore[no-
     (None, "auto", True, True), (None, "auto", False, False), ("low", "auto", True, False),
     ("high", "auto", False, True), ("medium", True, False, False), (None, True, False, True), (None, "off", True, False)])
 def test_when_the_model_thinks(pet, effort, think, last_user: bool, want: bool) -> None:  # type: ignore[no-untyped-def]
-    pet.chat_effort, pet.cfg.think = effort, think
+    pet.chat_state.chat_effort, pet.cfg.think = effort, think
     pet.history[:] = [{"role": "user", "content": "x"}] if last_user else [{"role": "tool", "content": "y"}]
     assert pet._think_now() is want
 

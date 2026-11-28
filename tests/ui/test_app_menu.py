@@ -47,7 +47,7 @@ def keys(items: list[MenuItem]) -> list[str]:
 
 # ---------------------------------------------------------------- snapshot
 def test_top_level(pet) -> None:  # type: ignore[no-untyped-def]
-    items = pet._menu_items()
+    items = pet.menus.menu_items()
     assert [f"{it.key} | {it.label}" for it in items] == [
         "pause | Pause", "chat | Chat", "games | Minigames", "cosmetics | Cosmetics", "settings | Settings",
         "quit | Quit"]
@@ -55,7 +55,7 @@ def test_top_level(pet) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_minigames_and_cosmetics(pet) -> None:  # type: ignore[no-untyped-def]
-    items = pet._menu_items()
+    items = pet.menus.menu_items()
     assert tree(find(items, "games").children) == [
         "game:ball | Play ball [NEW!]", "game:laser | Laser pointer [NEW!]", "game:treats | Treat toss [NEW!]",
         "game:knock | Knock it off! [STAGE 3]", "game:mice | Mouse hunt [STAGE 5]", "game:fishing | Fishing [STAGE 8]",
@@ -68,7 +68,7 @@ def test_minigames_and_cosmetics(pet) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_settings(pet) -> None:  # type: ignore[no-untyped-def]
-    settings = find(pet._menu_items(), "settings").children
+    settings = find(pet.menus.menu_items(), "settings").children
     assert [f"{it.key} | {it.label}" for it in settings] == [
         "set_name | Name...", "set_style | Style", "set_accent | Accent color", "set_size | Size", "set_font | Font",
         "set_model | AI model", "progress | Your progress", "quiet | Quiet mode", "autostart | Start with Windows",
@@ -83,7 +83,7 @@ def test_settings(pet) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_ai_model(pet) -> None:  # type: ignore[no-untyped-def]
-    model = find(pet._menu_items(), "set_model").children
+    model = find(pet.menus.menu_items(), "set_model").children
     assert [x if isinstance(x, str) else x[0] for x in tree(model)] == [
         "model:qwen3.5:0.8b | Tiny 0.8B [1.2 GB]", "model:qwen3.5:2b | Small 2B [2.7 GB]",
         "model:qwen3.5:4b | Light 4B [3.3 GB]", "model:qwen3.5:9b | Medium 9B [6.6 GB]",
@@ -237,7 +237,7 @@ def test_no_limit_hides_resets_and_raise(pet) -> None:  # type: ignore[no-untype
 
 def test_chat_model_menu(pet) -> None:  # type: ignore[no-untyped-def]
     connect(pet, "anthropic", "key")
-    items = pet._model_menu_items()
+    items = pet.model_choice.model_menu_items()
     assert [x if isinstance(x, str) else x[0] for x in tree(items)] == [
         "chatmodel:default | Default (Smart (35B))", "chatmodel:qwen3.5:0.8b | Tiny 0.8B [1.2 GB]",
         "chatmodel:qwen3.5:2b | Small 2B [2.7 GB]", "chatmodel:qwen3.5:4b | Light 4B [3.3 GB]",
@@ -253,20 +253,20 @@ def test_a_downloaded_model_is_marked_ready(pet, tmp_path) -> None:  # type: ign
     manifest = tmp_path / "ollama-models" / "manifests" / "registry.ollama.ai" / "library" / "qwen3.5" / "9b"
     manifest.parent.mkdir(parents=True)
     manifest.write_text("{}")
-    assert find(pet._menu_items(), "model:qwen3.5:9b").note == "6.6 GB READY"
+    assert find(pet.menus.menu_items(), "model:qwen3.5:9b").note == "6.6 GB READY"
 
 
 def test_game_notes_after_playing(make_app) -> None:  # type: ignore[no-untyped-def]
     st = SavedState(autostart_asked=True, xp=progress.xp_to_reach(3), plays=2, best_round=4,
                     game_plays={"laser": 1}, game_best={"laser": 12.0})
-    games = find(make_app(st)._menu_items(), "games").children
+    games = find(make_app(st).menus.menu_items(), "games").children
     assert [g.note for g in games[:4]] == ["BEST 4", "BEST 12", "NEW!", "NEW!"]
     assert not games[3].locked
 
 
 def test_the_menu_opens_next_to_the_cat(pet) -> None:  # type: ignore[no-untyped-def]
     pet.start()
-    pet._open_menu()
+    pet.menus.open_menu()
     assert pet.menu.isVisible() and pet.menu.subtitle == pet.brain.state.value.replace("_", " ")
     assert keys(pet.menu.items)[0] == "pause"
 
@@ -274,15 +274,15 @@ def test_the_menu_opens_next_to_the_cat(pet) -> None:  # type: ignore[no-untyped
 def test_no_menu_while_the_cat_is_carried(pet) -> None:  # type: ignore[no-untyped-def]
     pet.start()
     pet.brain.pick_up()
-    pet._open_menu()
+    pet.menus.open_menu()
     assert not pet.menu.isVisible() and pet.brain.state != S.HELD
 
 
 # ---------------------------------------------------------------- what the entries do
 def test_pause_and_resume(pet) -> None:  # type: ignore[no-untyped-def]
     pet._on_menu("pause")
-    assert pet.brain.paused and keys(pet._menu_items())[0] == "pause"
-    assert pet._menu_items()[0].label == "Resume"
+    assert pet.brain.paused and keys(pet.menus.menu_items())[0] == "pause"
+    assert pet.menus.menu_items()[0].label == "Resume"
     pet._on_menu("pause")
     assert not pet.brain.paused
 
@@ -307,7 +307,7 @@ def test_start_with_windows(pet, app_env) -> None:  # type: ignore[no-untyped-de
     pet._on_menu("autostart")
     assert app_env.autostart_set == [True] and pet.saved.autostart_asked
     app_env.desktop.autostart = True
-    assert find(pet._menu_items(), "autostart").checked
+    assert find(pet.menus.menu_items(), "autostart").checked
     pet._on_menu("autostart")
     assert app_env.autostart_set == [True, False]
 
@@ -348,7 +348,7 @@ def test_the_look(pet, app_env, key: str, attr: str, value: str) -> None:  # typ
 
 def test_a_style_change_refreshes_the_open_menu(pet) -> None:  # type: ignore[no-untyped-def]
     pet.start()
-    pet._open_menu()
+    pet.menus.open_menu()
     pet.menu.expanded = {"settings", "set_style"}
     pet._on_menu("style:mint")
     assert find(pet.menu.items, "style:mint").checked and pet.menu.isVisible()
@@ -367,7 +367,7 @@ def test_name(pet, app_env, monkeypatch) -> None:  # type: ignore[no-untyped-def
     dlg._save()
     assert pet.saved.cat_name == "Mochi" and naming.custom() == "Mochi" and pet.menu.title == "MOCHI"
     assert pet._copilot_stale and pet.chat._title_text() == "MOCHI CHAT"
-    pet.set_cat_name("")
+    pet.menus.set_cat_name("")
     assert pet.menu.title == "PIXEL CAT"
 
 
@@ -408,7 +408,7 @@ def test_a_minigame_starts_and_stops(pet) -> None:  # type: ignore[no-untyped-de
     pet.popups.open[-1].ok.click()
     assert (pet.saved.tutorials_seen == ["laser"] and pet.minigames.mini_active()
             and pet.minigames.running_game() == "laser")
-    assert find(pet._menu_items(), "stopgame").label == "Stop Laser pointer"
+    assert find(pet.menus.menu_items(), "stopgame").label == "Stop Laser pointer"
     for _ in range(5):
         pet.world._last_tick -= 1 / 30
         pet.world.tick()

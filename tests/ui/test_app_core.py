@@ -248,11 +248,11 @@ def test_a_fullscreen_foreground_window_of_another_app_hides_the_cat(started, ap
 
 def test_menus_and_popups_are_closed_while_hidden(started, app_env) -> None:  # type: ignore[no-untyped-def]
     pet = started
-    pet._open_menu()
+    pet.menus.open_menu()
     assert pet.menu.isVisible()
     pet.world._set_hidden(True)
     assert not pet.menu.isVisible()
-    pet._open_menu()
+    pet.menus.open_menu()
     assert not pet.menu.isVisible()                    # (nothing opens while hidden)
     pet.world._set_hidden(False)
 

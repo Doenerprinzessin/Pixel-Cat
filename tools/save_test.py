@@ -225,7 +225,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     pet.progress_io.tell_unreadable_save()
     check("a save that can't be read: the cat says so (and how to import an export)",
           pet.popups.open[-1].title == "A fresh start" and "Import progress" in pet.popups.open[-1].text.text())
-    items = {i.key: i for i in pet._menu_items()}
+    items = {i.key: i for i in pet.menus.menu_items()}
     sub = [c for c in items["settings"].children if c.key == "progress"]
     check("Menu > Settings > Your progress: Export and Import",
           bool(sub) and [c.key for c in sub[0].children] == ["export", "import"])

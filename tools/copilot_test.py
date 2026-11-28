@@ -449,7 +449,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     pet._copilot_quota(force=True)
     wait(lambda: isinstance(pet.accounts.ext_p("copilot").get("quota"), dict), 30)
     # the menu ---------------------------------------------------------------------------------------------
-    items = {i.key: i for i in pet._menu_items()}
+    items = {i.key: i for i in pet.menus.menu_items()}
     ai = next(c for c in items["settings"].children if c.key == "set_model")
     ext = next(c for c in ai.children if c.key == "ext")
     cop = next((c for c in ext.children if c.key == "ext_copilot"), None)
@@ -492,7 +492,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     q["total"] = 20000.0
     pet._on_menu("ext:climit:copilot:2000")
     m = pet.menu
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m.expanded = {"settings", "set_model", "ext", "ext_copilot"}
     m.u = 3
     w_, h_ = m._layout()

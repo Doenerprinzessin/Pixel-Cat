@@ -25,3 +25,12 @@ class WorldState:
         self.monitors = monitors
         self.hidden_fullscreen = False
         self.chat_was_visible = False
+
+
+class ChatState:
+    """The open chat's own choices (None: the default): ``chat_model`` and ``chat_effort``.  Set by the model
+    menu (``ModelChoice``) and by the chat (a new chat, a saved chat opened, a provider disconnected)."""
+
+    def __init__(self) -> None:
+        self.chat_model: str | None = None
+        self.chat_effort: str | None = None

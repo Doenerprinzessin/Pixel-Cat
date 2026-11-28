@@ -857,7 +857,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
         except RuntimeError:
             pet.popups.open.remove(p) if p in pet.popups.open else None
     # the menu ---------------------------------------------------------------------------------------
-    items = {i.key: i for i in pet._menu_items()}
+    items = {i.key: i for i in pet.menus.menu_items()}
     ai = next(c for c in items["settings"].children if c.key == "set_model")
     ext = next(c for c in ai.children if c.key == "ext")
     claude = next(c for c in ext.children if c.key == "ext_anthropic")
@@ -881,7 +881,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
           and linked.count("<a ") == 1 and a["url"] == "https://example.com/cats" and a["start"] == 12
           and spec.confirm == "soft" and spec.group == "web" and spec.background, linked)
     m = pet.menu
-    m.items = pet._menu_items()
+    m.items = pet.menus.menu_items()
     m.expanded = {"settings", "set_model", "ext", "ext_anthropic"}
     m.u = 3
     w_, h_ = m._layout()
@@ -959,7 +959,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     # switching model from the card ---------------------------------------------------------------------
     saved.ext_usage["anthropic"] = {"start": X.period_start("day", datetime.now()).timestamp(), "used": 1000,
                                     "allowed": 1000}
-    pet.chat_model = None
+    pet.chat_state.chat_model = None
     pet._on_user_message("switch please")
     wait(lambda: chat.choice.isVisible())
     chat._choice_btns[0].click()
@@ -967,7 +967,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     keys = [it.key for it in pet.model_menu.items]
     n0 = len(S["bodies"])
     pet.accounts.ext_p("anthropic")["limit"] = 0                # (the other model: no limit for the test)
-    pet._on_model_menu("chatmodel:anthropic:claude-haiku-5-5")
+    pet.model_choice.on_model_menu("chatmodel:anthropic:claude-haiku-5-5")
     wait(lambda: not pet._task_active)
     check("SWITCH MODEL: the model menu (with the Claude models) - picking one goes on with it",
           shown and "chatmodels_anthropic" in keys and len(S["bodies"]) == n0 + 1
@@ -986,10 +986,10 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
         pop._finish(False)
     wait(lambda: not pet._task_active)
     # context windows in the app -----------------------------------------------------------------------------
-    local, default = pet.chat_model, pet.cfg.model
-    pet.chat_model, pet.cfg.model = None, "qwen3.5:9b"
+    local, default = pet.chat_state.chat_model, pet.cfg.model
+    pet.chat_state.chat_model, pet.cfg.model = None, "qwen3.5:9b"
     b_local = pet._ctx_budget()
-    pet.chat_model, pet.cfg.model = "anthropic:claude-haiku-5-5", default
+    pet.chat_state.chat_model, pet.cfg.model = "anthropic:claude-haiku-5-5", default
     b_claude = pet._ctx_budget()
     pet.accounts.ext_p("anthropic")["limit"] = 0
     S["mode"] = "too_long_once"
@@ -1011,7 +1011,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
           len(S["bodies"]) == n0 + 3 and "longer than" in err and not pet._task_active, err[:120])
     S["mode"] = "text"
     pet.accounts.ext_p("anthropic").pop("ctx_learned", None)
-    pet.chat_model = local
+    pet.chat_state.chat_model = local
     # Sign in with ChatGPT from the menu (the browser is faked) ------------------------------------------------
     import webbrowser
     webbrowser.open = lambda url, *a, **k: threading.Thread(target=lambda: requests.get(url, timeout=10),
@@ -1068,7 +1068,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
                               "expires_at": time.time() + 3000})
     pet.accounts.ext_p("openai")["auth"] = "chatgpt"
     pet.accounts.ext_p("openai")["models"] = [{"id": "gpt-6.1-sol", "name": "GPT-6.1 Sol"}]
-    pet._set_chat_model("openai:gpt-6.1-sol")
+    pet.model_choice.set_chat_model("openai:gpt-6.1-sol")
     wait(lambda: "Using ChatGPT plan" in chat.model_bar.text(), 10)
     check("a chat on the ChatGPT plan says so, with Manage usage; the model button shows the model",
           chat.model_bar.isVisible() and "Using ChatGPT plan" in chat.model_bar.text()
