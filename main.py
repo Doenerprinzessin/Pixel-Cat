@@ -46,8 +46,8 @@ def main() -> int:
     platform.display.set_dpi_awareness()  # before any window exists
 
     if args.install or args.uninstall or platform.installer.is_setup_name(sys.executable):
-        if not getattr(sys, "frozen", False):
-            print("The installer works with the built exe: run  python build.py  and then dist\\PixelCat-Setup.exe")
+        if not getattr(sys, "frozen", False) and platform.profile.build_hint:
+            print(platform.profile.build_hint)
             return 1
         log.info("%s (%s)", "uninstalling" if args.uninstall else "setup", sys.executable)
         if args.quiet:

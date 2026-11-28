@@ -40,8 +40,25 @@ def app_main(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
 
 def test_installer_needs_the_built_exe(app_main, capsys: pytest.CaptureFixture) -> None:  # type: ignore[no-untyped-def]
     assert app_main.run("--install") == 1
-    assert "python build.py" in capsys.readouterr().out
+    assert capsys.readouterr().out == \
+        "The installer works with the built exe: run  python build.py  and then dist\\PixelCat-Setup.exe\n"
     assert app_main.calls == [("logging", False), ("dpi",)]
+
+
+@pytest.mark.parametrize("argv", [["--install"], ["--uninstall", "--quiet"]])
+def test_on_a_mac_the_installer_says_there_is_none_yet(monkeypatch, capsys, argv: list[str]) -> None:  # type: ignore[no-untyped-def]
+    import main
+    from pixelcat.adapters.macos import storage
+    from pixelcat.adapters.macos.profile import MAC
+
+    platform = FakePlatform(profile=MAC, installer=storage.MacInstaller())
+    monkeypatch.setattr(logsetup, "setup_logging", lambda debug=False: None)
+    monkeypatch.setattr(bootstrap, "build_platform", lambda *a, **k: platform)
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "argv", ["main.py", *argv])
+    assert main.main() == 1
+    assert capsys.readouterr().out == storage.NO_INSTALLER + "\n"
+    assert platform.system.calls == []
 
 
 def test_quiet_install_options_reach_the_installer(app_main) -> None:  # type: ignore[no-untyped-def]

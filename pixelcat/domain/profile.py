@@ -38,6 +38,8 @@ class Profile:
     text_editor: str = "Notepad"                         # "in Notepad or VS Code", "open Notepad and ..."
     new_chat_keys: str = "Ctrl+N"                        # "(Ctrl+N: new chat)", "Press ＋ (or Ctrl+N)"
     setup_hint: str = "Run PixelCat-Setup.exe again and tick “Set up the AI chat”, or install it from ollama.com."
+    # --install/--uninstall from the sources: what to build first ("": the installer port answers by itself)
+    build_hint: str = "The installer works with the built exe: run  python build.py  and then dist\\PixelCat-Setup.exe"
     held_hint: str = "ctrl, shift, alt, win"             # keys that can be held while using the mouse
     primary: str = "ctrl"                                # the shortcut modifier: ctrl+v, ctrl+a, ctrl+n, ctrl+z
     doc_end: str = "ctrl+end"                            # to the end of a document

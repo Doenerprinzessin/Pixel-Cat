@@ -78,6 +78,7 @@ MAC = Profile(
     text_editor="TextEdit",
     new_chat_keys="Cmd+N",
     setup_hint="Install it from ollama.com (the Mac app; open it once), then try again.",
+    build_hint="",                     # no installer yet: MacInstaller says so
     held_hint="ctrl, shift, alt (option), win (cmd)",
     primary="cmd",
     doc_end="cmd+down",
