@@ -219,7 +219,7 @@ def test_copilot_credits_with_a_known_plan(pet) -> None:  # type: ignore[no-unty
 
 
 def test_copilot_sign_in_shows_when_this_build_can_do_it(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import github_signin
+    from pixelcat.adapters.llm import github_signin
 
     monkeypatch.setattr(github_signin, "CLIENT_ID", "test-client")
     assert "ext:signin:copilot | Sign in with GitHub" in tree(pet._provider_menu("copilot").children)

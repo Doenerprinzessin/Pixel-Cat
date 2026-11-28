@@ -124,7 +124,7 @@ def test_custom_credit_limit(pet, dialogs, quota, text: str, ok: bool, limit) ->
 
 
 def test_custom_credit_limit_asks_github_for_the_plan_first(bg, dialogs, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import copilot_client
+    from pixelcat.adapters.llm import copilot_client
 
     asked: list[str] = []
     monkeypatch.setattr(copilot_client, "quota", lambda creds, auth, start=False: (asked.append(auth),
@@ -204,7 +204,7 @@ def test_menu_key_entry_opens_the_key_dialog(pet, p: str) -> None:  # type: igno
 def test_a_good_key_connects_the_provider(bg, monkeypatch, p: str, module: str) -> None:  # type: ignore[no-untyped-def]
     import importlib
 
-    mod = importlib.import_module(f"pixelcat.llm.{module}")
+    mod = importlib.import_module(f"pixelcat.adapters.llm.{module}")
     seen: list = []  # type: ignore[type-arg]
     monkeypatch.setattr(mod, "list_models", lambda creds, auth="key": (seen.append((creds.get(f"{p}_key"), auth)),
                                                                         MODELS)[1])
@@ -221,7 +221,7 @@ def test_a_good_key_connects_the_provider(bg, monkeypatch, p: str, module: str) 
 
 
 def test_a_bad_key_is_refused_with_the_reason(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import anthropic_client
+    from pixelcat.adapters.llm import anthropic_client
 
     def refuse(creds, auth="key"):  # type: ignore[no-untyped-def]
         raise Kind("auth")
@@ -235,7 +235,7 @@ def test_a_bad_key_is_refused_with_the_reason(bg, monkeypatch) -> None:  # type:
 
 
 def test_a_good_github_token_connects_copilot(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import copilot_client
+    from pixelcat.adapters.llm import copilot_client
 
     monkeypatch.setattr(copilot_client, "runtime_path", lambda: "copilot-runtime")
     monkeypatch.setattr(copilot_client, "check_token", lambda key: ("octocat", MODELS))
@@ -250,7 +250,7 @@ def test_a_good_github_token_connects_copilot(bg, monkeypatch) -> None:  # type:
 
 
 def test_copilot_without_its_runtime_offers_to_get_it(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import copilot_client
+    from pixelcat.adapters.llm import copilot_client
 
     installs: list[bool] = []
     monkeypatch.setattr(copilot_client, "runtime_path", lambda: None)
@@ -272,7 +272,7 @@ def test_menu_sign_in_entry_starts_that_providers_sign_in(pet, monkeypatch, p: s
 
 
 def test_chatgpt_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import openai_client
+    from pixelcat.adapters.llm import openai_client
 
     monkeypatch.setattr(openai_client, "list_models", lambda creds, auth: MODELS)
     bg.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r", "email": "cat@example.com"})
@@ -289,7 +289,7 @@ def test_chatgpt_sign_in_without_plan_usage(bg) -> None:  # type: ignore[no-unty
 
 
 def test_a_failed_or_cancelled_sign_in(bg) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import chatgpt_signin
+    from pixelcat.adapters.llm import chatgpt_signin
 
     bg._browser_done("openai", chatgpt_signin.SignInError("cancelled"))
     assert bg._popups == []
@@ -300,7 +300,7 @@ def test_a_failed_or_cancelled_sign_in(bg) -> None:  # type: ignore[no-untyped-d
 def test_github_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     import threading
 
-    from pixelcat.llm import copilot_client
+    from pixelcat.adapters.llm import copilot_client
 
     monkeypatch.setattr(copilot_client, "list_models", lambda creds, auth: MODELS)
     monkeypatch.setattr(copilot_client, "quota", lambda creds, auth, start=False: {"unlimited": True})
@@ -317,7 +317,7 @@ def test_github_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-unty
 def test_anthropic_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     import threading
 
-    from pixelcat.llm import anthropic_client
+    from pixelcat.adapters.llm import anthropic_client
 
     monkeypatch.setattr(anthropic_client, "list_models", lambda creds, auth="key": MODELS)
     bg._cli_signed_in("anthropic", "ok", threading.Event())
@@ -325,7 +325,7 @@ def test_anthropic_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-u
 
 
 def test_reload_the_model_list(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import openai_client
+    from pixelcat.adapters.llm import openai_client
 
     monkeypatch.setattr(openai_client, "list_models", lambda creds, auth: MODELS[:1])
     bg._on_menu("ext:refresh:openai")
@@ -336,7 +336,7 @@ def test_reload_the_model_list(bg, monkeypatch) -> None:  # type: ignore[no-unty
 
 
 def test_a_failed_reload_says_why(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import openai_client
+    from pixelcat.adapters.llm import openai_client
 
     def fail(creds, auth):  # type: ignore[no-untyped-def]
         raise Kind("ext_offline")
@@ -360,7 +360,7 @@ def test_removing_a_key_goes_back_to_the_default_model(bg, app_env) -> None:  # 
 
 
 def test_signing_out_of_anthropic(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import ant_tool
+    from pixelcat.adapters.llm import ant_tool
 
     calls: list = []  # type: ignore[type-arg]
     monkeypatch.setattr(ant_tool, "find", lambda: "ant.exe")
@@ -372,7 +372,7 @@ def test_signing_out_of_anthropic(bg, monkeypatch) -> None:  # type: ignore[no-u
 
 
 def test_signing_out_of_chatgpt(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import chatgpt_signin
+    from pixelcat.adapters.llm import chatgpt_signin
 
     monkeypatch.setattr(chatgpt_signin, "sign_out", lambda creds: False)
     bg.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r"})

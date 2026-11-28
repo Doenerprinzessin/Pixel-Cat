@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 import requests
 
-from .external import Credentials
+from ...llm.external import Credentials
 
 log = logging.getLogger(__name__)
 

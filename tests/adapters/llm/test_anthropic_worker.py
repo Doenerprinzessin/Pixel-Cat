@@ -16,9 +16,9 @@ import httpx2
 import pytest
 
 from fakes.chat import RecordingEvents
-from llm_providers.fakes import HISTORY, SSE, TOOLS, Json
-from pixelcat.llm import anthropic_client as AC
-from pixelcat.llm import ant_tool
+from adapters.llm.fakes import HISTORY, SSE, TOOLS, Json
+from pixelcat.adapters.llm import anthropic_client as AC
+from pixelcat.adapters.llm import ant_tool
 from pixelcat.llm.external import SEARCHING, MemoryCredentials
 from pixelcat.ports.llm import ChatRequest
 

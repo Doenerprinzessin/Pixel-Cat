@@ -22,10 +22,10 @@ from typing import Any
 
 import anthropic
 
-from ..ports.llm import ChatEvents, ChatRequest
+from ...llm.external import (ANTHROPIC, BASE_URLS, CLAUDE_MAX_OUT, SEARCHING, Credentials, is_too_long, media_type,
+                             too_long, tool_call_ids, wait_reset, with_sources)
+from ...ports.llm import ChatEvents, ChatRequest
 from .chat_job import ExternalChat
-from .external import (ANTHROPIC, BASE_URLS, CLAUDE_MAX_OUT, SEARCHING, Credentials, is_too_long, media_type,
-                       too_long, tool_call_ids, wait_reset, with_sources)
 
 log = logging.getLogger(__name__)
 

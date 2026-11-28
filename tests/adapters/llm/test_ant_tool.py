@@ -17,9 +17,9 @@ from typing import Any
 
 import pytest
 
-from llm_providers.fakes import Json, Raw
+from adapters.llm.fakes import Json, Raw
 from pixelcat import paths
-from pixelcat.llm import ant_tool as T
+from pixelcat.adapters.llm import ant_tool as T
 
 
 def test_folders():

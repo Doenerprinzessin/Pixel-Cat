@@ -133,7 +133,7 @@ def test_selftest_checks_each_part_of_the_build_once(pet, monkeypatch, caplog) -
     import anthropic
     from copilot._cli_version import CLI_VERSION
 
-    from pixelcat.llm import copilot_client
+    from pixelcat.adapters.llm import copilot_client
 
     monkeypatch.setattr(copilot_client, "new_client", lambda token, path: None)
     monkeypatch.setattr(copilot_client, "runtime_path", lambda: None)

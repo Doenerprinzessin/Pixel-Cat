@@ -14,7 +14,7 @@
   in a month (``CreditBudget``).  When it is reached the chat offers to raise it for now.
 * Thinking on/off and effort, for external models.
 
-The requests themselves: anthropic_client.py (the official SDK), openai_client.py (the
+The requests themselves (in pixelcat/adapters/llm): anthropic_client.py (the official SDK), openai_client.py (the
 Responses API, with an API key or "Sign in with ChatGPT") and copilot_client.py (GitHub's
 official Copilot SDK).
 """

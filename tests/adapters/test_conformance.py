@@ -10,10 +10,10 @@ import pytest
 
 from pixelcat import ports
 from pixelcat.adapters import llm, null
-from pixelcat.adapters.llm import signin
+from pixelcat.adapters.llm import anthropic_client, copilot_client, ollama_client, openai_client, signin
 from pixelcat.adapters.windows import escwatch, notifications
 from pixelcat.adapters.windows import platform as windows
-from pixelcat.llm import anthropic_client, copilot_client, ollama_client, openai_client, qt_chat
+from pixelcat.llm import qt_chat
 
 IMPLEMENTATIONS = {
     ports.DisplayPort: (windows.WindowsDisplay, null.NullDisplay),

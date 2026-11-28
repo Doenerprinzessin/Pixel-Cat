@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from llm_providers.fakes import Json, Raw
-from pixelcat.llm import github_signin as GS
+from adapters.llm.fakes import Json, Raw
+from pixelcat.adapters.llm import github_signin as GS
 from pixelcat.llm.external import MemoryCredentials
 
 DEVICE = {"device_code": "DEV", "user_code": "ABCD-1234", "interval": 1, "expires_in": 60,

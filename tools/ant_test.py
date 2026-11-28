@@ -43,7 +43,7 @@ sys.path.insert(0, str(ROOT))
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from pixelcat.bootstrap import build_platform  # noqa: E402
-from pixelcat.llm import ant_tool as T  # noqa: E402
+from pixelcat.adapters.llm import ant_tool as T  # noqa: E402
 from pixelcat.llm import external as X  # noqa: E402
 
 SECRETS = build_platform().secrets                 # keys.dat, as the app keeps it
@@ -238,7 +238,7 @@ def main() -> int:  # noqa: C901 - a linear test script
                                                                               / "default.json"))
     import anthropic
     X.BASE_URLS["anthropic"] = BASE
-    from pixelcat.llm import anthropic_client as AC
+    from pixelcat.adapters.llm import anthropic_client as AC
     ms = AC.list_models(X.Credentials(secrets=SECRETS), "signin")
     check("...and the requests use the sign-in's token", [m["id"] for m in ms] == ["claude-sonnet-5-5"]
           and S["auth"][-1] == "Bearer tok-from-ant", S["auth"][-1][:20])

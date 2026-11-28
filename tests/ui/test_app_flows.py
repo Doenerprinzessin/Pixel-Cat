@@ -9,7 +9,7 @@ import pytest
 
 from pixelcat.engine.states import S
 from pixelcat.llm import external
-from pixelcat.llm.chat_job import ExternalChat
+from pixelcat.adapters.llm.chat_job import ExternalChat
 from pixelcat.llm.watch import Watch
 
 pytestmark = pytest.mark.qt
@@ -35,7 +35,7 @@ def _titles(pet) -> list[str]:  # type: ignore[no-untyped-def]
 # ---------------------------------------------------------------- sign-in flows
 @pytest.mark.parametrize("have_helper", [True, False])
 def test_anthropic_sign_in(bg, app_env, monkeypatch, have_helper: bool) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import ant_tool, anthropic_client
+    from pixelcat.adapters.llm import ant_tool, anthropic_client
 
     steps: list[str] = []
     monkeypatch.setattr(ant_tool, "find", lambda: "ant.exe" if have_helper else None)
@@ -59,7 +59,7 @@ def test_anthropic_sign_in(bg, app_env, monkeypatch, have_helper: bool) -> None:
 
 
 def test_anthropic_helper_download_fails(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import ant_tool
+    from pixelcat.adapters.llm import ant_tool
 
     def fail(progress, cancel):  # type: ignore[no-untyped-def]
         raise ant_tool.AntError("The download was damaged.")
@@ -74,7 +74,7 @@ def test_anthropic_helper_download_fails(bg, monkeypatch) -> None:  # type: igno
 
 
 def test_github_sign_in(bg, app_env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import copilot_client, github_signin
+    from pixelcat.adapters.llm import copilot_client, github_signin
 
     def sign_in(creds, show_code, cancel):  # type: ignore[no-untyped-def]
         show_code("ABCD-1234", "https://github.com/login/device")
@@ -94,7 +94,7 @@ def test_github_sign_in(bg, app_env, monkeypatch) -> None:  # type: ignore[no-un
 
 
 def test_chatgpt_sign_in(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import chatgpt_signin, openai_client
+    from pixelcat.adapters.llm import chatgpt_signin, openai_client
 
     def sign_in(creds, cancel=None, again=None):  # type: ignore[no-untyped-def]
         again()
@@ -134,7 +134,7 @@ class FakeExternal(ExternalChat):
 
 @pytest.fixture
 def claude(pet, monkeypatch):  # type: ignore[no-untyped-def]
-    from pixelcat.llm import anthropic_client
+    from pixelcat.adapters.llm import anthropic_client
 
     made: list = []  # type: ignore[type-arg]
 

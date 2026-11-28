@@ -7,9 +7,9 @@ from typing import Any
 
 import requests
 
-from ..ports.llm import ChatEvents, ChatRequest
-from ..settings import Config
-from .replies import friendly_error, parse_text_tool_calls, strip_tool_markup  # noqa: F401 - (they were here)
+from ...llm.replies import friendly_error, parse_text_tool_calls, strip_tool_markup  # noqa: F401 - (they were here)
+from ...ports.llm import ChatEvents, ChatRequest
+from ...settings import Config
 
 log = logging.getLogger(__name__)
 

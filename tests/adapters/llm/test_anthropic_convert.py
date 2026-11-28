@@ -5,8 +5,8 @@ import copy
 
 import pytest
 
-from llm_providers.fakes import HISTORY, JPEG, PNG, TOOLS
-from pixelcat.llm.anthropic_client import to_claude, tools_for_claude
+from adapters.llm.fakes import HISTORY, JPEG, PNG, TOOLS
+from pixelcat.adapters.llm.anthropic_client import to_claude, tools_for_claude
 
 
 def _img(data: str, kind: str) -> dict:

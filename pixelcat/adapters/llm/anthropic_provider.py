@@ -1,5 +1,5 @@
 """Anthropic (Claude): an API key or "Sign in with Anthropic" (the ``ant`` CLI); requests through the official SDK
-(``pixelcat.llm.anthropic_client``, imported when needed)."""
+(``pixelcat.adapters.llm.anthropic_client``, imported when needed)."""
 from __future__ import annotations
 
 from typing import Any
@@ -12,7 +12,7 @@ from .signin import AntSignIn
 
 class AnthropicProvider(ProviderBase):
     info: ProviderInfo = external.ANTHROPIC
-    own_errors = (("pixelcat.llm.ant_tool", "AntError"),)
+    own_errors = (("pixelcat.adapters.llm.ant_tool", "AntError"),)
 
     def auth(self, creds: Any, want: str) -> str:
         if want == "signin":
@@ -20,12 +20,12 @@ class AnthropicProvider(ProviderBase):
         return "key" if creds.get("anthropic_key") else ""
 
     def list_models(self, creds: Any, auth: str) -> list[dict[str, Any]]:
-        from ...llm import anthropic_client
+        from . import anthropic_client
 
         return anthropic_client.list_models(creds, auth)
 
     def check_key(self, key: str) -> tuple[str, list[dict[str, Any]]]:
-        from ...llm import anthropic_client
+        from . import anthropic_client
 
         return "", anthropic_client.list_models(external.MemoryCredentials({"anthropic_key": key}), "key")
 
@@ -41,18 +41,18 @@ class AnthropicProvider(ProviderBase):
         return bool(model_info) and "context" not in model_info   # (a list saved before windows were kept)
 
     def new_chat(self, req: ChatRequest, events: ChatEvents) -> ChatJob:
-        from ...llm import anthropic_client
+        from . import anthropic_client
 
         return anthropic_client.AnthropicChat(req, events)
 
     def signin(self) -> CliSignIn:
-        from ...llm import ant_tool  # noqa: F401 - (loaded now, on the caller's thread)
+        from . import ant_tool  # noqa: F401 - (loaded now, on the caller's thread)
 
         return AntSignIn()
 
     def self_check(self) -> str:
         import anthropic
 
-        from ...llm import ant_tool, anthropic_client  # noqa: F401
+        from . import ant_tool, anthropic_client  # noqa: F401
         anthropic.Anthropic(api_key="selftest")            # (made, never used)
         return f"anthropic {anthropic.__version__}"

@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from pixelcat import paths
-from pixelcat.llm import copilot_client as CC
+from pixelcat.adapters.llm import copilot_client as CC
 from pixelcat.llm.external import MemoryCredentials
 
 

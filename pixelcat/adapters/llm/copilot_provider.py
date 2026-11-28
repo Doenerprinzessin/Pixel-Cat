@@ -1,5 +1,5 @@
 """GitHub Copilot: "Sign in with GitHub" or a GitHub token; requests through GitHub's official Copilot SDK and its
-runtime (``pixelcat.llm.copilot_client``, imported when needed - it starts nothing until it is used)."""
+runtime (``pixelcat.adapters.llm.copilot_client``, imported when needed - it starts nothing until it is used)."""
 from __future__ import annotations
 
 import sys
@@ -10,12 +10,12 @@ from ...ports.llm import ChatEvents, ChatJob, ChatRequest, Conversation, DeviceS
 from .base import ProviderBase
 from .signin import GitHubSignIn
 
-CLIENT = "pixelcat.llm.copilot_client"
+CLIENT = "pixelcat.adapters.llm.copilot_client"
 
 
 class CopilotProvider(ProviderBase):
     info: ProviderInfo = external.COPILOT
-    own_errors = ((CLIENT, "CopilotError"), ("pixelcat.llm.github_signin", "SignInError"))
+    own_errors = ((CLIENT, "CopilotError"), ("pixelcat.adapters.llm.github_signin", "SignInError"))
 
     def auth(self, creds: Any, want: str) -> str:
         s = creds.get("copilot_signin")
@@ -24,12 +24,12 @@ class CopilotProvider(ProviderBase):
         return "key" if creds.get("copilot_key") else ""
 
     def list_models(self, creds: Any, auth: str) -> list[dict[str, Any]]:
-        from ...llm import copilot_client
+        from . import copilot_client
 
         return copilot_client.list_models(creds, auth)
 
     def check_key(self, key: str) -> tuple[str, list[dict[str, Any]]]:
-        from ...llm import copilot_client
+        from . import copilot_client
 
         return copilot_client.check_token(key)
 
@@ -39,33 +39,33 @@ class CopilotProvider(ProviderBase):
         return list(external.EFFORTS)
 
     def quota(self, creds: Any, auth: str, start: bool = False) -> dict[str, Any] | None:
-        from ...llm import copilot_client
+        from . import copilot_client
 
         return copilot_client.quota(creds, auth, start=start)
 
     def runtime_ready(self) -> bool:
-        from ...llm import copilot_client
+        from . import copilot_client
 
         return isinstance(copilot_client.runtime_path(), str)
 
     def install_runtime(self, progress: Callable[[int, int], None] | None = None,
                         cancel: Any = None) -> None:
-        from ...llm import copilot_client
+        from . import copilot_client
 
         copilot_client.install(progress, cancel)
 
     def new_chat(self, req: ChatRequest, events: ChatEvents) -> ChatJob:
-        from ...llm import copilot_client
+        from . import copilot_client
 
         return copilot_client.CopilotJob(req, events)
 
     def new_conversation(self) -> Conversation | None:
-        from ...llm import copilot_client
+        from . import copilot_client
 
         return copilot_client.CopilotChat()
 
     def signin(self) -> DeviceSignIn:
-        from ...llm import github_signin  # noqa: F401 - (loaded now, on the caller's thread)
+        from . import github_signin  # noqa: F401 - (loaded now, on the caller's thread)
 
         return GitHubSignIn()
 
@@ -80,6 +80,6 @@ class CopilotProvider(ProviderBase):
     def self_check(self) -> str:
         from copilot._cli_version import CLI_VERSION
 
-        from ...llm import copilot_client, github_signin  # noqa: F401
+        from . import copilot_client, github_signin  # noqa: F401
         copilot_client.new_client("selftest", "copilot-runtime.exe")     # (made, never started)
         return f"runtime {CLI_VERSION}, {'here' if copilot_client.runtime_path() else 'downloaded on first use'}"

@@ -32,7 +32,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from .. import paths
+from ... import paths
 
 log = logging.getLogger(__name__)
 

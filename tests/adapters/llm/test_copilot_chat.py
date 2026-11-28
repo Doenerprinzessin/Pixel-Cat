@@ -12,8 +12,8 @@ from typing import Any, Awaitable, Callable
 import pytest
 
 from fakes.chat import RecordingEvents
-from llm_providers.fakes import PNG, Recorder
-from pixelcat.llm import copilot_client as CC
+from adapters.llm.fakes import PNG, Recorder
+from pixelcat.adapters.llm import copilot_client as CC
 from pixelcat.llm import webpage
 from pixelcat.llm.external import MemoryCredentials
 from pixelcat.ports.llm import ChatRequest

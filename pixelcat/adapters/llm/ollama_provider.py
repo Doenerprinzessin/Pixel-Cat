@@ -1,5 +1,5 @@
 """The local models (Ollama): no account, no key, no budget; requests to Ollama's /api/chat
-(``pixelcat.llm.ollama_client``, imported when needed).  Starting Ollama and getting the model is
+(``pixelcat.adapters.llm.ollama_client``, imported when needed).  Starting Ollama and getting the model is
 ``pixelcat.llm.model_status``'s job."""
 from __future__ import annotations
 
@@ -27,6 +27,6 @@ class OllamaProvider(ProviderBase):
         return ["low", "medium", "high"]         # (how much it thinks: never, when planning, always)
 
     def new_chat(self, req: ChatRequest, events: ChatEvents) -> ChatJob:
-        from ...llm import ollama_client
+        from . import ollama_client
 
         return ollama_client.OllamaChat(req, events)

@@ -6,14 +6,15 @@ The layout (ports and adapters):
 * ``pixelcat/ports``: the interfaces the core talks to: the standard library and the domain (Qt only for type hints).
 * ``pixelcat/adapters/windows``: all Win32 code (ctypes, winreg, msvcrt, _winapi, os.startfile ...).
 * ``pixelcat/adapters/null``: does nothing, loads anywhere: no Win32.
-* ``pixelcat/adapters/llm``: the AI model providers: no Win32, no Qt (they run on worker threads).
+* ``pixelcat/adapters/llm``: the AI model providers and their clients and sign-ins: no Win32, no Qt (they run on
+  worker threads).
 * ``pixelcat/bootstrap.py``: the composition root, the only one that picks an adapter.
 * the core: everything else under ``pixelcat/``.  It gets its ports passed in and never imports an adapter.
 
 Static checks read every import with ``ast``: the lazy ones inside functions, relative ones, the ones under
 ``if TYPE_CHECKING:`` (kept apart: they never run) and dynamic ones (``importlib.import_module("...")``,
 ``__import__("...")``).  Runtime checks import each core module on its own in a fresh interpreter, without the
-Windows test shim, and record which module first imported each Win32 or Qt module.
+Windows test shim, and record which module first imported each Win32 or Qt module (and so do the model providers').
 """
 from __future__ import annotations
 
@@ -192,6 +193,7 @@ CORE_MODULES = ["pixelcat"] + sorted(
     if not (_is(m.name, "pixelcat.adapters") or _is(m.name, "pixelcat.bootstrap")))
 QT_MODULES = {_module_name(p) for p in CORE if _covered(_rel(p), QT_ALLOWED)}
 QT_VIA_MODULES = {_module_name(PKG / rel) for rel in QT_VIA}
+LLM_ADAPTER_MODULES = sorted(_module_name(p) for p in LLM_ADAPTER)
 
 
 # ---- the lists can't go stale ------------------------------------------------------------------------------------
@@ -302,6 +304,12 @@ def test_llm_adapter_is_qt_free(path):
     assert not bad, f"pixelcat/{_rel(path)} imports {bad}; the model providers stay Qt-free (the app bridges to Qt)"
 
 
+@pytest.mark.parametrize("path", LLM_ADAPTER, ids=_rel)
+def test_llm_adapter_dynamic_imports_name_their_module(path):
+    scan = _scan(path)
+    assert not scan.dynamic, f"pixelcat/{_rel(path)} imports a module named at run time (lines {scan.dynamic})"
+
+
 def test_the_llm_port_imports_only_stdlib():
     bad = sorted(name for name in _scan(PKG / "ports" / "llm.py").imports if not _stdlib(name))
     assert not bad, f"pixelcat/ports/llm.py imports {bad}"
@@ -388,7 +396,7 @@ def _probe(name: str) -> dict:
 
 @cache
 def _probes() -> dict[str, dict]:
-    names = CORE_MODULES + ["pixelcat.adapters.null", "pixelcat.adapters.llm"]
+    names = CORE_MODULES + ["pixelcat.adapters.null"] + LLM_ADAPTER_MODULES
     with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
         return dict(zip(names, pool.map(_probe, names)))
 
@@ -419,8 +427,9 @@ def test_null_adapter_loads_without_win32_qt_or_the_windows_adapter():
     assert not [m for m, by in res["events"] if _top(m) in WIN32 and _is(by, "pixelcat")]
 
 
-def test_llm_adapter_loads_without_win32_qt_or_another_adapter():
-    res = _probes()["pixelcat.adapters.llm"]
+@pytest.mark.parametrize("name", LLM_ADAPTER_MODULES)
+def test_llm_adapter_loads_without_win32_qt_or_another_adapter(name):
+    res = _probes()[name]
     assert res["error"] is None, res["error"]
     assert not [m for m in res["loaded"] if _top(m) in QT or (_is(m, "pixelcat.adapters")
                                                              and not _is(m, "pixelcat.adapters.llm")

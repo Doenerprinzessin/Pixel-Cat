@@ -33,10 +33,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-from .. import paths
-from ..ports.llm import ChatEvents, ChatRequest
+from ... import paths
+from ...llm.external import Credentials, media_type
+from ...ports.llm import ChatEvents, ChatRequest
 from .chat_job import ExternalChat
-from .external import Credentials, media_type
 
 log = logging.getLogger(__name__)
 
@@ -569,7 +569,7 @@ class CopilotChat:
         if getattr(request, "kind", None) != "url" or not self.web or self.queue is None:
             return _refuse(request, invocation)
         url = str(getattr(request, "url", "") or "")
-        from . import webpage
+        from ...llm import webpage
 
         try:
             await asyncio.to_thread(webpage.check_address, url)

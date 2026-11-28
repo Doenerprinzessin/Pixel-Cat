@@ -9,7 +9,7 @@ from typing import Callable
 
 import pytest
 
-from llm_providers.fakes import Json, Lines, Raw
+from adapters.llm.fakes import Json, Lines, Raw
 from pixelcat.llm import model_status as MS
 from pixelcat.settings import Config
 

@@ -30,7 +30,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
-from .external import Credentials
+from ...llm.external import Credentials
 
 log = logging.getLogger(__name__)
 

@@ -9,7 +9,7 @@ import pytest
 
 from fakes.chat import RecordingEvents
 from pixelcat.llm import external as X
-from pixelcat.llm.chat_job import ExternalChat
+from pixelcat.adapters.llm.chat_job import ExternalChat
 from pixelcat.ports.llm import ChatRequest
 
 T0 = datetime(2026, 11, 19, 15, 0)          # a Thursday

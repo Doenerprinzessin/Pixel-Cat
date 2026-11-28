@@ -15,8 +15,8 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import pytest
 import requests
 
-from llm_providers.fakes import Json
-from pixelcat.llm import chatgpt_signin as CS
+from adapters.llm.fakes import Json
+from pixelcat.adapters.llm import chatgpt_signin as CS
 from pixelcat.llm.external import MemoryCredentials
 
 FULL_SCOPE = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"

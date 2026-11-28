@@ -10,9 +10,9 @@ import pytest
 import requests
 
 from fakes.chat import RecordingEvents
-from llm_providers.fakes import HISTORY, JPEG, PNG, SSE, TOOLS, Json, Raw
-from pixelcat.llm import chatgpt_signin
-from pixelcat.llm import openai_client as OC
+from adapters.llm.fakes import HISTORY, JPEG, PNG, SSE, TOOLS, Json, Raw
+from pixelcat.adapters.llm import chatgpt_signin
+from pixelcat.adapters.llm import openai_client as OC
 from pixelcat.llm.external import SEARCHING, MemoryCredentials
 from pixelcat.ports.llm import ChatRequest
 

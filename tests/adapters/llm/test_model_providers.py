@@ -79,7 +79,7 @@ def test_only_an_old_claude_list_is_loaded_again_for_the_context(p: str, info: d
 def test_check_key_lists_the_models_with_only_that_key(monkeypatch, p: str) -> None:  # type: ignore[no-untyped-def]
     import importlib
 
-    client = importlib.import_module(f"pixelcat.llm.{p}_client")
+    client = importlib.import_module(f"pixelcat.adapters.llm.{p}_client")
     seen: list = []  # type: ignore[type-arg]
     monkeypatch.setattr(client, "list_models", lambda creds, auth: (seen.append((creds._data, auth)), ["m"])[1])
     assert PROVIDERS[p].check_key("sk-new") == ("", ["m"])
@@ -87,7 +87,7 @@ def test_check_key_lists_the_models_with_only_that_key(monkeypatch, p: str) -> N
 
 
 def test_copilot_checks_a_token_itself(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import copilot_client
+    from pixelcat.adapters.llm import copilot_client
 
     monkeypatch.setattr(copilot_client, "check_token", lambda key: ("octocat", [{"id": key}]))
     assert PROVIDERS["copilot"].check_key("github_pat_x") == ("octocat", [{"id": "github_pat_x"}])
@@ -102,7 +102,7 @@ def test_the_local_models_take_no_key_and_have_no_quota() -> None:
 
 
 def test_error_text_the_providers_own_errors_speak_for_themselves() -> None:
-    from pixelcat.llm import ant_tool, chatgpt_signin, copilot_client, github_signin
+    from pixelcat.adapters.llm import ant_tool, chatgpt_signin, copilot_client, github_signin
 
     own = {"anthropic": [ant_tool.AntError("no ant")], "openai": [chatgpt_signin.SignInError("no chatgpt")],
            "copilot": [copilot_client.CopilotError("install", "no runtime"), github_signin.SignInError("no github")],
@@ -114,7 +114,7 @@ def test_error_text_the_providers_own_errors_speak_for_themselves() -> None:
 
 
 def test_copilot_shutdown_stops_the_runtime_once_it_was_loaded(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import copilot_client
+    from pixelcat.adapters.llm import copilot_client
 
     stopped: list[float] = []
     monkeypatch.setattr(copilot_client, "shutdown", stopped.append)
@@ -126,7 +126,7 @@ def test_copilot_shutdown_stops_the_runtime_once_it_was_loaded(monkeypatch) -> N
 def test_copilot_self_check_builds_a_client_it_never_starts(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from copilot._cli_version import CLI_VERSION
 
-    from pixelcat.llm import copilot_client
+    from pixelcat.adapters.llm import copilot_client
 
     made: list = []  # type: ignore[type-arg]
     monkeypatch.setattr(copilot_client, "new_client", lambda token, path: made.append((token, path)))
@@ -140,7 +140,7 @@ def test_copilot_self_check_builds_a_client_it_never_starts(monkeypatch) -> None
 def test_the_self_checks_say_what_they_found_or_raise(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     import anthropic
 
-    from pixelcat.llm import copilot_client
+    from pixelcat.adapters.llm import copilot_client
 
     checks = {p: prov.self_check() for p, prov in PROVIDERS.items()}
     assert checks["anthropic"] == f"anthropic {anthropic.__version__}" and checks["openai"] == checks["ollama"] == ""
@@ -163,7 +163,7 @@ def test_the_self_checks_say_what_they_found_or_raise(monkeypatch) -> None:  # t
 def test_signin_calls_the_sign_in_module_when_it_runs(monkeypatch, p: str, module: str, calls: list) -> None:  # type: ignore[no-untyped-def,type-arg]
     import importlib
 
-    mod = importlib.import_module(f"pixelcat.llm.{module}")
+    mod = importlib.import_module(f"pixelcat.adapters.llm.{module}")
     signin = PROVIDERS[p].signin()
     assert PROVIDERS[p].info.signin_kind == {"anthropic": "cli", "openai": "browser", "copilot": "device"}[p]
     for method, args, func, want in calls:
@@ -174,7 +174,7 @@ def test_signin_calls_the_sign_in_module_when_it_runs(monkeypatch, p: str, modul
 
 
 def test_signing_in_and_out_by_kind(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import ant_tool, chatgpt_signin
+    from pixelcat.adapters.llm import ant_tool, chatgpt_signin
 
     gpt: list = []  # type: ignore[type-arg]
     monkeypatch.setattr(chatgpt_signin, "sign_in", lambda creds, **kw: (gpt.append(kw), {"plan": True})[1])
@@ -195,8 +195,8 @@ for prov in build_providers().values():
     prov.shutdown(0.1)
     prov.error_text(RuntimeError("x"), "y")
     prov.effort_levels({}), prov.max_input("m", {}), prov.refresh_models_for_context({})
-heavy = ("anthropic", "copilot", "requests", "PySide6", "shiboken6", "pixelcat.llm.anthropic_client",
-         "pixelcat.llm.openai_client", "pixelcat.llm.copilot_client", "pixelcat.llm.ollama_client")
+heavy = ("anthropic", "copilot", "requests", "PySide6", "shiboken6", "pixelcat.adapters.llm.anthropic_client",
+         "pixelcat.adapters.llm.openai_client", "pixelcat.adapters.llm.copilot_client", "pixelcat.adapters.llm.ollama_client")
 print("@@" + json.dumps(sorted(m for m in sys.modules if m.split(".")[0] in heavy or m in heavy)))
 """
 
@@ -211,6 +211,6 @@ def test_providers_are_light_and_one_never_used_stops_nothing() -> None:
 
 
 def test_copilot_is_active_once_its_client_was_loaded() -> None:
-    from pixelcat.llm import copilot_client  # noqa: F401
+    from pixelcat.adapters.llm import copilot_client  # noqa: F401
 
     assert [p.active() for p in PROVIDERS.values()] == [False, False, True, False]

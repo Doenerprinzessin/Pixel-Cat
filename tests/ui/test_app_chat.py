@@ -165,7 +165,7 @@ def test_an_external_model_that_isnt_connected(chat_pet, workers) -> None:  # ty
 
 
 def test_external_workers_are_built_per_provider(chat_pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import anthropic_client, openai_client
+    from pixelcat.adapters.llm import anthropic_client, openai_client
 
     made: list[tuple] = []
 
@@ -189,7 +189,7 @@ def test_external_workers_are_built_per_provider(chat_pet, monkeypatch) -> None:
 
 
 def test_a_copilot_request_reports_credits_and_pages(chat_pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.llm import copilot_client
+    from pixelcat.adapters.llm import copilot_client
 
     made: list[FakeJob] = []
 

@@ -18,11 +18,11 @@ from typing import Any
 
 import requests
 
+from ...llm.external import (BASE_URLS, SEARCHING, Credentials, is_too_long, media_type, too_long, tool_call_ids,
+                             wait_reset, with_sources)
+from ...ports.llm import ChatEvents, ChatRequest
 from . import chatgpt_signin
-from ..ports.llm import ChatEvents, ChatRequest
 from .chat_job import ExternalChat
-from .external import (BASE_URLS, SEARCHING, Credentials, is_too_long, media_type, too_long, tool_call_ids,
-                       wait_reset, with_sources)
 
 log = logging.getLogger(__name__)
 

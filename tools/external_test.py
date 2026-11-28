@@ -45,10 +45,10 @@ import requests  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from pixelcat.bootstrap import build_platform  # noqa: E402
-from pixelcat.llm import anthropic_client as AC  # noqa: E402
-from pixelcat.llm import chatgpt_signin as CS  # noqa: E402
+from pixelcat.adapters.llm import anthropic_client as AC  # noqa: E402
+from pixelcat.adapters.llm import chatgpt_signin as CS  # noqa: E402
 from pixelcat.llm import external as X  # noqa: E402
-from pixelcat.llm import openai_client as OC  # noqa: E402
+from pixelcat.adapters.llm import openai_client as OC  # noqa: E402
 from pixelcat.llm.qt_chat import QtChatWorker  # noqa: E402
 from pixelcat.ports.llm import ChatRequest  # noqa: E402
 
@@ -601,7 +601,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     check("a refusal is reported (not shown as an empty answer)", out["failed"] and out["failed"][0] == "refused",
           str(out["failed"]))
     S["mode"] = "text"
-    from pixelcat.llm import ant_tool
+    from pixelcat.adapters.llm import ant_tool
     d = ant_tool.signin_dir()                         # (what ant writes when signing in)
     (d / "configs").mkdir(parents=True, exist_ok=True)
     (d / "credentials").mkdir(parents=True, exist_ok=True)

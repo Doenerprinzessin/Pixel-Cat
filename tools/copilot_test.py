@@ -41,9 +41,9 @@ sys.path.insert(0, str(ROOT))
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from pixelcat.bootstrap import build_platform  # noqa: E402
-from pixelcat.llm import copilot_client as CC  # noqa: E402
+from pixelcat.adapters.llm import copilot_client as CC  # noqa: E402
 from pixelcat.llm import external as X  # noqa: E402
-from pixelcat.llm import github_signin as GS  # noqa: E402
+from pixelcat.adapters.llm import github_signin as GS  # noqa: E402
 from pixelcat.llm.qt_chat import QtChatWorker  # noqa: E402
 from pixelcat.ports.llm import ChatRequest  # noqa: E402
 

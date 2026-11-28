@@ -199,7 +199,8 @@ def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path, fake_pl
     monkeypatch.setattr(webbrowser, "open", lambda url, *a, **k: env.opened_urls.append(url))
     monkeypatch.setattr(QGuiApplication, "clipboard", staticmethod(lambda: env.clipboard))   # not the real one
     monkeypatch.setenv("OLLAMA_MODELS", str(tmp_path / "ollama-models"))     # no model is downloaded
-    from pixelcat.llm import anthropic_client, copilot_client, ollama_client, openai_client, qt_chat
+    from pixelcat.adapters.llm import anthropic_client, copilot_client, ollama_client, openai_client
+    from pixelcat.llm import qt_chat
 
     def no_request(*a: Any, **k: Any) -> None:
         raise AssertionError("a test reached a real model request - use the `workers` fixture or a fake")
@@ -288,7 +289,7 @@ def workers(monkeypatch: pytest.MonkeyPatch, app_env: AppEnv) -> list[Any]:
     (``workers[-1].events.done("hi", [])``)."""
     from fakes.chat import FakeJob
 
-    from pixelcat.llm import ollama_client
+    from pixelcat.adapters.llm import ollama_client
 
     made: list[Any] = []
 

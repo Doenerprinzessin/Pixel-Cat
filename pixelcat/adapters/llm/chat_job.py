@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-from ..ports.llm import ChatEvents, ChatRequest
+from ...ports.llm import ChatEvents, ChatRequest
 
 
 class ExternalChat:

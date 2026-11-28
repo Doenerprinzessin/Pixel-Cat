@@ -7,7 +7,7 @@ import socket
 import pytest
 import requests
 
-from llm_providers.fakes import Raw
+from adapters.llm.fakes import Raw
 from pixelcat.llm import webpage as WP
 
 

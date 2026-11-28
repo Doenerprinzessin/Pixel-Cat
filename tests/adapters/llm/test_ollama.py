@@ -7,8 +7,8 @@ import logging
 import pytest
 
 from fakes.chat import RecordingEvents
-from llm_providers.fakes import Json, Lines, Raw
-from pixelcat.llm import ollama_client as OL
+from adapters.llm.fakes import Json, Lines, Raw
+from pixelcat.adapters.llm import ollama_client as OL
 from pixelcat.ports.llm import ChatRequest
 from pixelcat.settings import Config
 
