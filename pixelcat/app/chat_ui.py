@@ -98,6 +98,12 @@ class ChatUI(QObject):
             self.model_choice.update_model_chip()
         return self.chat
 
+    def on_model_status(self) -> None:
+        """(A slot: the model status changed, from any thread.)  The chat's banner and the tray follow."""
+        if self.chat is not None:
+            self._show_model_banner()
+        self.world.sync_tray()
+
     def _save_chat_layout(self) -> None:
         """The user resized the chat or switched fullscreen: it opens like that next time."""
         if self.chat is None:

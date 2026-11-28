@@ -389,6 +389,13 @@ class AgentSession(QObject):
                               r"carry on|resume|proceed|weiter|mach weiter|weitermachen|fortfahren|los)"
                               r"\b(?:(?![?]).){0,60}$", re.I)   # e.g. "continue with the plan", not questions
 
+    def switched_model(self) -> None:
+        """Another model was picked for this chat (the model menu): a task stopped at the token limit goes on."""
+        if self.resume_after_switch:            # (the token limit: go on with the new model)
+            self.resume_after_switch = False
+            if self.task_active and self.worker is None and self.chat_ui.chat is not None:
+                QTimer.singleShot(0, self.request)
+
     def on_user_message(self, text: str) -> None:
         if self._local_command(text):
             return

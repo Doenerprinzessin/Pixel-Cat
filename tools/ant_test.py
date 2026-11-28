@@ -329,7 +329,7 @@ def app_flow() -> None:
           and "Allow" in again)
     pet.popups.open[-1]._finish(False)
     (FAKE / "logged_out").unlink(missing_ok=True)
-    pet._ext_disconnect("anthropic")
+    pet.provider_settings.ext_disconnect("anthropic")
     wait(lambda: (FAKE / "logged_out").exists() and not T.signin_dir().exists())
     check("app: Sign out signs Pixel Cat's profile out and forgets it", pet.accounts.auth("anthropic") == ""
           and (FAKE / "logged_out").exists() and not T.signin_dir().exists())

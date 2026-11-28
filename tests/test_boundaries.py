@@ -52,6 +52,7 @@ QT_ALLOWED = {
     "app/models_menu.py": "the chat's model menu and button (QObject: the menu's and the button's signals)",
     "app/chat_ui.py": "the chat window (QObject: the window's signals), a QTimer after it opens",
     "app/session.py": "the chat workers' and tool threads' slots (QObject, QThread), timers, the screenshot tool",
+    "app/limits.py": "the limit popup opens the provider's billing or usage page (QDesktopServices, QUrl)",
     "ui": "the widgets: overlay, ball, menu, chat, dialogs, tray, theme, screen geometry",
     "games/qt_host.py": "the minigames' Qt window (the games themselves are plain Python)",
     "imaging.py": "picture helpers for the chat (QImage in, PNG bytes out)",

@@ -204,7 +204,7 @@ def test_a_copilot_request_reports_credits_and_pages(chat_pet, monkeypatch) -> N
     assert req.conversation is chat_pet.session._copilot and req.history is chat_pet.chat_state.history and req.system == "be a cat"
     assert req.auth == "key" and req.web is True and (w.provider, w.model, w.local) == ("copilot", "m3", False)
     made[0].events.credits(0.5)
-    assert chat_pet._credit_budget().used() == 0.5
+    assert chat_pet.limits.credit_budget().used() == 0.5
     chat_pet.saved.auto_approved_tools.append("read_web_page")
     answers: list[bool] = []
     made[0].events.permission("https://cats.example/", answers.append)

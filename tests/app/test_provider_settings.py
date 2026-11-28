@@ -8,6 +8,7 @@ import pytest
 
 from pixelcat.app.accounts import Accounts
 from pixelcat.app.provider_settings import ProviderSettings
+from pixelcat.app.state import ChatState
 from pixelcat.llm import external
 from pixelcat.persistence import SavedState
 from pixelcat.ports import ProviderInfo
@@ -65,11 +66,12 @@ def make(providers: dict[str, FakeProvider], creds: dict[str, Any] | None = None
     def nope(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("not expected here")
     ps = ProviderSettings(
-        acc, providers, acc.creds, saved, cfg, FakePopups(), SimpleNamespace(), SimpleNamespace(),  # type: ignore[arg-type]
+        acc, providers, acc.creds, saved, cfg, FakePopups(), SimpleNamespace(), SimpleNamespace(), ChatState(),  # type: ignore[arg-type]
         save=lambda: saves.append("save"), ui_unit=nope, cat_monitor=nope, menu_items=nope, open_menu_at=nope,
         advice=nope, credit_budget=lambda: external.CreditBudget(acc.ext_p(acc.credit_p),
                                                                  saved.ext_usage.setdefault("copilot_credits", {})),
-        ext_disconnect=nope, drop_copilot_chat=nope, copilot_quota=nope, show_model_banner=nope)
+        model_choice=nope, model_status=nope, drop_copilot_chat=nope, stop_copilot=nope, copilot_quota=nope,
+        show_model_banner=nope)
     return ps, saves
 
 

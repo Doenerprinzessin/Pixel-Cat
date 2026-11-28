@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtGui import QGuiApplication
 
-from ..llm import external
+from ..llm import external, models
 from ..ui.menu import MenuItem
 from .popups import paras
 
@@ -21,13 +21,16 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from ..domain import Monitor
+    from ..llm.model_status import ModelStatus
     from ..persistence import SavedState
     from ..ports import ModelProvider
     from ..settings import Config
     from ..ui.menu import PixelMenu
     from ..ui.overlay import CatOverlay
     from .accounts import Accounts
+    from .models_menu import ModelChoice
     from .popups import Popups
+    from .state import ChatState
 
 log = logging.getLogger("pixelcat.app")   # (the app's logger name; tests look for it)
 
@@ -36,17 +39,21 @@ class ProviderSettings(QObject):
     """The providers' account settings.  ``key_dialog`` is the key / amount dialog shown last.
 
     The controller answers ``save()``, ``ui_unit(monitor)``, ``cat_monitor()``, ``menu_items()``,
-    ``open_menu_at(keys)``, ``advice()`` (the model advice: is an online model best?), and the chat's
-    ``credit_budget()``, ``ext_disconnect(p, only_key)``, ``drop_copilot_chat()``, ``copilot_quota(force)`` and
-    ``show_model_banner()``; asked at call time."""
+    ``open_menu_at(keys)``, ``advice()`` (the model advice: is an online model best?), ``model_choice()`` and
+    ``model_status()`` (made later), and the chat's ``credit_budget()``, ``drop_copilot_chat()``,
+    ``stop_copilot(background)``, ``copilot_quota(force)`` and ``show_model_banner()``; asked at call time.
+    ``ext_disconnect(p, only_key)``: a key removed or signed out (the chat's model and the default go back if
+    they were that provider's)."""
 
     def __init__(self, accounts: Accounts, providers: Mapping[str, ModelProvider], creds: external.Credentials,
-                 saved: SavedState, cfg: Config, popups: Popups, menu: PixelMenu, overlay: CatOverlay, *,
+                 saved: SavedState, cfg: Config, popups: Popups, menu: PixelMenu, overlay: CatOverlay,
+                 chat_state: ChatState, *,
                  parent: QObject | None = None, save: Callable[[], None], ui_unit: Callable[[Monitor], int],
                  cat_monitor: Callable[[], Monitor], menu_items: Callable[[], list[MenuItem]],
                  open_menu_at: Callable[[list[str]], None], advice: Callable[[], Any],
-                 credit_budget: Callable[[], external.CreditBudget], ext_disconnect: Callable[..., None],
-                 drop_copilot_chat: Callable[[], None], copilot_quota: Callable[..., None],
+                 credit_budget: Callable[[], external.CreditBudget], model_choice: Callable[[], ModelChoice],
+                 model_status: Callable[[], ModelStatus], drop_copilot_chat: Callable[[], None],
+                 stop_copilot: Callable[..., None], copilot_quota: Callable[..., None],
                  show_model_banner: Callable[[], None]) -> None:
         super().__init__(parent)
         self.accounts = accounts
@@ -57,6 +64,7 @@ class ProviderSettings(QObject):
         self.popups = popups
         self.menu = menu
         self.overlay = overlay
+        self.chat_state = chat_state
         self._save = save
         self._ui_unit = ui_unit
         self._cat_monitor = cat_monitor
@@ -64,8 +72,10 @@ class ProviderSettings(QObject):
         self._open_menu_at = open_menu_at
         self._advice = advice
         self._credit_budget = credit_budget
-        self._ext_disconnect = ext_disconnect
+        self._model_choice = model_choice
+        self._model_status = model_status
         self._drop_copilot_chat = drop_copilot_chat
+        self._stop_copilot = stop_copilot
         self._copilot_quota = copilot_quota
         self._show_model_banner = show_model_banner
         self._signin_cancel: threading.Event | None = None
@@ -75,6 +85,14 @@ class ProviderSettings(QObject):
         self.key_dialog: Any = None
         self._gh_wait_pop: Any = None
         self._cop_pop: Any = None
+
+    @property
+    def model_choice(self) -> ModelChoice:
+        return self._model_choice()
+
+    @property
+    def model_status(self) -> ModelStatus:
+        return self._model_status()
 
     def external_menu(self) -> MenuItem:
         """Settings -> AI model -> External AI models."""
@@ -221,7 +239,7 @@ class ProviderSettings(QObject):
             elif what == "key":
                 self._ask_key(p)
             else:
-                self._ext_disconnect(p)
+                self.ext_disconnect(p)
             return
         else:
             return
@@ -375,6 +393,45 @@ class ProviderSettings(QObject):
         pop.answered.connect(lambda ok, p=p: self._open_menu_at(["settings", "set_model", "ext", f"ext_{p}",
                                                                    f"ext_models_{p}"]) if ok else None)
 
+    def ext_disconnect(self, p: str, only_key: bool = False) -> None:
+        prov = self.providers[p].info
+        auth = self.accounts.auth(p)
+        s = self.accounts.ext_p(p)
+        if only_key or auth == "key":
+            self.creds.set(f"{p}_key", None)
+            if s.get("auth") == "key":
+                s["auth"] = ""
+            msg = prov.key_removed
+        elif auth in ("signin", "chatgpt"):
+            signin = self.providers[p].signin()
+            s["auth"] = ""
+            msg = prov.signed_out
+            if prov.signin_kind == "browser":
+                self.popups.in_background(lambda: signin.sign_out(self.creds), lambda ok: None if ok is True else self.popups.popup(
+                    "Signed out", paras(["OpenAI couldn't confirm the sign-out. To be sure, disconnect Pixel Cat "
+                                               "in ChatGPT's settings (Connected apps)."]), "OK"))
+            elif prov.signin_kind == "device":
+                signin.sign_out(self.creds)              # (quick: it forgets the token)
+            else:
+                self.popups.in_background(lambda: signin.sign_out(self.creds), lambda _r: None)
+        else:
+            return
+        if prov.credits:
+            s.pop("quota", None)
+        if prov.shows_login and not self.accounts.auth(p):
+            s.pop("login", None)
+        if prov.keeps_chat:
+            self._stop_copilot(background=True)
+        self._save()
+        if not self.accounts.auth(p):
+            if (external.parse(self.cfg.model) or ("",))[0] == p:
+                self.model_choice.set_default_model(models.DEFAULT)
+            if (external.parse(self.chat_state.chat_model) or ("",))[0] == p:
+                self.chat_state.chat_model = None
+                self.model_status.override = None
+                self.model_choice.update_model_chip()
+        self.popups.popup(prov.brand, paras([msg]), "OK")
+
     def _ask_key(self, p: str) -> None:
         prov = self.providers[p].info
         if prov.runtime:
@@ -394,7 +451,7 @@ class ProviderSettings(QObject):
                         noun=prov.key_noun)
         dlg.link.connect(lambda: QDesktopServices.openUrl(QUrl(prov.key_url)))
         dlg.submitted.connect(lambda key, d=dlg: self._check_key(p, key, d))
-        dlg.removed.connect(lambda: self._ext_disconnect(p, only_key=True))
+        dlg.removed.connect(lambda: self.ext_disconnect(p, only_key=True))
         mon = self._cat_monitor()
         dlg.show_near(self.overlay.cat_rect(), mon.work, self._ui_unit(mon))
         self.key_dialog = dlg

@@ -446,7 +446,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     pet.creds = pet.accounts.creds = pet.provider_settings.creds = X.MemoryCredentials({"copilot_key": "github_pat_fake"})
     pet.accounts.ext_p("copilot").update(auth="key", login="octocat", limit=0)
     pet.accounts.set_models("copilot", MODELS)
-    pet._copilot_quota(force=True)
+    pet.limits.copilot_quota(force=True)
     wait(lambda: isinstance(pet.accounts.ext_p("copilot").get("quota"), dict), 30)
     # the menu ---------------------------------------------------------------------------------------------
     items = {i.key: i for i in pet.menus.menu_items()}
@@ -466,7 +466,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     keys2 = [c.key for c in pet.provider_settings.provider_menu("copilot").children]
     check("...with Pixel Cat's client id the sign-in shows up", "ext:signin:copilot" in keys2)
     pet._on_menu("ext:climit:copilot:2000")
-    check("menu: the credit limit changes", pet._credit_budget().limit == 2000)
+    check("menu: the credit limit changes", pet.limits.credit_budget().limit == 2000)
     # a custom credit limit (Credit limit -> Custom...), up to the plan's own credits ----------------------
     pet._on_menu("ext:ccustom:copilot")
     dlg = pet.provider_settings.key_dialog
@@ -474,13 +474,13 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     for text in ("plenty", "25000", "12.5k"):
         dlg.field.setText(text)
         dlg._save()
-        wait(lambda: dlg.save.isEnabled() or pet._credit_budget().limit != 2000, 10)
+        wait(lambda: dlg.save.isEnabled() or pet.limits.credit_budget().limit != 2000, 10)
         answers.append(dlg.status.text() if dlg.save.isEnabled() else "ok")
     climit = next(c for c in pet.provider_settings.provider_menu("copilot").children if c.key == "ext_climit_copilot").children
     custom = next(c for c in climit if c.key == "ext:ccustom:copilot")
     check("Credit limit -> Custom...: up to the plan's 20,000 credits - more is refused in the dialog; 12.5k is kept",
           "understand" in answers[0] and "20,000" in answers[1] and answers[2] == "ok"
-          and pet._credit_budget().limit == 12500 and custom.checked and custom.label == "Custom: 12,500 credits"
+          and pet.limits.credit_budget().limit == 12500 and custom.checked and custom.label == "Custom: 12,500 credits"
           and custom.note == "UP TO 20,000", str(answers))
     q = pet.accounts.ext_p("copilot")["quota"]
     q["total"] = 3000.0                                   # (a smaller plan)
@@ -552,8 +552,8 @@ def app_checks() -> None:  # noqa: C901 - a linear test
           str(answers))
     saved.auto_approved_tools.remove("web")
     # the credit limit ------------------------------------------------------------------------------------------
-    pet._on_copilot_credits(1999.0)
-    pet._on_copilot_credits(1.0)
+    pet.limits.on_copilot_credits(1999.0)
+    pet.limits.on_copilot_credits(1.0)
     S["script"] = [reply("Still here!")]
     pet.session.on_user_message("are you there?")
     wait(lambda: chat.choice.isVisible(), 20)
@@ -567,7 +567,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     wait(lambda: not pet.session.task_active, 60)
     reply3 = next((mm.text for mm in reversed(chat.msgs) if mm.role == "cat"), "")
     check("RAISE: the limit is raised until the month ends, and the request goes on",
-          pet._credit_budget().allowed() == 3000 and "Still here!" in reply3, f"{pet._credit_budget().allowed()} {reply3!r}")
+          pet.limits.credit_budget().allowed() == 3000 and "Still here!" in reply3, f"{pet.limits.credit_budget().allowed()} {reply3!r}")
     # the plan's allowance used up -------------------------------------------------------------------------------
     pet.accounts.ext_p("copilot")["credit_limit"] = 0
     S["script"] = [reply("allowance", status=402)] * 6

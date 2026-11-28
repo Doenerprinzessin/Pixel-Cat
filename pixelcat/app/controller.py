@@ -2,13 +2,11 @@
 tray, desktop queries, persistence and the LLM tool layer together."""
 from __future__ import annotations
 
-import html
 import logging
 import os
 import re
 import time
 from collections.abc import Mapping
-from datetime import datetime
 from typing import Any
 
 from PySide6.QtCore import QObject, QTimer
@@ -44,7 +42,8 @@ from ..ui.tray import Tray
 from ..games.qt_host import QtHost
 from .accounts import Accounts
 from .chat_ui import ChatUI
-from .popups import Popups, paras
+from .limits import Limits
+from .popups import Popups
 from .menus import Menus
 from .minigames import Minigames
 from .models_menu import ModelChoice
@@ -122,16 +121,17 @@ class PixelCatApp(QObject):
                                       show_progress=lambda: self._show_progress(),
                                       menu_items=lambda: self.menus.menu_items())
         self.provider_settings = ProviderSettings(   # the providers' menus, key and limit dialogs, sign-ins
-            self.accounts, providers, self.creds, saved, cfg, self.popups, self.menu, self.overlay, parent=self,
+            self.accounts, providers, self.creds, saved, cfg, self.popups, self.menu, self.overlay, self.chat_state,
+            parent=self,
             save=lambda: self.save(), ui_unit=lambda mon: self.world.ui_unit(mon),
             cat_monitor=lambda: self.world.cat_monitor(),
             menu_items=lambda: self.menus.menu_items(), open_menu_at=lambda keys: self.menus.open_menu_at(keys),
-            advice=lambda: self.model_choice.advice(), credit_budget=lambda: self._credit_budget(),
-            ext_disconnect=lambda p, only_key=False: self._ext_disconnect(p, only_key=only_key),
+            advice=lambda: self.model_choice.advice(), credit_budget=lambda: self.limits.credit_budget(),
+            model_choice=lambda: self.model_choice, model_status=lambda: self.model_status,
             drop_copilot_chat=lambda: self.session.drop_copilot_chat(),
-            copilot_quota=lambda force=False: self._copilot_quota(force=force),
-            show_model_banner=lambda: self._show_model_banner())
-        self._quota_t = 0.0
+            stop_copilot=lambda background=False: self.session.stop_copilot(background=background),
+            copilot_quota=lambda force=False: self.limits.copilot_quota(force=force),
+            show_model_banner=lambda: self.limits.show_model_banner())
         for _p in self.accounts.external:                        # the external models' names (for labels)
             for _m in self.accounts.models(_p):
                 external.NAMES[f"{_p}:{_m['id']}"] = _m["name"]
@@ -155,17 +155,17 @@ class PixelCatApp(QObject):
                                                                   self.model_status.model == cfg.model)
                                         or self.model_status.model in self.model_choice.download_ok,
                                         notify=self._status_notifier.changed.emit)
-        self._status_notifier.changed.connect(self._on_model_status)
         self.watches = WatchManager(self.own_pid, platform=self.platform)  # wait_for watches in the background
         self.session = AgentSession(   # the AI's turns: requests, tool rounds, tasks, watches and timers waking it up
             self.chat_state, cfg, saved, providers, self.accounts, self.creds, self.provider_settings, self.watches,
             self.brain, self.game, self.minigames, self.overlay, self.tray, self.platform.notifications,
             self.platform.display, self.platform.folders, self.model_status, parent=self, chat_ui=lambda: self.chat_ui,
             model_choice=lambda: self.model_choice, save=lambda: self.save(), sync_tray=lambda: self.world.sync_tray(),
-            ext_gate=lambda p: self._ext_gate(p), credit_gate=lambda: self._credit_gate(),
-            copilot_credits=lambda credits: self._on_copilot_credits(credits),
-            copilot_quota=lambda: self._copilot_quota(), limit_popup=lambda p, info: self._limit_popup(p, info),
-            show_model_banner=lambda: self._show_model_banner(), local_command=lambda text: self._local_command(text))
+            ext_gate=lambda p: self.limits.ext_gate(p), credit_gate=lambda: self.limits.credit_gate(),
+            copilot_credits=lambda credits: self.limits.on_copilot_credits(credits),
+            copilot_quota=lambda: self.limits.copilot_quota(), limit_popup=lambda p, info: self.limits.limit_popup(p, info),
+            show_model_banner=lambda: self.limits.show_model_banner(),
+            local_command=lambda text: self._local_command(text))
         self.watches.fired.connect(self.session.on_watch_fired)
         self.watches.changed.connect(self.session.on_watches_changed)
         self.session.toolbox = ToolBox(cfg, AppHooks(
@@ -182,8 +182,8 @@ class PixelCatApp(QObject):
         self.model_choice = ModelChoice(   # the default model, and this chat's model and effort (its button)
             self.chat_state, cfg, saved, providers, self.accounts, self.model_status, self.model_menu, self.brain,
             self.world_state, self.world, self.platform.system, parent=self, chat=lambda: self.chat_ui.chat,
-            open_chat=lambda: self.chat_ui.open_chat(), show_model_banner=lambda: self._show_model_banner(),
-            switched=lambda: self._switched_model())
+            open_chat=lambda: self.chat_ui.open_chat(), show_model_banner=lambda: self.limits.show_model_banner(),
+            switched=lambda: self.session.switched_model())
         self.menus = Menus(   # the cat's menu, the look and the cat's name
             saved, cfg, self.brain, self.overlay, self.sprites, self.menu, self.tray, self.hud, self.world_state,
             self.world, self.minigames, self.provider_settings, self.model_choice, self.platform.autostart,
@@ -197,7 +197,11 @@ class PixelCatApp(QObject):
             set_auto_mode=lambda on: self.session.set_auto_mode(on),
             cancel_watch=lambda wid: self.session.cancel_watch(wid),
             open_saved_chat=lambda cid: self.session.open_saved_chat(cid), save=lambda: self.save(),
-            show_model_banner=lambda: self._show_model_banner(), selftest=lambda: self.selftest)
+            show_model_banner=lambda: self.limits.show_model_banner(), selftest=lambda: self.selftest)
+        self._status_notifier.changed.connect(self.chat_ui.on_model_status)   # (made above; from any thread)
+        self.limits = Limits(   # the token and credit limits at request time, the limit popups, the model banner
+            self.accounts, providers, self.creds, saved, self.popups, self.menu, self.model_status, self.session,
+            self.chat_ui, self.model_choice, self.provider_settings, self.menus, save=lambda: self.save())
 
         # overlay input -> brain
         ov = self.overlay
@@ -348,237 +352,6 @@ class PixelCatApp(QObject):
             log.info("Setup asked me to close (update or uninstall)")
             self.quit_timer.stop()
             self.quit()
-
-    # ================================================================ external AI models
-    def _credit_budget(self) -> external.CreditBudget:
-        return external.CreditBudget(self.accounts.ext_p(self.accounts.credit_p),
-                                     self.saved.ext_usage.setdefault("copilot_credits", {}))
-
-    def _on_copilot_credits(self, credits: float) -> None:
-        cb = self._credit_budget()
-        cb.add(credits)
-        self.save()
-        log.info("copilot: %.3f credits (%.1f this month)", credits, cb.used())
-
-    def _credit_gate(self) -> bool:
-        """The credit limit before a Copilot request: fine, or the chat asks (switch / raise / stop)."""
-        if self._credit_budget().status() == "ok":
-            return True
-        assert self.chat_ui.chat is not None
-        self.chat_ui.chat.set_busy(False)
-        self._credit_card()
-        return False
-
-    def _credit_card(self) -> None:
-        assert self.chat_ui.chat is not None
-        cb = self._credit_budget()
-        fc = external.fmt_credits
-        used, allowed, nxt = cb.used(), cb.allowed(), cb.next_allowed()
-        q = self.accounts.ext_p(self.accounts.credit_p).get("quota")
-        plan = (f" (Copilot's own counter for your whole plan: {fc(q.get('used', 0))} of {fc(q['total'])})"
-                if isinstance(q, dict) and q.get("total") and not q.get("unlimited") else "")
-        text = (f"🐾 <b>Copilot credit limit reached.</b> I've used {fc(used)} of the {fc(allowed)} AI credits you gave "
-                f"me for Copilot models this month{html.escape(plan)}. Switch to another model, or keep going with "
-                f"{html.escape(models.label(self.model_choice.effective_model()))} and raise my credit limit to {fc(nxt)} until it "
-                f"resets {html.escape(external.fmt_reset(cb.reset_at()))}.")
-        log.info("copilot credit limit reached: %.1f of %.1f", used, allowed)
-        self.chat_ui.chat.ask_choice(text, [("switch", "SWITCH MODEL"), ("raise", f"RAISE TO {fc(nxt).upper()}"),
-                                    ("stop", "STOP")], self._credit_answer)
-
-    def _credit_answer(self, key: str) -> None:
-        if self.chat_ui.chat is None or not self.session.task_active:
-            return
-        if key != "raise":
-            self._limit_answer(self.accounts.credit_p, key)
-            return
-        cb = self._credit_budget()
-        new = cb.raise_limit()
-        self.save()
-        self.chat_ui.chat.add("info", f"Okay - my Copilot credit limit is {external.fmt_credits(new)} until it resets "
-                              f"{external.fmt_reset(cb.reset_at())}.")
-        self.session.request()
-
-    def _copilot_quota(self, force: bool = False) -> None:
-        """The Copilot plan's own allowance for the menu (after requests, at most every 2 minutes)."""
-        cp = self.accounts.credit_p
-        auth = self.accounts.auth(cp)
-        if not auth or (not force and time.time() - self._quota_t < 120):
-            return
-        self._quota_t = time.time()
-        prov = self.providers[cp]
-
-        def got(q: Any) -> None:
-            if isinstance(q, dict):
-                self.accounts.ext_p(cp)["quota"] = q
-                self.save()
-                if self.menu.isVisible():
-                    self.menu.refresh(self.menus.menu_items())
-        self.popups.in_background(lambda: prov.quota(self.creds, auth, start=force), got)
-
-    def _ext_disconnect(self, p: str, only_key: bool = False) -> None:
-        prov = self.providers[p].info
-        auth = self.accounts.auth(p)
-        s = self.accounts.ext_p(p)
-        if only_key or auth == "key":
-            self.creds.set(f"{p}_key", None)
-            if s.get("auth") == "key":
-                s["auth"] = ""
-            msg = prov.key_removed
-        elif auth in ("signin", "chatgpt"):
-            signin = self.providers[p].signin()
-            s["auth"] = ""
-            msg = prov.signed_out
-            if prov.signin_kind == "browser":
-                self.popups.in_background(lambda: signin.sign_out(self.creds), lambda ok: None if ok is True else self.popups.popup(
-                    "Signed out", paras(["OpenAI couldn't confirm the sign-out. To be sure, disconnect Pixel Cat "
-                                               "in ChatGPT's settings (Connected apps)."]), "OK"))
-            elif prov.signin_kind == "device":
-                signin.sign_out(self.creds)              # (quick: it forgets the token)
-            else:
-                self.popups.in_background(lambda: signin.sign_out(self.creds), lambda _r: None)
-        else:
-            return
-        if prov.credits:
-            s.pop("quota", None)
-        if prov.shows_login and not self.accounts.auth(p):
-            s.pop("login", None)
-        if prov.keeps_chat:
-            self.session.stop_copilot(background=True)
-        self.save()
-        if not self.accounts.auth(p):
-            if (external.parse(self.cfg.model) or ("",))[0] == p:
-                self.model_choice.set_default_model(models.DEFAULT)
-            if (external.parse(self.chat_state.chat_model) or ("",))[0] == p:
-                self.chat_state.chat_model = None
-                self.model_status.override = None
-                self.model_choice.update_model_chip()
-        self.popups.popup(prov.brand, paras([msg]), "OK")
-
-    def _ext_gate(self, p: str) -> bool:
-        """The token limit before a request: fine / suggest switching or raising / all used."""
-        st = self.accounts.budget(p).status()
-        if st == "ok":
-            return True
-        assert self.chat_ui.chat is not None
-        self.chat_ui.chat.set_busy(False)
-        if st == "hard":
-            self._limit_popup(p, {"why": "own"})
-        else:
-            self._limit_card(p)
-        return False
-
-    def _limit_card(self, p: str) -> None:
-        assert self.chat_ui.chat is not None
-        b = self.accounts.budget(p)
-        prov = self.providers[p].info
-        fmt = external.fmt_tokens
-        used, allowed, nxt = b.used(), b.allowed(), b.next_allowed()
-        text = (f"🐾 <b>Token limit reached.</b> I've used {fmt(used)} of your {fmt(allowed)}-token limit for "
-                f"{prov.brand} models {external.PERIOD_WORD[b.period]}. Switch to another model, or keep going with "
-                f"{html.escape(models.label(self.model_choice.effective_model()))} and raise the limit to {fmt(nxt)} until it "
-                f"resets {html.escape(external.fmt_reset(b.reset_at()))}.")
-        log.info("%s token limit reached: %d of %d", p, used, allowed)
-        self.chat_ui.chat.ask_choice(text, [("switch", "SWITCH MODEL"), ("raise", f"RAISE TO {fmt(nxt).upper()}"),
-                                    ("stop", "STOP")], lambda k, p=p: self._limit_answer(p, k))
-
-    def _limit_answer(self, p: str, key: str) -> None:
-        if self.chat_ui.chat is None or not self.session.task_active:
-            return
-        if key == "raise":
-            b = self.accounts.budget(p)
-            new = b.raise_limit()
-            self.save()
-            self.chat_ui.chat.add("info", f"Okay - the {self.providers[p].info.brand} limit is {external.fmt_tokens(new)} until "
-                                  f"it resets {external.fmt_reset(b.reset_at())}.")
-            self.session.request()
-        elif key == "switch":
-            self.session.resume_after_switch = True
-            self.chat_ui.chat.add("info", "Pick the model to go on with (the button next to SEND).")
-            self.model_choice.open_model_menu()
-        else:
-            self.chat_ui.chat.add("info", "Okay, I stopped here. Say 'continue' when you want me to go on.")
-            self.session.end_task()
-
-    def _limit_popup(self, p: str, info: dict[str, Any]) -> None:
-        """All tokens are used (our limit), or the provider's own limit: a popup that says when it resets."""
-        from PySide6.QtCore import QUrl
-        from PySide6.QtGui import QDesktopServices
-
-        ext = self.accounts.external
-        prov = ext.get(p) or external.ANTHROPIC     # (an unknown provider: told Anthropic's way)
-        why = info.get("why", "")
-        ok, url = "SWITCH MODEL", None
-        if why == "own":
-            b = self.accounts.budget(p)
-            title = "All tokens used"
-            lines = [f"All {external.fmt_tokens(b.maximum or b.allowed())} tokens for {prov.brand} models "
-                     f"{external.PERIOD_WORD[b.period]} are used up.",
-                     f"The limit resets <b>{html.escape(external.fmt_reset(b.reset_at()))}</b>.",
-                     "Until then I can go on with a local model or the other provider."]
-        elif why == "rate":
-            title = "Rate limit reached"
-            reset = info.get("reset")
-            lines = [f"{prov.name}'s rate limit for your account is reached.",
-                     f"It lifts <b>{html.escape(external.fmt_reset(datetime.fromtimestamp(reset)))}</b>." if reset
-                     else "It usually lifts within a minute or so."]
-        elif why == "plan":
-            title = "ChatGPT plan limit reached"
-            lines = ["You've reached your ChatGPT plan's usage limit for Pixel Cat.",
-                     "ChatGPT's usage page shows when it resets (OpenAI doesn't tell apps that)."]
-            ok, url = "MANAGE USAGE", prov.usage_url
-        elif why == "copilot":
-            title = "Copilot allowance used up"
-            q = self.accounts.ext_p(self.accounts.credit_p).get("quota")
-            when = self.provider_settings.quota_reset_note(q).replace("RESETS ", "").title() if isinstance(q, dict) else ""
-            lines = ["Your Copilot plan's AI credits are used up for now - or a budget your organization set for "
-                     "Copilot is reached.",
-                     f"The plan's allowance resets <b>{html.escape(when)}</b>." if when else
-                     "GitHub's Copilot settings show when it resets.",
-                     "Until then I can go on with a local model or another provider."]
-            ok, url = "COPILOT SETTINGS", prov.usage_url
-        elif why == "credits":
-            title = "Credits used up"
-            lines = [(ext.get(p) or external.OPENAI).out_of_credits]
-            ok, url = "OPEN BILLING", external.BILLING.get(p)
-        else:
-            title = "Spend limit reached"
-            lines = [f"Your {prov.name} organization's spend limit is reached - it's set in your {prov.name} "
-                     "account's billing settings."]
-            ok, url = "OPEN BILLING", external.BILLING.get(p)
-        log.info("%s limit (%s) - task paused", p, why)
-        if self.chat_ui.chat is not None:
-            self.chat_ui.chat.add("error", re.sub(r"<[^>]+>", "", " ".join(lines)))
-        pop = self.popups.popup(title, paras(lines), ok, "OK")
-
-        def answer(yes: bool) -> None:
-            if yes and url:
-                QDesktopServices.openUrl(QUrl(url))
-            if yes and not url and self.session.task_active:
-                self.session.resume_after_switch = True
-                self.chat_ui.open_chat()
-                self.model_choice.open_model_menu()
-            elif self.session.task_active and not self.session.resume_after_switch:
-                self.session.end_task()
-        pop.answered.connect(answer)
-
-    def _switched_model(self) -> None:
-        """Another model was picked for this chat (the model menu): a task stopped at the token limit goes on."""
-        if self.session.resume_after_switch:            # (the token limit: go on with the new model)
-            self.session.resume_after_switch = False
-            if self.session.task_active and self.session.worker is None and self.chat_ui.chat is not None:
-                QTimer.singleShot(0, self.session.request)
-
-    def _show_model_banner(self) -> None:
-        if self.chat_ui.chat is None:
-            return
-        text = self.model_status.banner()
-        ext = external.parse(self.model_choice.effective_model())
-        prov = self.providers[ext[0]].info if ext else None
-        if (text is None and prov is not None and prov.signin_kind == "browser"
-                and self.accounts.auth(prov.key) == "chatgpt"):
-            self.chat_ui.chat.set_model_banner("Using ChatGPT plan", ("Manage usage", prov.usage_url))
-        else:
-            self.chat_ui.chat.set_model_banner(text)
 
     def _on_menu(self, key: str) -> None:
         try:
@@ -850,9 +623,3 @@ class PixelCatApp(QObject):
                                   "'at 17:00 remind me and open Outlook'. Press Esc anywhere (or STOP) to stop me.")
             return True
         return False
-
-    def _on_model_status(self) -> None:
-        if self.chat_ui.chat is not None:
-            self._show_model_banner()
-        self.world.sync_tray()
-

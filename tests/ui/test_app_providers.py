@@ -76,7 +76,7 @@ def test_a_new_limit_drops_the_raises(pet) -> None:  # type: ignore[no-untyped-d
 
 def test_credit_limit(pet) -> None:  # type: ignore[no-untyped-def]
     pet._on_menu("ext:climit:copilot:2000")
-    assert pet.accounts.ext_p("copilot")["credit_limit"] == 2000.0 and pet._credit_budget().allowed() == 2000.0
+    assert pet.accounts.ext_p("copilot")["credit_limit"] == 2000.0 and pet.limits.credit_budget().allowed() == 2000.0
 
 
 def test_the_open_menu_shows_the_new_setting(pet) -> None:  # type: ignore[no-untyped-def]
@@ -118,9 +118,9 @@ def test_custom_credit_limit(pet, dialogs, quota, text: str, ok: bool, limit) ->
     dlg.field.setText(text)
     dlg._save()
     if ok:
-        assert pet._credit_budget().limit == limit
+        assert pet.limits.credit_budget().limit == limit
     else:
-        assert dlg.status.text() and pet._credit_budget().limit == external.CREDIT_DEFAULT
+        assert dlg.status.text() and pet.limits.credit_budget().limit == external.CREDIT_DEFAULT
 
 
 def test_custom_credit_limit_asks_github_for_the_plan_first(bg, dialogs, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -134,7 +134,7 @@ def test_custom_credit_limit_asks_github_for_the_plan_first(bg, dialogs, monkeyp
     dialogs[-1].field.setText("1000")
     dialogs[-1]._save()
     assert asked == ["key"] and bg.accounts.ext_p("copilot")["quota"]["total"] == 300.0
-    assert bg._credit_budget().limit == external.CREDIT_DEFAULT and "300" in dialogs[-1].status.text()
+    assert bg.limits.credit_budget().limit == external.CREDIT_DEFAULT and "300" in dialogs[-1].status.text()
 
 
 # ---------------------------------------------------------------- connection state
@@ -392,7 +392,7 @@ def test_signing_out_of_github_and_removing_the_token(bg) -> None:  # type: igno
     bg._on_menu("ext:out:copilot")
     assert bg.creds.get("copilot_signin") is None and bg.accounts.auth("copilot") == "key"
     assert "quota" not in s and s["login"] == "octocat" and bg.chat_state.chat_model == "copilot:m1"
-    bg._ext_disconnect("copilot", only_key=True)
+    bg.provider_settings.ext_disconnect("copilot", only_key=True)
     assert bg.accounts.auth("copilot") == "" and "login" not in s and bg.chat_state.chat_model is None
     assert bg.popups.open[-1].text.text().endswith("The GitHub token is removed.</p>")
 
@@ -440,7 +440,7 @@ def test_token_limit_gate(pet, p: str, used: int, status: str) -> None:  # type:
     _task(pet)
     pet.accounts.budget(p).add(used)
     assert pet.accounts.budget(p).status() == status
-    assert pet._ext_gate(p) is (status == "ok")
+    assert pet.limits.ext_gate(p) is (status == "ok")
     if status == "soft":
         assert [b.text() for b in pet.chat_ui.chat._choice_btns] == ["SWITCH MODEL", "RAISE TO 1.5M", "STOP"]
         assert "Token limit reached." in pet.chat_ui.chat.choice_label.text()
@@ -453,7 +453,7 @@ def test_raising_the_token_limit_goes_on(pet, monkeypatch) -> None:  # type: ign
     monkeypatch.setattr(pet.session, "request", lambda: requests.append(True))
     _task(pet)
     pet.accounts.budget("anthropic").add(1_000_000)
-    pet._ext_gate("anthropic")
+    pet.limits.ext_gate("anthropic")
     pet.chat_ui.chat._choice_btns[1].click()
     assert pet.accounts.budget("anthropic").allowed() == 1_500_000 and requests == [True]
     assert "the Claude limit is 1.5M" in pet.chat_ui.chat.msgs[-1].text
@@ -463,9 +463,9 @@ def test_switching_or_stopping_at_the_token_limit(pet, monkeypatch) -> None:  # 
     opened: list[bool] = []
     monkeypatch.setattr(pet.model_choice, "open_model_menu", lambda: opened.append(True))
     _task(pet)
-    pet._limit_answer("openai", "switch")
+    pet.limits._limit_answer("openai", "switch")
     assert pet.session.resume_after_switch and opened == [True]
-    pet._limit_answer("openai", "stop")
+    pet.limits._limit_answer("openai", "stop")
     assert not pet.session.task_active and "I stopped here" in pet.chat_ui.chat.msgs[-1].text
 
 
@@ -473,11 +473,11 @@ def test_copilot_credit_gate(pet, monkeypatch) -> None:  # type: ignore[no-untyp
     requests: list[bool] = []
     monkeypatch.setattr(pet.session, "request", lambda: requests.append(True))
     _task(pet)
-    pet._on_copilot_credits(5000)
-    assert pet._credit_budget().used() == 5000 and not pet._credit_gate()
+    pet.limits.on_copilot_credits(5000)
+    assert pet.limits.credit_budget().used() == 5000 and not pet.limits.credit_gate()
     assert [b.text() for b in pet.chat_ui.chat._choice_btns] == ["SWITCH MODEL", "RAISE TO 7,500", "STOP"]
     pet.chat_ui.chat._choice_btns[1].click()
-    assert pet._credit_budget().allowed() == 7500 and requests == [True]
+    assert pet.limits.credit_budget().allowed() == 7500 and requests == [True]
 
 
 @pytest.mark.parametrize(("why", "title", "url"), [
@@ -487,7 +487,7 @@ def test_copilot_credit_gate(pet, monkeypatch) -> None:  # type: ignore[no-untyp
 def test_provider_limit_popups(pet, app_env, why: str, title: str, url) -> None:  # type: ignore[no-untyped-def]
     _task(pet)
     p = {"plan": "openai", "copilot": "copilot"}.get(why, "anthropic")
-    pet._limit_popup(p, {"why": why})
+    pet.limits.limit_popup(p, {"why": why})
     pop = pet.popups.open[-1]
     assert pop.title == title and pet.chat_ui.chat.msgs[-1].role == "error"
     pop.ok.click()
@@ -589,7 +589,7 @@ def test_the_model_banner_for_a_chatgpt_plan(pet) -> None:  # type: ignore[no-un
     pet.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r"})
     pet.accounts.ext_p("openai")["auth"] = "chatgpt"
     pet.cfg.model = "openai:m1"
-    pet._show_model_banner()
+    pet.limits.show_model_banner()
     assert chat.model_bar.isVisibleTo(chat) and "Using ChatGPT plan" in chat.model_bar.text()
     assert external.OPENAI.usage_url in chat.model_bar.text()
 
@@ -621,19 +621,19 @@ def test_the_menu_popups_and_banner_tell_the_injected_description(make_app, sync
     assert menu["ext_openai"].children[0].label == "Zed key in"
     assert [i.label for i in pet.model_choice.ext_chat_items()] == ["Zed models"]
     _task(pet)
-    pet._limit_popup("openai", {"why": "rate"})
+    pet.limits.limit_popup("openai", {"why": "rate"})
     assert "ZedCo's rate limit" in pet.popups.open[-1].text.text() and "ZedCo's rate limit" in pet.chat_ui.chat.msgs[-1].text
-    pet._limit_popup("openai", {"why": "credits"})
+    pet.limits.limit_popup("openai", {"why": "credits"})
     assert "Zed credits are gone." in pet.popups.open[-1].text.text()
-    pet._limit_popup("openai", {"why": "plan"})
+    pet.limits.limit_popup("openai", {"why": "plan"})
     pet.popups.open[-1].ok.click()
     assert app_env.opened_urls[-1] == "https://zed.example/usage"
     pet.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r"})
     pet.accounts.ext_p("openai")["auth"] = "chatgpt"
     pet.cfg.model = "openai:m1"
-    pet._show_model_banner()
+    pet.limits.show_model_banner()
     assert "https://zed.example/usage" in pet.chat_ui.chat.model_bar.text()
-    pet._ext_disconnect("openai", only_key=True)
+    pet.provider_settings.ext_disconnect("openai", only_key=True)
     assert pet.popups.open[-1].title == "Zed" and pet.popups.open[-1].text.text().endswith("The Zed key is gone.</p>")
 
 
