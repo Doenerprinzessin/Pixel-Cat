@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from pixelcat.adapters import null
-from pixelcat.domain import Hardware, Snapshot, Unreadable, UserState
+from pixelcat.domain import FALLBACK_MONITOR, Hardware, Snapshot, Unreadable, UserState
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -49,7 +49,7 @@ class Recorder:
 sys.meta_path.insert(0, Recorder)
 import pixelcat.adapters.null as n
 p = n.build()
-assert p.name == 'null' and p.system.acquire_single_instance() and p.display.monitors() == []
+assert p.name == 'null' and p.system.acquire_single_instance() and p.display.monitors() == [n.FALLBACK_MONITOR]
 with p.input.holding(['ctrl']), p.capture.excluding(1):
     p.windows.own_click_through(1, 2)
 print("@@probe" + json.dumps({"preloaded": preloaded, "loaded": sorted(sys.modules), "events": events,
@@ -73,7 +73,9 @@ def test_loads_and_works_without_ctypes_winreg_qt_or_the_windows_adapter():
 
 
 def test_answers_nothing_there(plat):  # type: ignore[no-untyped-def]
-    assert plat.display.monitors() == [] and plat.display.virtual_screen() == (0, 0, 0, 0)
+    # never no monitor (the core needs a primary one): the same fallback the Windows adapter answers
+    assert plat.display.monitors() == [FALLBACK_MONITOR] and FALLBACK_MONITOR.primary
+    assert plat.display.virtual_screen() == FALLBACK_MONITOR.rect == (0, 0, 1920, 1080)
     assert plat.display.window_dpi(7) == 0 and plat.display.user_state() is UserState.NORMAL
     assert plat.display.set_dpi_awareness() is False and plat.display.session_locked() is False
     assert plat.windows.top_level(1) == [] and plat.windows.app_windows(1) == [] and plat.windows.foreground() == 0

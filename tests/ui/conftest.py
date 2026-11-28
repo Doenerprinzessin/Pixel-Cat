@@ -233,7 +233,7 @@ def _close_all(pet: Any) -> None:
 
 @pytest.fixture
 def make_app(qapp, app_env: AppEnv, fake_platform):  # type: ignore[no-untyped-def]
-    """``make_app(saved=..., cfg=..., selftest=...)`` -> a headless ``PixelCatApp`` (not started:
+    """``make_app(saved=..., cfg=..., selftest=..., platform=...)`` -> a headless ``PixelCatApp`` (not started:
     no timer runs unless a test starts it or calls the loop methods itself).  Looking inside
     windows (screen captures) is off unless a test passes its own ``cfg``."""
     from pixelcat.app import PixelCatApp
@@ -242,12 +242,13 @@ def make_app(qapp, app_env: AppEnv, fake_platform):  # type: ignore[no-untyped-d
 
     made: list[Any] = []
 
-    def make(saved: SavedState | None = None, cfg: Config | None = None, selftest: float = 0.0) -> PixelCatApp:
+    def make(saved: SavedState | None = None, cfg: Config | None = None, selftest: float = 0.0,
+             platform: Any = None) -> PixelCatApp:
         if cfg is None:
             cfg = Config()
             cfg.explore_windows = False
         pet = PixelCatApp(qapp, cfg, saved or SavedState(autostart_asked=True), selftest=selftest,
-                          platform=fake_platform)
+                          platform=fake_platform if platform is None else platform)
         made.append(pet)
         return pet
 

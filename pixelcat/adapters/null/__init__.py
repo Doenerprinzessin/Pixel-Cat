@@ -16,8 +16,8 @@ from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from ...domain import (AppWindow, ClipboardKind, Element, ElementKinds, Hardware, KillPlan, Monitor, Notification,
-                       Snapshot, Unreadable, UserState, WindowId, WinInfo)
+from ...domain import (FALLBACK_MONITOR, AppWindow, ClipboardKind, Element, ElementKinds, Hardware, KillPlan, Monitor,
+                       Notification, Snapshot, Unreadable, UserState, WindowId, WinInfo)
 from ...ports import ClipboardBackup, Keys, Platform, Rect
 
 if TYPE_CHECKING:
@@ -39,10 +39,10 @@ class NullDisplay:
         return False
 
     def monitors(self) -> list[Monitor]:
-        return []
+        return [FALLBACK_MONITOR]
 
     def virtual_screen(self) -> Rect:
-        return (0, 0, 0, 0)
+        return FALLBACK_MONITOR.rect
 
     def window_dpi(self, win: WindowId) -> int:
         return 0

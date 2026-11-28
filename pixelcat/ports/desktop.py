@@ -33,7 +33,8 @@ class DisplayPort(Protocol):
         ...
 
     def monitors(self) -> list[Monitor]:
-        """Every monitor with its rect, work area and DPI."""
+        """Every monitor with its rect, work area and DPI, the primary one first.  Never empty: when the
+        platform can't tell, the list holds ``FALLBACK_MONITOR`` (the core relies on a primary monitor)."""
         ...
 
     def virtual_screen(self) -> Rect:

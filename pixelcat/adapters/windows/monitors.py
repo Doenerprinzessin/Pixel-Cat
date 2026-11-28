@@ -6,7 +6,7 @@ import logging
 from ctypes import wintypes
 
 from . import win32
-from ...domain.monitors import Monitor, monitor_at, primary  # noqa: F401 - re-exported
+from ...domain.monitors import FALLBACK_MONITOR, Monitor, monitor_at, primary  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,6 @@ def enumerate_monitors() -> list[Monitor]:
     except Exception:  # noqa: BLE001
         log.exception("EnumDisplayMonitors failed")
     if not found:
-        found.append(Monitor(0, (0, 0, 1920, 1080), (0, 0, 1920, 1040), 96, True, "fallback"))
+        found.append(FALLBACK_MONITOR)
     found.sort(key=lambda m: (not m.primary, m.rect[0], m.rect[1]))
     return found

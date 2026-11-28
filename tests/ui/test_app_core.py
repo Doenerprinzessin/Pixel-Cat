@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pixelcat import naming, progress
-from pixelcat.domain import Monitor, UserState, WinInfo
+from pixelcat.domain import FALLBACK_MONITOR, Monitor, UserState, WinInfo
 from pixelcat.engine.states import S
 from pixelcat.persistence import SavedState
 from pixelcat.ui import theme
@@ -85,6 +85,24 @@ def test_start_shows_the_cat_and_starts_the_timers(pet, app_env) -> None:  # typ
     assert pet.brain.state == S.SITTING
     assert pet.brain.x == 1920 - 160 and pet.brain.smap is not None
     assert app_env.ensures == []                            # (warm_model=False: the AI isn't loaded)
+
+
+def test_starts_and_lives_on_the_null_platform(make_app, qtbot) -> None:  # type: ignore[no-untyped-def]
+    # Off Windows (macOS until it has its own adapters) bootstrap picks the null adapter: the cat must
+    # still start, find a screen and keep running, with no desktop to look at.
+    from pixelcat.adapters import null
+
+    pet = make_app(platform=null.build())
+    pet.start()
+    assert pet.monitors == [FALLBACK_MONITOR] and pet.overlay.isVisible()
+    for _ in range(30):
+        for step in (pet._tick, pet._refresh_windows, pet._refresh_monitors, pet._check_fullscreen,
+                     pet._keep_on_top, pet._sync_tray, pet._check_quit_request, pet.save):
+            step()
+    qtbot.wait(300)                                         # ... and its timers run too
+    assert pet.tick_timer.isActive() and pet.overlay.isVisible()
+    l, t, r, b = FALLBACK_MONITOR.rect
+    assert l <= pet.brain.x <= r and t <= pet.brain.y <= b
 
 
 def test_start_quiet_and_at_the_saved_place(make_app) -> None:  # type: ignore[no-untyped-def]

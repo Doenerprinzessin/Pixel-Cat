@@ -30,6 +30,10 @@ class Monitor:
         return dx * dx + dy * dy
 
 
+# What the platform answers when it can't list the monitors (the list is never empty).
+FALLBACK_MONITOR = Monitor(0, (0, 0, 1920, 1080), (0, 0, 1920, 1040), 96, True, "fallback")
+
+
 def monitor_at(monitors: list[Monitor], x: float, y: float) -> Monitor:
     """Monitor containing (x, y), or the nearest one."""
     for m in monitors:
