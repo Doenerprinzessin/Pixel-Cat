@@ -63,8 +63,13 @@ def _ctx():  # type: ignore[no-untyped-def]
 
 
 @pytest.fixture
-def ballwin(desktop, game, sprites, tuning, track):  # type: ignore[no-untyped-def]
-    return track(BallOverlay(game, sprites, tuning))
+def ballwin(desktop, fake_platform, game, sprites, tuning, track):  # type: ignore[no-untyped-def]
+    return track(BallOverlay(game, sprites, tuning, windows=fake_platform.windows, input=fake_platform.input))
+
+
+def _win(platform) -> list[tuple]:  # type: ignore[no-untyped-def]
+    """The window port's calls as (method, *args, *keyword values)."""
+    return [(name, *args, *kwargs.values()) for name, args, kwargs in platform.windows.calls]
 
 
 def _ev(kind: QEvent.Type) -> QMouseEvent:
@@ -73,13 +78,13 @@ def _ev(kind: QEvent.Type) -> QMouseEvent:
                        Qt.KeyboardModifier.NoModifier)
 
 
-def test_hidden_without_a_game(desktop, ballwin: BallOverlay) -> None:  # type: ignore[no-untyped-def]
+def test_hidden_without_a_game(desktop, fake_platform, ballwin: BallOverlay) -> None:  # type: ignore[no-untyped-def]
     assert not ballwin.wanted()
     ballwin.sync(2)
-    assert not ballwin.isVisible() and desktop.calls == []
+    assert not ballwin.isVisible() and desktop.calls == [] and fake_platform.windows.calls == []
 
 
-def test_a_game_shows_the_window_centred_on_the_ball(desktop, ballwin: BallOverlay, game) -> None:  # type: ignore[no-untyped-def]
+def test_a_game_shows_the_window_centred_on_the_ball(fake_platform, ballwin: BallOverlay, game) -> None:  # type: ignore[no-untyped-def]
     game.start()
     assert game.active and ballwin.wanted()
     ballwin.sync(2)
@@ -87,23 +92,23 @@ def test_a_game_shows_the_window_centred_on_the_ball(desktop, ballwin: BallOverl
     assert ballwin.isVisible() and hwnd
     w = SIZE_ART * 2
     x, y = int(round(game.ball.x)) - w // 2, int(round(game.ball.y)) - w // 2
-    assert desktop.calls[:2] == [("make_tool_noactivate", hwnd), ("set_click_through", hwnd, True)]
-    assert desktop.calls[-1] == ("move_window", hwnd, x, y, w, w, True)
+    assert _win(fake_platform)[:2] == [("make_tool_window", hwnd), ("set_click_through", hwnd, True)]
+    assert _win(fake_platform)[-1] == ("move", hwnd, x, y, w, w, True)
     ballwin.keep_on_top()
-    assert desktop.calls[-1] == ("keep_topmost", hwnd)
+    assert _win(fake_platform)[-1] == ("keep_topmost", hwnd)
 
 
-def test_the_window_hides_after_the_game_and_comes_back(desktop, ballwin: BallOverlay, game) -> None:  # type: ignore[no-untyped-def]
+def test_the_window_hides_after_the_game_and_comes_back(fake_platform, ballwin: BallOverlay, game) -> None:  # type: ignore[no-untyped-def]
     game.start()
     ballwin.sync(2)
     game.stop(poof=False)
     game.fx.clear()
     ballwin.sync(2)
     assert not ballwin.isVisible() and not ballwin._poll.isActive()
-    desktop.calls.clear()
+    fake_platform.windows.calls.clear()
     game.start()
     ballwin.sync(2)
-    assert ballwin.isVisible() and desktop.names()[:2] == ["make_tool_noactivate", "set_click_through"]
+    assert ballwin.isVisible() and fake_platform.windows.names()[:2] == ["make_tool_window", "set_click_through"]
 
 
 def test_grab_drag_and_throw(desktop, ballwin: BallOverlay, game) -> None:  # type: ignore[no-untyped-def]
@@ -126,26 +131,24 @@ def test_grab_drag_and_throw(desktop, ballwin: BallOverlay, game) -> None:  # ty
     assert ballwin.cursor().shape() == Qt.CursorShape.OpenHandCursor
 
 
-def test_poll_makes_the_ball_clickable_under_the_pointer(desktop, ballwin: BallOverlay, game) -> None:  # type: ignore[no-untyped-def]
+def test_poll_makes_the_ball_clickable_under_the_pointer(desktop, fake_platform, ballwin: BallOverlay, game) -> None:  # type: ignore[no-untyped-def]
     game.start()
     ballwin.sync(2)
     desktop.cursor = (int(game.ball.x), int(game.ball.y))
     ballwin._poll_cursor()
-    assert desktop.calls[-1] == ("set_click_through", ballwin._hwnd, False)
+    assert _win(fake_platform)[-1] == ("set_click_through", ballwin._hwnd, False)
     assert ballwin.cursor().shape() == Qt.CursorShape.OpenHandCursor
     desktop.cursor = (9000, 9000)
     ballwin._poll_cursor()
-    assert desktop.calls[-1] == ("set_click_through", ballwin._hwnd, True)
+    assert _win(fake_platform)[-1] == ("set_click_through", ballwin._hwnd, True)
 
 
-def test_a_lost_release_drops_the_ball(desktop, ballwin: BallOverlay, game, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.adapters.windows import win32
-
+def test_a_lost_release_drops_the_ball(desktop, fake_platform, ballwin: BallOverlay, game) -> None:  # type: ignore[no-untyped-def]
     game.start()
     ballwin.sync(2)
     desktop.cursor = (int(game.ball.x), int(game.ball.y))
     ballwin.mousePressEvent(_ev(QEvent.Type.MouseButtonPress))
-    monkeypatch.setattr(win32, "release_went_elsewhere", lambda hwnd: True)
+    fake_platform.input.answers("release_went_elsewhere", lambda hwnd: hwnd == ballwin._hwnd)
     ballwin._poll_cursor()
     ballwin._poll_cursor()
     assert not game.ball.held and (game.ball.vx, game.ball.vy) == (0.0, 0.0)

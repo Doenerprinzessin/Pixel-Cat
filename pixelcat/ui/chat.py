@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButt
                                QVBoxLayout, QWidget)
 
 from .. import naming
-from ..adapters.windows import win32
+from ..ports import DisplayPort
 from ..sprites.library import SpriteLibrary, render_text
 from . import theme
 from .geometry import Rect, phys_to_qt, place_near
@@ -123,8 +123,9 @@ class ChatWindow(QWidget):
     SIZE_U = (175.0, 225.0)                 # the usual size, in art pixels
     MIN_U = (150.0, 160.0)
 
-    def __init__(self, sprites: SpriteLibrary) -> None:
+    def __init__(self, sprites: SpriteLibrary, *, display: DisplayPort) -> None:
         super().__init__(None)
+        self._display = display
         self.setObjectName("chatRoot")
         self.setWindowTitle("Pixel Cat Chat")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
@@ -289,7 +290,7 @@ class ChatWindow(QWidget):
         """Moved to a monitor with another DPI: rescale (Windows/Qt would only stretch the window)."""
         if not self.isVisible():
             return
-        dpi = win32.window_dpi(int(self.winId()))
+        dpi = self._display.window_dpi(int(self.winId()))
         if dpi and dpi != self.dpi:
             old_u = self.u
             self.apply_scale(theme.unit_for_dpi(dpi), dpi)

@@ -145,6 +145,7 @@ def status_for(fake: Fake | None, may: bool = False, finder=lambda: None, starte
 
 
 def part_status() -> None:
+    from pixelcat.bootstrap import build_platform
     from pixelcat.ui.chat import ChatWindow
     from pixelcat.sprites.library import SpriteLibrary
 
@@ -153,7 +154,7 @@ def part_status() -> None:
     # downloaded, not loaded -> loading -> ready
     fake.present = {"fakecat:7b"}
     st, seen = status_for(fake)
-    chat = ChatWindow(SpriteLibrary("charcoal"))
+    chat = ChatWindow(SpriteLibrary("charcoal"), display=build_platform().display)
     st.changed.connect(lambda: chat.set_model_banner(st.banner()), Qt.ConnectionType.QueuedConnection)
     st.ensure()
     pump(15, lambda: st.state == "loading" and not chat.model_bar.isHidden())   # (a cold first run is slow)

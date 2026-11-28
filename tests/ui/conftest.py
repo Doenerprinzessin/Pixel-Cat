@@ -56,11 +56,15 @@ def _fake_unprotect(blob: bytes) -> bytes:
 
 
 @pytest.fixture
-def desktop(monkeypatch: pytest.MonkeyPatch, fake_dll) -> Desktop:  # type: ignore[no-untyped-def]
-    """The Win32 calls the overlay, the ball, the chat, the menu and the minigame windows make."""
+def desktop(monkeypatch: pytest.MonkeyPatch, fake_dll, fake_platform) -> Desktop:  # type: ignore[no-untyped-def]
+    """The Win32 calls the app controller still makes itself.  The overlay, the ball, the chat and the
+    minigame windows use the ports of ``fake_platform`` (their calls are recorded there); the pointer
+    they read is ``Desktop.cursor``."""
     from pixelcat.adapters.windows import escwatch, inputs, win32
 
     d = Desktop()
+    fake_platform.input.answers("cursor_pos", lambda: d.cursor)
+    fake_platform.display.returns("window_dpi", 96)
     monkeypatch.setattr(win32, "user32", fake_dll("user32"))
     for name in ("set_click_through", "make_tool_noactivate", "move_window", "keep_topmost", "set_exstyle",
                  "message_box"):

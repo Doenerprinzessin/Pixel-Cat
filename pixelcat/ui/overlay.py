@@ -16,8 +16,8 @@ from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QMouseEvent, QPainter, QPaintEvent
 from PySide6.QtWidgets import QWidget
 
-from ..adapters.windows import inputs, win32
 from ..engine.brain import Brain
+from ..ports import InputPort, WindowPort
 from ..settings import Tuning
 from ..sprites.library import CatFrame, SpriteLibrary
 
@@ -33,8 +33,11 @@ class CatOverlay(QWidget):
     dropped = Signal(float, float)       # release velocity px/s
     menu_requested = Signal()
 
-    def __init__(self, brain: Brain, sprites: SpriteLibrary, tuning: Tuning) -> None:
+    def __init__(self, brain: Brain, sprites: SpriteLibrary, tuning: Tuning, *, windows: WindowPort,
+                 input: InputPort) -> None:
         super().__init__(None)
+        self._windows = windows
+        self._input = input
         self.brain = brain
         self.sprites = sprites
         self.t = tuning
@@ -76,8 +79,8 @@ class CatOverlay(QWidget):
         self.show()
         self._hwnd = int(self.winId())
         try:
-            win32.make_tool_noactivate(self._hwnd)
-            win32.set_click_through(self._hwnd, True)
+            self._windows.make_tool_window(self._hwnd)
+            self._windows.set_click_through(self._hwnd, True)
         except Exception:  # noqa: BLE001
             log.exception("could not set overlay styles")
         self._poll.start()
@@ -112,7 +115,7 @@ class CatOverlay(QWidget):
         geom = (x, y, self.t.canvas_w * scale, self.t.canvas_h * scale)
         if geom != self._geom and self._hwnd:
             try:
-                win32.move_window(self._hwnd, *geom, topmost=self.raise_on_move)
+                self._windows.move(self._hwnd, *geom, topmost=self.raise_on_move)
             except Exception:  # noqa: BLE001
                 log.exception("move_window failed")
             self._geom = geom
@@ -211,11 +214,11 @@ class CatOverlay(QWidget):
             now = time.monotonic()
             dt = now - self._last_poll
             self._last_poll = now
-            cx, cy = win32.cursor_pos()
+            cx, cy = self._input.cursor_pos()
             # Safety net: if we think the button is held but it isn't (the release
             # went to a popup, another window, a UAC prompt...), end the press now.
             # While our window holds the mouse capture the release comes to us anyway.
-            if self._press_pos is not None and win32.release_went_elsewhere(self._hwnd):
+            if self._press_pos is not None and self._input.release_went_elsewhere(self._hwnd):
                 self._lost_release += 1
                 if self._lost_release >= 2:
                     log.info("lost mouse release - ending drag")
@@ -224,9 +227,10 @@ class CatOverlay(QWidget):
                 self._lost_release = 0
             over = self.hit(cx, cy)
             self.cursor_over = over
-            want_through = inputs.passthrough_active() or not (over or self._press_pos is not None or self._dragging)
+            want_through = self._input.passthrough_active() or not (over or self._press_pos is not None
+                                                                    or self._dragging)
             if want_through != self._click_through and self._hwnd:
-                win32.set_click_through(self._hwnd, want_through)
+                self._windows.set_click_through(self._hwnd, want_through)
                 self._click_through = want_through
             # hold-to-pet
             if self._press_pos is not None and not self._dragging:
@@ -249,7 +253,7 @@ class CatOverlay(QWidget):
 
     # ------------------------------------------------------------- mouse
     def mousePressEvent(self, e: QMouseEvent) -> None:
-        cx, cy = win32.cursor_pos()
+        cx, cy = self._input.cursor_pos()
         if e.button() == Qt.MouseButton.RightButton:
             if self._press_pos is not None or self._dragging:
                 self.cancel_press()  # right-click while carrying the cat just drops it
@@ -273,7 +277,7 @@ class CatOverlay(QWidget):
     def mouseMoveEvent(self, _e: QMouseEvent) -> None:
         if self._press_pos is None:
             return
-        cx, cy = win32.cursor_pos()
+        cx, cy = self._input.cursor_pos()
         self._history.append((time.monotonic(), cx, cy))
         if not self._dragging:
             dx, dy = cx - self._press_pos[0], cy - self._press_pos[1]
@@ -326,7 +330,7 @@ class CatOverlay(QWidget):
     def mouseDoubleClickEvent(self, e: QMouseEvent) -> None:
         """The 2nd press of a double-click is still a press: dragging picks the cat up, and
         only a release without dragging counts as the double-click (the happy hop)."""
-        cx, cy = win32.cursor_pos()
+        cx, cy = self._input.cursor_pos()
         if e.button() == Qt.MouseButton.LeftButton and self.hit(cx, cy, tolerance=2):
             self._begin_press(cx, cy, double=True)
 
@@ -335,8 +339,8 @@ class CatOverlay(QWidget):
         self.show()
         if self._hwnd:
             try:
-                win32.make_tool_noactivate(self._hwnd)
-                win32.set_click_through(self._hwnd, True)
+                self._windows.make_tool_window(self._hwnd)
+                self._windows.set_click_through(self._hwnd, True)
                 self._click_through = True
                 self._geom = None
             except Exception:  # noqa: BLE001

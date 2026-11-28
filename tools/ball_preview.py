@@ -23,12 +23,15 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 app = QApplication(sys.argv[:1])
 
+from pixelcat.bootstrap import build_platform  # noqa: E402
 from pixelcat.engine.brain import Ctx  # noqa: E402
 from pixelcat.settings import Tuning  # noqa: E402
 from pixelcat.sprites.library import SpriteLibrary  # noqa: E402
 from pixelcat.ui.ball import SIZE_ART, BallOverlay  # noqa: E402
 from pixelcat.ui.overlay import CatOverlay  # noqa: E402
 from tools.ball_test import DT, Player, make  # noqa: E402
+
+PLATFORM = build_platform()
 
 OUT = ROOT / "build" / "preview"
 S = 3
@@ -80,8 +83,8 @@ def sheet(cells: list[QImage], out: Path, cols: int = 4) -> None:
 def story(seed: int, start_round: int = 1) -> list[QImage]:
     brain, game, _smap = make(seed)
     sprites = SpriteLibrary("charcoal")
-    cat = CatOverlay(brain, sprites, Tuning())
-    ball = BallOverlay(game, sprites, Tuning())
+    cat = CatOverlay(brain, sprites, Tuning(), windows=PLATFORM.windows, input=PLATFORM.input)
+    ball = BallOverlay(game, sprites, Tuning(), windows=PLATFORM.windows, input=PLATFORM.input)
     player = Player("still", random.Random(seed))
     for _ in range(120):
         brain.update(DT, Ctx((0, 0), False, 0, 14, False, 3, False))
@@ -119,7 +122,7 @@ def main() -> None:
     cells = []
     for rnd in range(1, 12):
         brain, game, _smap = make(5)
-        ball = BallOverlay(game, sprites, Tuning())
+        ball = BallOverlay(game, sprites, Tuning(), windows=PLATFORM.windows, input=PLATFORM.input)
         for _ in range(60):
             brain.update(DT, Ctx((0, 0), False, 0, 14, False, 3, False))
         game.start()
@@ -128,7 +131,7 @@ def main() -> None:
         game.ball.held = False
         game.ball.x, game.ball.y = brain.x + 60, brain.y - 200
         game.ball.vx, game.ball.vy = 700, -100
-        cat = CatOverlay(brain, sprites, Tuning())
+        cat = CatOverlay(brain, sprites, Tuning(), windows=PLATFORM.windows, input=PLATFORM.input)
         for _ in range(14):
             game.hue = (game.hue + 25) % 360
             game.ball.spin += 0.4

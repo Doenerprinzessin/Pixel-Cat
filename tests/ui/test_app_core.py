@@ -35,7 +35,7 @@ def test_construction_wires_the_parts_without_starting_anything(pet, app_env) ->
     assert not any(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer,
                                           pet.save_timer, pet.top_timer, pet.tray_timer, pet.quit_timer))
     assert pet.tick_timer.interval() == 1000 // pet.t.fps_active
-    assert app_env.desktop.calls == [] and app_env.ensures == []
+    assert app_env.desktop.calls == [] and pet.platform.windows.calls == [] and app_env.ensures == []
     assert not pet.overlay.isVisible()
 
 
@@ -80,7 +80,7 @@ def test_start_shows_the_cat_and_starts_the_timers(pet, app_env) -> None:  # typ
     pet.start()
     hwnd = pet.overlay.hwnd()
     assert pet.overlay.isVisible() and hwnd and pet.agent.overlay_hwnd == hwnd
-    assert ("make_tool_noactivate", hwnd) in app_env.desktop.calls
+    assert ((hwnd,), {}) in pet.platform.windows.called("make_tool_window")
     assert all(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer, pet.save_timer,
                                        pet.top_timer, pet.tray_timer, pet.quit_timer))
     assert pet.brain.state == S.SITTING

@@ -44,8 +44,8 @@ def test_md_to_html_uses_the_current_style() -> None:
 
 # ---------------------------------------------------------------- the window
 @pytest.fixture
-def chat(qapp, desktop, sprites, track):  # type: ignore[no-untyped-def]
-    return track(ChatWindow(sprites))
+def chat(qapp, desktop, fake_platform, sprites, track):  # type: ignore[no-untyped-def]
+    return track(ChatWindow(sprites, display=fake_platform.display))
 
 
 def _shown(chat: ChatWindow) -> str:
@@ -443,11 +443,9 @@ def test_edges_near_corners(chat: ChatWindow, side: str, pos: QPoint, edges: str
 
 
 @pytest.mark.qt
-def test_moving_to_another_dpi_rescales(chat: ChatWindow, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.adapters.windows import win32
-
+def test_moving_to_another_dpi_rescales(chat: ChatWindow, fake_platform) -> None:  # type: ignore[no-untyped-def]
     chat.show_near(CAT, WORK, 2)
-    monkeypatch.setattr(win32, "window_dpi", lambda hwnd: 192)
+    fake_platform.display.answers("window_dpi", lambda win: 192 if win == int(chat.winId()) else 0)
     chat._check_dpi()
     assert chat.dpi == 192 and chat.u == 4 and (chat.width(), chat.height()) == chat._want_size()
 

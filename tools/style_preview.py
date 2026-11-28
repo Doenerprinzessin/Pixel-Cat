@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 app = QApplication(sys.argv[:1])
 
+from pixelcat.bootstrap import build_platform  # noqa: E402
 from pixelcat.sprites.library import SpriteLibrary  # noqa: E402
 from pixelcat.ui import theme  # noqa: E402
 from pixelcat.ui.chat import ChatWindow  # noqa: E402
@@ -52,7 +53,7 @@ def menu_image(u: int = 3) -> QImage:
 
 
 def chat_image() -> QImage:
-    c = ChatWindow(sprites)
+    c = ChatWindow(sprites, display=build_platform().display)
     c.apply_scale(3, 144)
     c.add("user", "Can you open Notepad and write a packing list?")
     c.add("info", "Opened notepad.")

@@ -26,12 +26,17 @@ def brain(tuning):  # type: ignore[no-untyped-def]
 
 
 @pytest.fixture
-def overlay(desktop, brain, sprites, tuning, track):  # type: ignore[no-untyped-def]
-    ov = track(CatOverlay(brain, sprites, tuning))
+def overlay(desktop, fake_platform, brain, sprites, tuning, track):  # type: ignore[no-untyped-def]
+    ov = track(CatOverlay(brain, sprites, tuning, windows=fake_platform.windows, input=fake_platform.input))
     ov.scale = 2
     ov.start()
     ov.sync(2)
     return ov
+
+
+def _win(platform) -> list[tuple]:  # type: ignore[no-untyped-def]
+    """The window port's calls as (method, *args, *keyword values)."""
+    return [(name, *args, *kwargs.values()) for name, args, kwargs in platform.windows.calls]
 
 
 def _on_cat(ov: CatOverlay) -> tuple[int, int]:
@@ -62,10 +67,11 @@ def _signals(ov: CatOverlay) -> list[tuple]:
     return got
 
 
-def test_start_makes_a_click_through_tool_window(desktop, overlay: CatOverlay) -> None:  # type: ignore[no-untyped-def]
+def test_start_makes_a_click_through_tool_window(fake_platform, overlay: CatOverlay) -> None:  # type: ignore[no-untyped-def]
     hwnd = overlay.hwnd()
     assert hwnd == int(overlay.winId()) != 0 and overlay.isVisible()
-    assert ("make_tool_noactivate", hwnd) in desktop.calls and ("set_click_through", hwnd, True) in desktop.calls
+    calls = _win(fake_platform)
+    assert ("make_tool_window", hwnd) in calls and ("set_click_through", hwnd, True) in calls
     assert overlay._poll.isActive()
 
 
@@ -75,17 +81,17 @@ def test_canvas_and_cat_rect_follow_the_anchor(overlay: CatOverlay, tuning) -> N
     assert overlay.cat_rect() == (600 - 16 * s, 700 - 32 * s, 600 + 16 * s, 700)
 
 
-def test_sync_moves_the_window_only_when_it_changes(desktop, overlay: CatOverlay, tuning) -> None:  # type: ignore[no-untyped-def]
-    moves = lambda: [c for c in desktop.calls if c[0] == "move_window"]  # noqa: E731
+def test_sync_moves_the_window_only_when_it_changes(fake_platform, overlay: CatOverlay, tuning) -> None:  # type: ignore[no-untyped-def]
+    moves = lambda: [c for c in _win(fake_platform) if c[0] == "move"]  # noqa: E731
     first = moves()
-    assert first[-1] == ("move_window", overlay.hwnd(), *overlay.canvas_origin(), tuning.canvas_w * 2,
+    assert first[-1] == ("move", overlay.hwnd(), *overlay.canvas_origin(), tuning.canvas_w * 2,
                          tuning.canvas_h * 2, True)
     overlay.sync(2)
     assert moves() == first
     overlay.brain.x += 10
     overlay.raise_on_move = False
     overlay.sync(3)
-    assert moves()[-1] == ("move_window", overlay.hwnd(), *overlay.canvas_origin(), tuning.canvas_w * 3,
+    assert moves()[-1] == ("move", overlay.hwnd(), *overlay.canvas_origin(), tuning.canvas_w * 3,
                            tuning.canvas_h * 3, False)
     assert overlay.frame is not None and overlay.scale == 3
 
@@ -98,26 +104,24 @@ def test_hit_only_on_the_cats_pixels_and_only_while_shown(overlay: CatOverlay) -
     assert not overlay.hit(x, y)
 
 
-def test_cursor_poll_turns_click_through_off_over_the_cat(desktop, overlay: CatOverlay) -> None:  # type: ignore[no-untyped-def]
+def test_cursor_poll_turns_click_through_off_over_the_cat(desktop, fake_platform, overlay: CatOverlay) -> None:  # type: ignore[no-untyped-def]
     hwnd = overlay.hwnd()
     desktop.cursor = _on_cat(overlay)
     overlay._poll_cursor()
-    assert overlay.cursor_over and desktop.calls[-1] == ("set_click_through", hwnd, False)
+    assert overlay.cursor_over and _win(fake_platform)[-1] == ("set_click_through", hwnd, False)
     desktop.cursor = (5000, 5000)
     overlay._poll_cursor()
-    assert not overlay.cursor_over and desktop.calls[-1] == ("set_click_through", hwnd, True)
-    n = len(desktop.calls)
+    assert not overlay.cursor_over and _win(fake_platform)[-1] == ("set_click_through", hwnd, True)
+    n = len(fake_platform.windows.calls)
     overlay._poll_cursor()
-    assert len(desktop.calls) == n                 # (only changes are sent)
+    assert len(fake_platform.windows.calls) == n   # (only changes are sent)
 
 
-def test_passthrough_keeps_the_window_click_through(desktop, overlay: CatOverlay, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.adapters.windows import inputs
-
-    monkeypatch.setattr(inputs, "passthrough_active", lambda: True)
+def test_passthrough_keeps_the_window_click_through(desktop, fake_platform, overlay: CatOverlay) -> None:  # type: ignore[no-untyped-def]
+    fake_platform.input.returns("passthrough_active", True)
     desktop.cursor = _on_cat(overlay)
     overlay._poll_cursor()
-    assert overlay.cursor_over and ("set_click_through", overlay.hwnd(), False) not in desktop.calls
+    assert overlay.cursor_over and ("set_click_through", overlay.hwnd(), False) not in _win(fake_platform)
 
 
 def test_stroking_the_cat_with_the_pointer_pets_it(desktop, overlay: CatOverlay) -> None:  # type: ignore[no-untyped-def]
@@ -191,27 +195,26 @@ def test_holding_the_button_pets_instead_of_clicking(desktop, overlay: CatOverla
     assert ("petting",) in got and ("clicked",) not in got
 
 
-def test_a_release_that_went_elsewhere_ends_the_drag(desktop, overlay: CatOverlay, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from pixelcat.adapters.windows import win32
-
+def test_a_release_that_went_elsewhere_ends_the_drag(desktop, fake_platform, overlay: CatOverlay) -> None:  # type: ignore[no-untyped-def]
     got = _signals(overlay)
     x, y = desktop.cursor = _on_cat(overlay)
     overlay.mousePressEvent(_ev(QEvent.Type.MouseButtonPress))
     desktop.cursor = (x + 50, y)
     overlay.mouseMoveEvent(_ev(QEvent.Type.MouseMove))
-    monkeypatch.setattr(win32, "release_went_elsewhere", lambda hwnd: True)
+    fake_platform.input.answers("release_went_elsewhere", lambda hwnd: hwnd == overlay.hwnd())
     overlay._poll_cursor()
     assert overlay.is_pressing()                       # (one poll could be a glitch)
     overlay._poll_cursor()
     assert not overlay.is_pressing() and got[-1] == ("dropped",)
 
 
-def test_reshow_restores_the_window_styles(desktop, overlay: CatOverlay) -> None:  # type: ignore[no-untyped-def]
+def test_reshow_restores_the_window_styles(fake_platform, overlay: CatOverlay) -> None:  # type: ignore[no-untyped-def]
     overlay.hide()
-    desktop.calls.clear()
+    fake_platform.windows.calls.clear()
     overlay.reshow()
     assert overlay.isVisible()
-    assert desktop.names() == ["make_tool_noactivate", "set_click_through"] and overlay._geom is None
+    assert _win(fake_platform) == [("make_tool_window", overlay.hwnd()), ("set_click_through", overlay.hwnd(), True)]
+    assert overlay._geom is None
 
 
 def test_a_hat_is_drawn_into_the_frames(overlay: CatOverlay, sprites) -> None:  # type: ignore[no-untyped-def]

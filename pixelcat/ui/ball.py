@@ -18,8 +18,8 @@ from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPaintEvent, QPixmap
 from PySide6.QtWidgets import QWidget
 
-from ..adapters.windows import inputs, win32
 from ..engine.ballgame import BallGame
+from ..ports import InputPort, WindowPort
 from ..settings import Tuning
 from ..sprites.library import SpriteLibrary, render_text, scaled_pixmap
 
@@ -77,8 +77,11 @@ def ball_image(style: str, frame: int, hue: int) -> QImage:
 
 
 class BallOverlay(QWidget):
-    def __init__(self, game: BallGame, sprites: SpriteLibrary, tuning: Tuning) -> None:
+    def __init__(self, game: BallGame, sprites: SpriteLibrary, tuning: Tuning, *, windows: WindowPort,
+                 input: InputPort) -> None:
         super().__init__(None)
+        self._windows = windows
+        self._input = input
         self.game = game
         self.sprites = sprites
         self.t = tuning
@@ -112,8 +115,8 @@ class BallOverlay(QWidget):
         self.show()
         self._hwnd = int(self.winId())
         try:
-            win32.make_tool_noactivate(self._hwnd)
-            win32.set_click_through(self._hwnd, True)
+            self._windows.make_tool_window(self._hwnd)
+            self._windows.set_click_through(self._hwnd, True)
             self._click_through = True
         except Exception:  # noqa: BLE001
             log.exception("could not set ball window styles")
@@ -141,8 +144,8 @@ class BallOverlay(QWidget):
                 self.show()
                 self._poll.start()
                 try:
-                    win32.make_tool_noactivate(self._hwnd)
-                    win32.set_click_through(self._hwnd, True)
+                    self._windows.make_tool_window(self._hwnd)
+                    self._windows.set_click_through(self._hwnd, True)
                     self._click_through = True
                 except Exception:  # noqa: BLE001
                     pass
@@ -154,7 +157,7 @@ class BallOverlay(QWidget):
         self._origin = (x, y)
         if self._hwnd and geom != self._geom:
             try:
-                win32.move_window(self._hwnd, *geom, topmost=True)   # also keeps it above the cat
+                self._windows.move(self._hwnd, *geom, topmost=True)   # also keeps it above the cat
             except Exception:  # noqa: BLE001
                 log.exception("ball move failed")
             self._geom = geom
@@ -163,7 +166,7 @@ class BallOverlay(QWidget):
     def keep_on_top(self) -> None:
         if self._hwnd and self.isVisible():
             try:
-                win32.keep_topmost(self._hwnd)
+                self._windows.keep_topmost(self._hwnd)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -305,19 +308,19 @@ class BallOverlay(QWidget):
 
     def _poll_cursor(self) -> None:
         try:
-            cx, cy = win32.cursor_pos()
+            cx, cy = self._input.cursor_pos()
             # the release went somewhere else (see the cat's overlay); while we hold the
             # mouse capture it comes to us, whatever GetAsyncKeyState says
-            if self._pressing and win32.release_went_elsewhere(self._hwnd):
+            if self._pressing and self._input.release_went_elsewhere(self._hwnd):
                 self._lost += 1
                 if self._lost >= 2:
                     self._release(lost=True)
             else:
                 self._lost = 0
             over = self.hit(cx, cy)
-            want_through = inputs.passthrough_active() or not (over or self._pressing)
+            want_through = self._input.passthrough_active() or not (over or self._pressing)
             if want_through != self._click_through and self._hwnd:
-                win32.set_click_through(self._hwnd, want_through)
+                self._windows.set_click_through(self._hwnd, want_through)
                 self._click_through = want_through
             shape = Qt.CursorShape.ClosedHandCursor if self._pressing else Qt.CursorShape.OpenHandCursor
             if over or self._pressing:
@@ -327,7 +330,7 @@ class BallOverlay(QWidget):
             log.debug("ball cursor poll failed", exc_info=True)
 
     def mousePressEvent(self, e: QMouseEvent) -> None:
-        cx, cy = win32.cursor_pos()
+        cx, cy = self._input.cursor_pos()
         if e.button() != Qt.MouseButton.LeftButton or not self.hit(cx, cy):
             return
         self._pressing = True
@@ -339,7 +342,7 @@ class BallOverlay(QWidget):
     def mouseMoveEvent(self, _e: QMouseEvent) -> None:
         if not self._pressing:
             return
-        cx, cy = win32.cursor_pos()
+        cx, cy = self._input.cursor_pos()
         self._history.append((time.monotonic(), cx, cy))
         if self.game.ball.held:
             self.game.drag(cx, cy)

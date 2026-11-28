@@ -19,7 +19,7 @@ from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPaintEvent, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ..adapters.windows import inputs, win32
+from ..ports import InputPort, WindowPort
 from ..sprites.library import SpriteLibrary, canvas_to_image, scaled_pixmap
 from ..ui import theme
 from ..ui.geometry import Rect, phys_to_qt, place_near
@@ -29,7 +29,6 @@ from .base import Host, Prop, Sprite
 log = logging.getLogger(__name__)
 
 _PM: dict[tuple[str, int], tuple[QPixmap, QImage]] = {}
-HWND_TOP_FLAGS = 0x0001 | 0x0002 | 0x0010          # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
 
 
 def art_pixmap(key: str, s: int) -> tuple[QPixmap, QImage]:
@@ -60,6 +59,8 @@ class SpriteWin(QWidget):
         super().__init__(None)
         _tool_window(self)
         self.sp = sprite
+        self._windows = sprite.host.windows
+        self._input = sprite.host.input
         self.setMouseTracking(True)
         self._hwnd = 0
         self._through = True
@@ -88,22 +89,22 @@ class SpriteWin(QWidget):
             self._hwnd = int(self.winId())
             self.sp.hwnd = self._hwnd
             try:
-                win32.make_tool_noactivate(self._hwnd)
-                win32.set_click_through(self._hwnd, True)
+                self._windows.make_tool_window(self._hwnd)
+                self._windows.set_click_through(self._hwnd, True)
             except Exception:  # noqa: BLE001
                 log.debug("sprite window styles", exc_info=True)
-            win32.move_window(self._hwnd, *geom, topmost=True)        # starts above everything (the cat too)
+            self._windows.move(self._hwnd, *geom, topmost=True)       # starts above everything (the cat too)
             if self.sp.clickable:
                 self._poll = QTimer(self)
                 self._poll.setInterval(40)
                 self._poll.timeout.connect(self._check_cursor)
                 self._poll.start()
         else:
-            win32.move_window(self._hwnd, *geom, topmost=False)       # move, keep its place in the z-order
+            self._windows.move(self._hwnd, *geom, topmost=False)      # move, keep its place in the z-order
 
     def raise_top(self) -> None:
         if self._hwnd and self.isVisible():
-            win32.keep_topmost(self._hwnd)
+            self._windows.keep_topmost(self._hwnd)
 
     def hit(self, px: int, py: int) -> bool:
         if self._geom is None or self._img is None or not self.isVisible():
@@ -119,12 +120,12 @@ class SpriteWin(QWidget):
 
     def _check_cursor(self) -> None:
         try:
-            cx, cy = win32.cursor_pos()
-            if self._pressing and win32.release_went_elsewhere(self._hwnd):
+            cx, cy = self._input.cursor_pos()
+            if self._pressing and self._input.release_went_elsewhere(self._hwnd):
                 self._end_press(0.0, 0.0)
-            want = inputs.passthrough_active() or not (self._pressing or self.hit(cx, cy))
+            want = self._input.passthrough_active() or not (self._pressing or self.hit(cx, cy))
             if want != self._through and self._hwnd:
-                win32.set_click_through(self._hwnd, want)
+                self._windows.set_click_through(self._hwnd, want)
                 self._through = want
             if not want:
                 self.setCursor(Qt.CursorShape.ClosedHandCursor if self._pressing else
@@ -147,7 +148,7 @@ class SpriteWin(QWidget):
     def mousePressEvent(self, e: QMouseEvent) -> None:
         if e.button() != Qt.MouseButton.LeftButton:
             return
-        cx, cy = win32.cursor_pos()
+        cx, cy = self._input.cursor_pos()
         if not self.hit(cx, cy):
             return
         if self.sp.on_click is not None:
@@ -162,7 +163,7 @@ class SpriteWin(QWidget):
     def mouseMoveEvent(self, _e: QMouseEvent) -> None:
         if not self._pressing:
             return
-        cx, cy = win32.cursor_pos()
+        cx, cy = self._input.cursor_pos()
         self._hist.append((time.monotonic(), cx, cy))
         if self.sp.on_drag is not None:
             self.sp.on_drag(cx, cy)
@@ -225,7 +226,7 @@ class FxWin(QWidget):
               "confetti": "#ff4f7b", "heart": "#ff4f7b", "crumb": "#e09040", "dust": "#e2deec"}
 
     def __init__(self, x: float, y: float, s: int, kind: str = "", n: int = 8, color: str | None = None,
-                 text: str = "", sprites: SpriteLibrary | None = None) -> None:
+                 text: str = "", sprites: SpriteLibrary | None = None, *, windows: WindowPort) -> None:
         super().__init__(None)
         _tool_window(self)
         self.s, self.kind, self.text = s, kind, text
@@ -250,9 +251,9 @@ class FxWin(QWidget):
         self.show()
         hwnd = int(self.winId())
         try:
-            win32.make_tool_noactivate(hwnd)
-            win32.set_click_through(hwnd, True)
-            win32.move_window(hwnd, self.org[0], self.org[1], size, size, topmost=True)
+            windows.make_tool_window(hwnd)
+            windows.set_click_through(hwnd, True)
+            windows.move(hwnd, self.org[0], self.org[1], size, size, topmost=True)
         except Exception:  # noqa: BLE001
             pass
         self._t = QTimer(self)
@@ -311,9 +312,11 @@ class HudWin(QWidget):
 
     close_requested = Signal()
 
-    def __init__(self, sprites: SpriteLibrary) -> None:
+    def __init__(self, sprites: SpriteLibrary, *, windows: WindowPort, input: InputPort) -> None:
         super().__init__(None)
         _tool_window(self)
+        self._windows = windows
+        self._input = input
         self.sprites = sprites
         self.title = ""
         self.text = ""
@@ -340,13 +343,13 @@ class HudWin(QWidget):
             self.show()
             self._hwnd = int(self.winId())
             try:
-                win32.make_tool_noactivate(self._hwnd)
-                win32.set_click_through(self._hwnd, True)
+                self._windows.make_tool_window(self._hwnd)
+                self._windows.set_click_through(self._hwnd, True)
             except Exception:  # noqa: BLE001
                 pass
             self._poll.start()
         if self._hwnd:
-            win32.move_window(self._hwnd, x, y, w, h, topmost=True)
+            self._windows.move(self._hwnd, x, y, w, h, topmost=True)
         self.update()
 
     def restyle(self) -> None:
@@ -365,13 +368,13 @@ class HudWin(QWidget):
 
     def _check_cursor(self) -> None:
         try:
-            cx, cy = win32.cursor_pos()
+            cx, cy = self._input.cursor_pos()
             g = self.geometry()
             r = self._close_rect()
             over = g.x() + r.x() <= cx <= g.x() + r.right() and g.y() + r.y() <= cy <= g.y() + r.bottom()
             want = not over
             if want != self._through and self._hwnd:
-                win32.set_click_through(self._hwnd, want)
+                self._windows.set_click_through(self._hwnd, want)
                 self._through = want
         except Exception:  # noqa: BLE001
             pass
@@ -399,8 +402,9 @@ class PopupWin(QWidget):
     answered = Signal(bool)
 
     def __init__(self, sprites: SpriteLibrary, title: str, html: str, ok: str, cancel: str | None = None,
-                 picture: QPixmap | None = None) -> None:
+                 picture: QPixmap | None = None, *, windows: WindowPort) -> None:
         super().__init__(None)
+        self._windows = windows
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
                             | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -452,8 +456,8 @@ class PopupWin(QWidget):
         self.show()
         self.raise_()
         try:
-            win32.make_tool_noactivate(int(self.winId()))
-            win32.keep_topmost(int(self.winId()))
+            self._windows.make_tool_window(int(self.winId()))
+            self._windows.keep_topmost(int(self.winId()))
         except Exception:  # noqa: BLE001
             pass
 
@@ -480,14 +484,17 @@ class QtHost(Host):
     def __init__(self, brain: Any, sprites: SpriteLibrary, real_windows: Callable[[], list[Any]],
                  scale_of: Callable[[Any], int], min_surface: float, on_world: Callable[[], None],
                  work_area: Callable[[], tuple[int, int, int, int]], ui_unit: Callable[[], int],
-                 cat_hwnd: Callable[[], int], on_hud_close: Callable[[], None]) -> None:
+                 cat_hwnd: Callable[[], int], on_hud_close: Callable[[], None], *, windows: WindowPort,
+                 input: InputPort) -> None:
         super().__init__(brain, real_windows, scale_of, min_surface)
+        self.windows = windows                  # (also what its sprite windows use)
+        self.input = input
         self.sprite_lib = sprites
         self._on_world = on_world
         self._work = work_area
         self._u = ui_unit
         self._cat_hwnd = cat_hwnd
-        self.hud = HudWin(sprites)
+        self.hud = HudWin(sprites, windows=windows, input=input)
         self.hud.close_requested.connect(on_hud_close)
         self.hidden = False
 
@@ -503,12 +510,12 @@ class QtHost(Host):
     def burst(self, kind: str, x: float, y: float, n: int = 8, color: str | None = None) -> None:
         super().burst(kind, x, y, n, color)
         if not self.hidden:
-            FxWin(x, y, self.scale, kind, n, color, sprites=self.sprite_lib)
+            FxWin(x, y, self.scale, kind, n, color, sprites=self.sprite_lib, windows=self.windows)
 
     def float_text(self, text: str, x: float, y: float, color: str = "#ffd84a") -> None:
         super().float_text(text, x, y, color)
         if not self.hidden:
-            FxWin(x, y, self.scale, "", 0, color, text=text)
+            FxWin(x, y, self.scale, "", 0, color, text=text, windows=self.windows)
 
     def hud_set(self, title: str, text: str) -> None:
         super().hud_set(title, text)
@@ -525,9 +532,9 @@ class QtHost(Host):
         if not cat:
             return
         if hwnd:
-            win32.user32.SetWindowPos(cat, hwnd, 0, 0, 0, 0, HWND_TOP_FLAGS)   # right under that window
+            self.windows.place_below(cat, hwnd)   # right under that window
         else:
-            win32.keep_topmost(cat)
+            self.windows.keep_topmost(cat)
             self.raise_all()
 
     def raise_all(self) -> None:
@@ -537,7 +544,7 @@ class QtHost(Host):
             if win is not None:
                 win.raise_top()
         if self.hud.isVisible():
-            win32.keep_topmost(int(self.hud.winId()))
+            self.windows.keep_topmost(int(self.hud.winId()))
 
     def set_hidden(self, hide: bool) -> None:
         """A fullscreen app is in front: hide everything (the game waits)."""

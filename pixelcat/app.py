@@ -156,13 +156,15 @@ class PixelCatApp(QObject):
         self.sprites = SpriteLibrary(saved.skin)       # Cosmetics -> Skins
         self.brain = Brain(self.t, self.needs)
         self.activity = system.ActivityTracker()
-        self.overlay = CatOverlay(self.brain, self.sprites, self.t)
+        self.overlay = CatOverlay(self.brain, self.sprites, self.t, windows=self.platform.windows,
+                                  input=self.platform.input)
         self.overlay.hat = saved.hat                   # Cosmetics -> Hats
         self.game = BallGame(self.brain)              # "Play": grab the ball, the cat hunts it
         self.game.best = saved.best_round
         self.game.on_end = self._game_ended
         self.brain.game = self.game
-        self.ball_win = BallOverlay(self.game, self.sprites, self.t)
+        self.ball_win = BallOverlay(self.game, self.sprites, self.t, windows=self.platform.windows,
+                                    input=self.platform.input)
         theme.configure(saved.ui_style, saved.ui_accent, saved.ui_size, saved.ui_font)   # the user's look
         theme.on_change(self._on_style_changed)
         naming.set_name(saved.cat_name)                                                  # Settings -> Name...
@@ -178,7 +180,8 @@ class PixelCatApp(QObject):
         self._popups: list[PopupWin] = []
         self.host = QtHost(self.brain, self.sprites, self._game_windows, self.scale_for,
                            self.t.min_surface_len, on_world=self._rebuild_world, work_area=self._game_work,
-                           ui_unit=self._game_unit, cat_hwnd=self.overlay.hwnd, on_hud_close=self.stop_minigame)
+                           ui_unit=self._game_unit, cat_hwnd=self.overlay.hwnd, on_hud_close=self.stop_minigame,
+                           windows=self.platform.windows, input=self.platform.input)
         self.host.ctx = {"fish_book": saved.fish_book}
         self.host.ended = self._mini_ended
         self.hud = self.host.hud
@@ -2402,7 +2405,7 @@ class PixelCatApp(QObject):
 
     def _popup(self, title: str, text: str, ok: str, cancel: str | None = None,
                picture: QPixmap | None = None) -> PopupWin:
-        pop = PopupWin(self.sprites, title, text, ok, cancel, picture)
+        pop = PopupWin(self.sprites, title, text, ok, cancel, picture, windows=self.platform.windows)
         self._popups.append(pop)
         pop.answered.connect(lambda _ok, pp=pop: self._popups.remove(pp) if pp in self._popups else None)
         mon = self._cat_monitor()
@@ -2664,7 +2667,7 @@ class PixelCatApp(QObject):
     # ================================================================ chat
     def _ensure_chat(self) -> ChatWindow:
         if self.chat is None:
-            self.chat = ChatWindow(self.sprites)
+            self.chat = ChatWindow(self.sprites, display=self.platform.display)
             self.chat.set_layout(self.saved.chat_size or ChatWindow.SIZE_U, self.saved.chat_full)
             self.chat.layout_changed.connect(self._save_chat_layout)
             self.chat.send_requested.connect(self._on_user_message)
