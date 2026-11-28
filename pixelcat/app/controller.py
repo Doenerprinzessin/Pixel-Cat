@@ -305,6 +305,7 @@ class PixelCatApp(QObject):
     def quit(self) -> None:
         log.info("quitting")
         self._quitting = True
+        self.session.quitting = True
         try:
             self.save()
             for tm in (self.tick_timer, self.win_timer, self.mon_timer, self.fs_timer, self.save_timer):

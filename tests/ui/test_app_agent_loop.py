@@ -345,6 +345,68 @@ def test_a_new_chat_stops_the_task_and_forgets_it(loop, workers) -> None:  # typ
     assert loop.chat_ui.chat._confirm_cb is None and loop.session.agent.cancel.is_set()
 
 
+class SimpleQApp:
+    def __init__(self) -> None:
+        self.quits = 0
+
+    def quit(self) -> None:
+        self.quits += 1
+
+
+@pytest.fixture
+def slow_mac_shot(loop, tmp_path):  # type: ignore[no-untyped-def]
+    """take_screenshot as on macOS (the GUI runs while it waits for the capture), with a capture that answers only
+    when ``release`` is set (or after 5 s): ``(release, during)``; ``during`` runs on the GUI 50 ms into the wait."""
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QTimer
+    from PySide6.QtGui import QImage
+
+    release, during = threading.Event(), []
+
+    def grab(rect):  # type: ignore[no-untyped-def]
+        release.wait(5)
+        img = QImage(4, 4, QImage.Format.Format_RGB32)
+        img.fill(0)
+        return img
+
+    def shot(a: dict[str, Any]) -> Any:
+        QTimer.singleShot(50, lambda: during[0]())
+        return loop.session.tool_screenshot()
+    s = loop.session
+    s.display = SimpleNamespace(qt_logical=lambda: True, virtual_screen=lambda: (0, 0, 4, 4),
+                                session_locked=lambda: False)
+    s.capture = SimpleNamespace(grab=grab)
+    s.folders = SimpleNamespace(known_folder=lambda name: tmp_path)
+    loop.tb.add("take_screenshot", run=shot)
+    yield release, during
+    release.set()
+
+
+def test_quitting_while_a_mac_screenshot_waits_shows_and_starts_nothing(loop, workers, slow_mac_shot) -> None:  # type: ignore[no-untyped-def]
+    import time
+
+    release, during = slow_mac_shot
+    loop.qapp = SimpleQApp()
+    during.append(loop.quit)
+    ask(loop, "take a screenshot")
+    t0 = time.monotonic()
+    workers[0].events.done("", [call("take_screenshot")])
+    assert time.monotonic() - t0 < 2.0 and not release.is_set() and loop.qapp.quits == 1
+    assert not loop.overlay.isVisible() and not loop.chat_ui.chat.isVisible()
+    assert len(workers) == 1 and "Screenshot saved" not in str(loop.chat_state.history)
+    assert not any("Screenshot saved" in m.text for m in loop.chat_ui.chat.msgs)
+
+
+def test_a_new_chat_while_a_mac_screenshot_waits_gets_nothing_of_it(loop, workers, slow_mac_shot) -> None:  # type: ignore[no-untyped-def]
+    release, during = slow_mac_shot
+    during.append(lambda: (loop.session.new_chat(), release.set()))
+    ask(loop, "take a screenshot")
+    workers[0].events.done("", [call("take_screenshot")])
+    assert loop.chat_state.history == [] and len(workers) == 1 and not loop.session.task_active
+    assert not any("Screenshot saved" in m.text for m in loop.chat_ui.chat.msgs)
+
+
 def test_a_new_message_after_a_stop_is_a_new_task(loop, workers) -> None:  # type: ignore[no-untyped-def]
     loop.tb.add("ping")
     ask(loop, "one")

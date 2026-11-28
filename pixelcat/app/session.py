@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QObject, QPoint, QRect, QThread, QTimer, Signal
+from PySide6.QtCore import QEventLoop, QObject, QPoint, QRect, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
@@ -153,6 +153,8 @@ class AgentSession(QObject):
         self.agent: DesktopAgent = None  # type: ignore[assignment]   # (the toolbox's, set with it)
         self.task_active = False
         self._task_id = 0
+        self._chat_gen = 0             # +1 for every new chat (a tool's result never goes to a later chat)
+        self.quitting = False          # (set by the controller's quit: nothing is shown or started any more)
         self._tool_thread: ToolThread | None = None
         self.live_tools: set[ToolThread] = set()
         self.esc_watch: EscapeWatcher = None  # type: ignore[assignment]   # (set by the controller: it calls on_escape)
@@ -319,6 +321,7 @@ class AgentSession(QObject):
             self.worker.cancel()
             self.worker = None
         self.end_task(cancelled=True)
+        self._chat_gen += 1
         self.agent.snap = None
         self.agent.shot = None
         self.agent.last_hwnd = 0
@@ -821,16 +824,20 @@ class AgentSession(QObject):
             self.brain.show_bubble("bubble_exclaim", 1.0)
             th.start()
             return
+        tid, gen = self._task_id, self._chat_gen      # (take_screenshot on macOS runs the GUI while it waits)
         try:
             out = self.toolbox.run(spec, args)
         except Exception as exc:  # noqa: BLE001
             out = exc
-        self._tool_done(spec, args, auto, out, self._task_id)
+        self._tool_done(spec, args, auto, out, tid, gen)
 
-    def _tool_done(self, spec: ToolSpec, args: dict[str, Any], auto: bool, out: Any, task_id: int) -> None:
+    def _tool_done(self, spec: ToolSpec, args: dict[str, Any], auto: bool, out: Any, task_id: int,
+                   chat_gen: int | None = None) -> None:
         assert self.chat_ui.chat is not None
         if spec.background:
             self._tool_thread = None
+        if self.quitting or (chat_gen is not None and chat_gen != self._chat_gen):
+            return  # the app quits / a new chat started while it ran: its result belongs to no chat
         images: list[str] = []
         if isinstance(out, Exception):
             if not isinstance(out, (ToolError, RuntimeError, OSError)):
@@ -985,7 +992,9 @@ class AgentSession(QObject):
 
     def _grab_off_gui_thread(self, rect: tuple[int, int, int, int]) -> QImage:
         """``capture.grab(rect)`` on a worker thread while the GUI keeps running (ScreenCaptureKit answers
-        asynchronously: waiting for it here would freeze the cat).  Its errors are raised here."""
+        asynchronously: waiting for it here would freeze the cat).  Its errors are raised here.  The user's
+        clicks and keys wait until it's done (no Stop or New Chat in the middle of a tool); if the task stops or
+        the cat quits meanwhile, it stops waiting."""
         done = threading.Event()
         box: dict[str, Any] = {}
 
@@ -999,9 +1008,11 @@ class AgentSession(QObject):
         threading.Thread(target=work, name="pixelcat-screenshot", daemon=True).start()
         end = time.monotonic() + SCREENSHOT_WAIT_S
         while not done.wait(0.01):
+            if self.quitting or self.agent.cancel.is_set():
+                raise ToolError("stopped by the user")
             if time.monotonic() > end:
                 raise OSError("the screen didn't answer in time")
-            QApplication.processEvents()
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         if "error" in box:
             raise box["error"]
         return box["img"]
@@ -1044,7 +1055,8 @@ class AgentSession(QObject):
             if not img.save(str(out)):
                 raise OSError(f"could not save {out}")
         finally:
-            self.overlay.reshow()
-            if chat_vis and self.chat_ui.chat is not None:
-                self.chat_ui.chat.show()
+            if not self.quitting:
+                self.overlay.reshow()
+                if chat_vis and self.chat_ui.chat is not None:
+                    self.chat_ui.chat.show()
         return f"Screenshot saved to {out}."
