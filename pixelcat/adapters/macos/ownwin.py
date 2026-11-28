@@ -41,7 +41,9 @@ _accessory = False                 # the activation policy is set (once per run)
 
 
 def remember(number: int, win: WindowId) -> None:
-    """The cat's window ``win`` has the window number ``number``."""
+    """The cat's window ``win`` has the window number ``number`` (none yet, <= 0: nothing to remember)."""
+    if int(number) <= 0:
+        return
     with _lock:
         _numbers[int(number)] = int(win)
 
@@ -142,6 +144,7 @@ def refresh() -> dict[int, int]:
     gets the map as it is).  Drops the windows that are gone."""
     def read() -> dict[int, int]:
         fresh: dict[int, int] = {}
+        through: set[int] = set()
         if not _cocoa():
             return own_numbers()
         for w in _top_level_widgets():
@@ -151,10 +154,13 @@ def refresh() -> dict[int, int]:
             nswin = _view_window(wid)
             if nswin is not None and int(nswin.windowNumber()) > 0:
                 fresh[int(nswin.windowNumber())] = wid
+                if nswin.ignoresMouseEvents():
+                    through.add(int(nswin.windowNumber()))
         with _lock:
             _numbers.clear()
             _numbers.update(fresh)
-            _through.intersection_update(fresh)
+            _through.clear()
+            _through.update(through)
         return dict(fresh)
     return _main(read, own_numbers())
 
@@ -245,6 +251,8 @@ def set_click_through(win: WindowId, enabled: bool) -> None:
             return
         nswin.setIgnoresMouseEvents_(bool(enabled))
         number = int(nswin.windowNumber())
+        if number <= 0:
+            return
         remember(number, win)
         with _lock:
             (_through.add if enabled else _through.discard)(number)
@@ -325,8 +333,9 @@ def own_click_through(own_pid: int, keep: WindowId) -> list[WindowId]:
             if nswin is None or not nswin.isVisible() or nswin.ignoresMouseEvents():
                 continue
             nswin.setIgnoresMouseEvents_(True)
-            with _lock:
-                _through.add(int(nswin.windowNumber()))
+            if int(nswin.windowNumber()) > 0:
+                with _lock:
+                    _through.add(int(nswin.windowNumber()))
             changed.append(wid)
         return changed
     return _main(apply, [])

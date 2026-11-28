@@ -177,6 +177,25 @@ def test_refresh_maps_the_live_windows_only(cat):  # type: ignore[no-untyped-def
     assert ownwin.own_id(999) is None and ownwin.numbers_for({CHAT, GONE}) == {102: CHAT}
 
 
+def test_refresh_reads_which_windows_let_clicks_through(cat):  # type: ignore[no-untyped-def]
+    ownwin.set_click_through(OVERLAY, True)
+    cat.ns[OVERLAY].ignores = False                   # (changed behind our back, e.g. by Qt)
+    ownwin.refresh()
+    assert ownwin.click_through_numbers() == {103}    # the ball was click-through all along
+
+
+def test_a_window_without_a_number_yet_is_never_remembered(cat):  # type: ignore[no-untyped-def]
+    cat.ns[CHAT].number = 0                           # (not on screen yet: no window number)
+    cat.ns[OVERLAY].number = -1
+    ownwin.remember(0, CHAT)
+    ownwin.make_tool_window(CHAT)
+    ownwin.set_click_through(CHAT, True)
+    ownwin.own_click_through(os.getpid(), BALL)
+    assert cat.ns[CHAT].ignores and cat.ns[OVERLAY].ignores
+    assert ownwin.own_numbers() == {} and ownwin.click_through_numbers() == set()
+    assert ownwin.own_id(0) is None and ownwin.own_id(-1) is None
+
+
 def test_a_worker_gets_the_default_when_the_gui_thread_is_busy(cat, qapp, monkeypatch):  # type: ignore[no-untyped-def]
     monkeypatch.setattr(ownwin, "TIMEOUT", 0.1)
     got: list[Any] = []
@@ -249,7 +268,7 @@ print(json.dumps(out))
 '''
 
 
-@pytest.mark.macos
+@pytest.mark.macos_live                       # (shows real windows on the screen for a moment)
 def test_the_real_cocoa_windows(qapp):  # type: ignore[no-untyped-def]
     if windows.permissions.no_prompts() is False:
         pytest.skip("only with PIXELCAT_NO_PROMPTS=1 (the test run sets it)")

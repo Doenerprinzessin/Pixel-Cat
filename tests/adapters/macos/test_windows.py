@@ -144,6 +144,20 @@ def test_the_assertions_are_cached_and_pmset_answers_when_iokit_cant(monkeypatch
     assert windows.display_awake_pids() == {8}
 
 
+def test_the_iokit_function_is_loaded_once_and_its_copy_not_retained_again(monkeypatch):  # type: ignore[no-untyped-def]
+    loads: list[Any] = []
+
+    def load(bundle, found, infos):  # type: ignore[no-untyped-def]
+        loads.append((bundle, infos))
+        found["IOPMCopyAssertionsByProcess"] = lambda out: (0, {})
+    monkeypatch.setattr(windows, "_IOPM", [])
+    monkeypatch.setattr(_objc, "FN", FakeModule(NSBundle=FakeModule(bundleWithPath_=lambda path: path)))
+    monkeypatch.setattr(_objc, "objc", FakeModule(loadBundleFunctions=load))
+    assert windows._iopm() is windows._iopm()
+    assert loads == [("/System/Library/Frameworks/IOKit.framework",
+                      [("IOPMCopyAssertionsByProcess", b"io^@", "", {"arguments": {0: {"already_cfretained": True}}})])]
+
+
 # ------------------------------------------------------------------ listing
 def test_top_level_lists_furniture_front_to_back(desk, monkeypatch):  # type: ignore[no-untyped-def]
     chat = (1 << 32) + 0x7700
@@ -411,3 +425,11 @@ def test_the_real_assertion_reader_sees_caffeinate():
     finally:
         proc.terminate()
         proc.wait(5)
+
+
+@pytest.mark.macos
+def test_the_real_assertions_dictionary_isnt_leaked():
+    import CoreFoundation as CF
+
+    err, by_pid = windows._iopm()(None)
+    assert err == 0 and CF.CFGetRetainCount(by_pid) == 1          # (2 without already_cfretained: never freed)

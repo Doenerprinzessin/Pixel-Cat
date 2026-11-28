@@ -30,7 +30,7 @@ def marks_file() -> Path:
     """``~/Library/Application Support/PixelCat-marks<instance>.json``: outside the data folder, so deleting
     that folder keeps the marks (like the HKCU values on Windows)."""
     name = f"PixelCat-marks{os.environ.get('PIXELCAT_INSTANCE', '')}.json"
-    return Path.home() / "Library" / "Application Support" / name
+    return Path.home() / "Library" / "Application Support" / name   # (HOME even with APPDATA set: on purpose)
 
 
 def _write_atomic(path: Path, data: bytes, mode: int = 0o644) -> None:

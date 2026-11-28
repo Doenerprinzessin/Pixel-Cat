@@ -176,11 +176,18 @@ def watching_full_screen(rect: Rect, monitor: Rect, keeps_display_awake: Callabl
     return covers(rect, monitor) and bool(keeps_display_awake())
 
 
+_IOPM: list[Callable[..., Any]] = []         # IOPMCopyAssertionsByProcess, loaded once
+
+
 def _iopm() -> Callable[..., Any]:
-    bundle = _objc.FN.NSBundle.bundleWithPath_("/System/Library/Frameworks/IOKit.framework")
-    found: dict[str, Any] = {}
-    _objc.objc.loadBundleFunctions(bundle, found, [("IOPMCopyAssertionsByProcess", b"io^@")])
-    return found["IOPMCopyAssertionsByProcess"]
+    if not _IOPM:
+        bundle = _objc.FN.NSBundle.bundleWithPath_("/System/Library/Frameworks/IOKit.framework")
+        found: dict[str, Any] = {}
+        # (a Copy function: the dictionary is ours already, so pyobjc mustn't retain it again)
+        _objc.objc.loadBundleFunctions(bundle, found, [("IOPMCopyAssertionsByProcess", b"io^@", "",
+                                                        {"arguments": {0: {"already_cfretained": True}}})])
+        _IOPM.append(found["IOPMCopyAssertionsByProcess"])
+    return _IOPM[0]
 
 
 def awake_pids_from(by_pid: Any) -> frozenset[int]:
