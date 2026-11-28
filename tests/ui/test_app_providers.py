@@ -54,9 +54,9 @@ def test_token_limit_period_and_maximum(pet) -> None:  # type: ignore[no-untyped
     pet._on_menu("ext:period:anthropic:week")
     pet._on_menu("ext:max:anthropic:3")
     pet._on_menu("ext:period:anthropic:year")
-    s = pet._ext_p("anthropic")
+    s = pet.accounts.ext_p("anthropic")
     assert (s["limit"], s["period"], s["maximum"]) == (50000, "week", 3.0)
-    b = pet._budget("anthropic")
+    b = pet.accounts.budget("anthropic")
     assert (b.limit, b.period, b.maximum, b.allowed()) == (50000, "week", 150000, 50000)
     start = external.period_start("week", datetime.now()).timestamp()
     assert pet.saved.ext_usage["anthropic"]["start"] == start
@@ -66,17 +66,17 @@ def test_token_limit_period_and_maximum(pet) -> None:  # type: ignore[no-untyped
 
 
 def test_a_new_limit_drops_the_raises(pet) -> None:  # type: ignore[no-untyped-def]
-    b = pet._budget("openai")
+    b = pet.accounts.budget("openai")
     b.add(1_000_000)
     b.raise_limit()
     assert b.allowed() == 1_500_000
     pet._on_menu("ext:limit:openai:2000000")
-    assert pet._budget("openai").allowed() == 2_000_000
+    assert pet.accounts.budget("openai").allowed() == 2_000_000
 
 
 def test_credit_limit(pet) -> None:  # type: ignore[no-untyped-def]
     pet._on_menu("ext:climit:copilot:2000")
-    assert pet._ext_p("copilot")["credit_limit"] == 2000.0 and pet._credit_budget().allowed() == 2000.0
+    assert pet.accounts.ext_p("copilot")["credit_limit"] == 2000.0 and pet._credit_budget().allowed() == 2000.0
 
 
 def test_the_open_menu_shows_the_new_setting(pet) -> None:  # type: ignore[no-untyped-def]
@@ -100,9 +100,9 @@ def test_custom_token_limit(pet, dialogs, text: str, ok: bool, limit: int | None
     dlg.field.setText(text)
     dlg._save()
     if ok:
-        assert pet._budget("openai").limit == limit and pet._budget("openai").allowed() == limit
+        assert pet.accounts.budget("openai").limit == limit and pet.accounts.budget("openai").allowed() == limit
     else:
-        assert dlg.status.text() and pet._budget("openai").limit == 1_000_000 and dlg.field.isEnabled()
+        assert dlg.status.text() and pet.accounts.budget("openai").limit == 1_000_000 and dlg.field.isEnabled()
 
 
 @pytest.mark.parametrize(("quota", "text", "ok", "limit"), [
@@ -111,7 +111,7 @@ def test_custom_token_limit(pet, dialogs, text: str, ok: bool, limit: int | None
     ({"unlimited": True}, "50000", True, 50000.0)])
 def test_custom_credit_limit(pet, dialogs, quota, text: str, ok: bool, limit) -> None:  # type: ignore[no-untyped-def]
     if quota is not None:
-        pet._ext_p("copilot")["quota"] = quota
+        pet.accounts.ext_p("copilot")["quota"] = quota
     pet._on_menu("ext:ccustom:copilot")
     dlg = dialogs[-1]
     assert dlg.field.text() == "5000"
@@ -133,7 +133,7 @@ def test_custom_credit_limit_asks_github_for_the_plan_first(bg, dialogs, monkeyp
     bg._on_menu("ext:ccustom:copilot")
     dialogs[-1].field.setText("1000")
     dialogs[-1]._save()
-    assert asked == ["key"] and bg._ext_p("copilot")["quota"]["total"] == 300.0
+    assert asked == ["key"] and bg.accounts.ext_p("copilot")["quota"]["total"] == 300.0
     assert bg._credit_budget().limit == external.CREDIT_DEFAULT and "300" in dialogs[-1].status.text()
 
 
@@ -148,8 +148,8 @@ def test_custom_credit_limit_asks_github_for_the_plan_first(bg, dialogs, monkeyp
 def test_ext_auth(pet, p: str, creds: dict, settings: dict, auth: str) -> None:  # type: ignore[no-untyped-def,type-arg]
     for k, v in creds.items():
         pet.creds.set(k, v)
-    pet._ext_p(p).update(settings)
-    assert pet._ext_auth(p) == auth
+    pet.accounts.ext_p(p).update(settings)
+    assert pet.accounts.auth(p) == auth
 
 
 @pytest.mark.parametrize(("exc", "text"), [
@@ -182,7 +182,7 @@ def test_quota_reset_note_without_a_date(q, note) -> None:  # type: ignore[no-un
 
 
 def test_credit_cap(pet) -> None:  # type: ignore[no-untyped-def]
-    s = pet._ext_p("copilot")
+    s = pet.accounts.ext_p("copilot")
     assert pet._credit_cap() is None
     s["quota"] = {"total": 1500}
     assert pet._credit_cap() == 1500.0
@@ -214,8 +214,8 @@ def test_a_good_key_connects_the_provider(bg, monkeypatch, p: str, module: str) 
     dlg.field.setText("sk-good")
     dlg._save()
     assert seen == [("sk-good", "key")]
-    assert bg.creds.get(f"{p}_key") == "sk-good" and bg._ext_auth(p) == "key"
-    assert bg._ext_models(p) == MODELS and external.NAMES[f"{p}:m1"] == "Model One"
+    assert bg.creds.get(f"{p}_key") == "sk-good" and bg.accounts.auth(p) == "key"
+    assert bg.accounts.models(p) == MODELS and external.NAMES[f"{p}:m1"] == "Model One"
     assert not dlg.isVisible()
     pop = bg.popups.open[-1]
     assert pop.title.endswith("is connected") and "2 " in pop.text.text()
@@ -231,7 +231,7 @@ def test_a_bad_key_is_refused_with_the_reason(bg, monkeypatch) -> None:  # type:
     bg._ask_key("anthropic")
     bg._key_dialog.field.setText("sk-bad")
     bg._key_dialog._save()
-    assert bg.creds.get("anthropic_key") is None and bg._ext_auth("anthropic") == ""
+    assert bg.creds.get("anthropic_key") is None and bg.accounts.auth("anthropic") == ""
     assert bg._key_dialog.status.text() == "That key wasn't accepted - check that you copied all of it."
 
 
@@ -246,8 +246,8 @@ def test_a_good_github_token_connects_copilot(bg, monkeypatch) -> None:  # type:
     assert dlg.get.text() == "GET A TOKEN"
     dlg.field.setText("github_pat_x")
     dlg._save()
-    assert bg.creds.get("copilot_key") == "github_pat_x" and bg._ext_auth("copilot") == "key"
-    assert bg._ext_p("copilot")["login"] == "octocat" and bg._ext_p("copilot")["quota"]["total"] == 300.0
+    assert bg.creds.get("copilot_key") == "github_pat_x" and bg.accounts.auth("copilot") == "key"
+    assert bg.accounts.ext_p("copilot")["login"] == "octocat" and bg.accounts.ext_p("copilot")["quota"]["total"] == 300.0
 
 
 def test_copilot_without_its_runtime_offers_to_get_it(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -278,7 +278,7 @@ def test_chatgpt_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-unt
     monkeypatch.setattr(openai_client, "list_models", lambda creds, auth: MODELS)
     bg.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r", "email": "cat@example.com"})
     bg._browser_done("openai", {"plan": True})
-    assert bg._ext_auth("openai") == "chatgpt" and bg._ext_p("openai")["welcomed"]
+    assert bg.accounts.auth("openai") == "chatgpt" and bg.accounts.ext_p("openai")["welcomed"]
     assert bg.popups.open[-1].title == "Using your ChatGPT plan"
     bg._browser_done("openai", {"plan": True})
     assert bg.popups.open[-1].title == "ChatGPT is connected"
@@ -286,7 +286,7 @@ def test_chatgpt_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-unt
 
 def test_chatgpt_sign_in_without_plan_usage(bg) -> None:  # type: ignore[no-untyped-def]
     bg._browser_done("openai", {"plan": False})
-    assert bg.popups.open[-1].title == "Signed in - but no plan usage" and bg._ext_auth("openai") == ""
+    assert bg.popups.open[-1].title == "Signed in - but no plan usage" and bg.accounts.auth("openai") == ""
 
 
 def test_a_failed_or_cancelled_sign_in(bg) -> None:  # type: ignore[no-untyped-def]
@@ -309,10 +309,10 @@ def test_github_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-unty
     bg._signin_cancel = ev
     bg.creds.set("copilot_signin", {"token": "t"})
     bg._device_done("copilot", {"login": "octocat"}, threading.Event())         # an attempt that was started over
-    assert bg._ext_auth("copilot") == ""
+    assert bg.accounts.auth("copilot") == ""
     bg._device_done("copilot", {"login": "octocat"}, ev)
-    assert bg._ext_auth("copilot") == "signin" and bg._ext_p("copilot")["login"] == "octocat"
-    assert bg._ext_models("copilot") == MODELS and bg._ext_p("copilot")["quota"] == {"unlimited": True}
+    assert bg.accounts.auth("copilot") == "signin" and bg.accounts.ext_p("copilot")["login"] == "octocat"
+    assert bg.accounts.models("copilot") == MODELS and bg.accounts.ext_p("copilot")["quota"] == {"unlimited": True}
 
 
 def test_anthropic_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -322,7 +322,7 @@ def test_anthropic_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-u
 
     monkeypatch.setattr(anthropic_client, "list_models", lambda creds, auth="key": MODELS)
     bg._cli_signed_in("anthropic", "ok", threading.Event())
-    assert bg._ext_auth("anthropic") == "signin" and bg._ext_models("anthropic") == MODELS
+    assert bg.accounts.auth("anthropic") == "signin" and bg.accounts.models("anthropic") == MODELS
 
 
 def test_reload_the_model_list(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -330,10 +330,10 @@ def test_reload_the_model_list(bg, monkeypatch) -> None:  # type: ignore[no-unty
 
     monkeypatch.setattr(openai_client, "list_models", lambda creds, auth: MODELS[:1])
     bg._on_menu("ext:refresh:openai")
-    assert bg._ext_models("openai") == []                           # (not connected: nothing to load)
+    assert bg.accounts.models("openai") == []                           # (not connected: nothing to load)
     bg.creds.set("openai_key", "k")
     bg._on_menu("ext:refresh:openai")
-    assert bg._ext_models("openai") == MODELS[:1]
+    assert bg.accounts.models("openai") == MODELS[:1]
 
 
 def test_a_failed_reload_says_why(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -351,11 +351,11 @@ def test_a_failed_reload_says_why(bg, monkeypatch) -> None:  # type: ignore[no-u
 # ---------------------------------------------------------------- signing out
 def test_removing_a_key_goes_back_to_the_default_model(bg, app_env) -> None:  # type: ignore[no-untyped-def]
     bg.creds.set("anthropic_key", "k")
-    bg._ext_p("anthropic")["models"] = MODELS
+    bg.accounts.ext_p("anthropic")["models"] = MODELS
     bg._choose_default_model("anthropic:m1")
     assert bg.cfg.model == "anthropic:m1"
     bg._on_menu("ext:out:anthropic")
-    assert bg.creds.get("anthropic_key") is None and bg._ext_auth("anthropic") == ""
+    assert bg.creds.get("anthropic_key") is None and bg.accounts.auth("anthropic") == ""
     assert bg.cfg.model == "qwen3.5:35b-a3b" and ("model", "qwen3.5:35b-a3b") in app_env.user_settings
     assert bg.popups.open[-1].text.text().endswith("The Anthropic API key is removed.</p>")
 
@@ -366,9 +366,9 @@ def test_signing_out_of_anthropic(bg, monkeypatch) -> None:  # type: ignore[no-u
     calls: list = []  # type: ignore[type-arg]
     monkeypatch.setattr(ant_tool, "find", lambda: "ant.exe")
     monkeypatch.setattr(ant_tool, "logout", lambda exe: calls.append(exe))
-    bg._ext_p("anthropic")["auth"] = "signin"
+    bg.accounts.ext_p("anthropic")["auth"] = "signin"
     bg._on_menu("ext:out:anthropic")
-    assert bg._ext_auth("anthropic") == "" and calls == ["ant.exe"]
+    assert bg.accounts.auth("anthropic") == "" and calls == ["ant.exe"]
     assert "Signed out of Anthropic." in bg.popups.open[-1].text.text()
 
 
@@ -377,23 +377,23 @@ def test_signing_out_of_chatgpt(bg, monkeypatch) -> None:  # type: ignore[no-unt
 
     monkeypatch.setattr(chatgpt_signin, "sign_out", lambda creds: False)
     bg.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r"})
-    bg._ext_p("openai")["auth"] = "chatgpt"
+    bg.accounts.ext_p("openai")["auth"] = "chatgpt"
     bg._on_menu("ext:out:openai")
-    assert bg._ext_p("openai")["auth"] == ""
+    assert bg.accounts.ext_p("openai")["auth"] == ""
     assert [p.title for p in bg.popups.open] == ["Signed out", "ChatGPT"]          # (OpenAI couldn't confirm it)
 
 
 def test_signing_out_of_github_and_removing_the_token(bg) -> None:  # type: ignore[no-untyped-def]
-    s = bg._ext_p("copilot")
+    s = bg.accounts.ext_p("copilot")
     bg.creds.set("copilot_signin", {"token": "t"})
     bg.creds.set("copilot_key", "k")
     s.update(auth="signin", login="octocat", quota={"total": 5})
     bg.chat_model = "copilot:m1"
     bg._on_menu("ext:out:copilot")
-    assert bg.creds.get("copilot_signin") is None and bg._ext_auth("copilot") == "key"
+    assert bg.creds.get("copilot_signin") is None and bg.accounts.auth("copilot") == "key"
     assert "quota" not in s and s["login"] == "octocat" and bg.chat_model == "copilot:m1"
     bg._ext_disconnect("copilot", only_key=True)
-    assert bg._ext_auth("copilot") == "" and "login" not in s and bg.chat_model is None
+    assert bg.accounts.auth("copilot") == "" and "login" not in s and bg.chat_model is None
     assert bg.popups.open[-1].text.text().endswith("The GitHub token is removed.</p>")
 
 
@@ -438,8 +438,8 @@ def _task(pet) -> None:  # type: ignore[no-untyped-def]
                                                    ("openai", 2_000_000, "hard")])
 def test_token_limit_gate(pet, p: str, used: int, status: str) -> None:  # type: ignore[no-untyped-def]
     _task(pet)
-    pet._budget(p).add(used)
-    assert pet._budget(p).status() == status
+    pet.accounts.budget(p).add(used)
+    assert pet.accounts.budget(p).status() == status
     assert pet._ext_gate(p) is (status == "ok")
     if status == "soft":
         assert [b.text() for b in pet.chat._choice_btns] == ["SWITCH MODEL", "RAISE TO 1.5M", "STOP"]
@@ -452,10 +452,10 @@ def test_raising_the_token_limit_goes_on(pet, monkeypatch) -> None:  # type: ign
     requests: list[bool] = []
     monkeypatch.setattr(pet, "_request", lambda: requests.append(True))
     _task(pet)
-    pet._budget("anthropic").add(1_000_000)
+    pet.accounts.budget("anthropic").add(1_000_000)
     pet._ext_gate("anthropic")
     pet.chat._choice_btns[1].click()
-    assert pet._budget("anthropic").allowed() == 1_500_000 and requests == [True]
+    assert pet.accounts.budget("anthropic").allowed() == 1_500_000 and requests == [True]
     assert "the Claude limit is 1.5M" in pet.chat.msgs[-1].text
 
 
@@ -498,7 +498,7 @@ def test_provider_limit_popups(pet, app_env, why: str, title: str, url) -> None:
 def test_used_tokens_are_counted(pet) -> None:  # type: ignore[no-untyped-def]
     pet._on_ext_used("anthropic", 1200)
     pet._on_ext_used("anthropic", 800)
-    assert pet._budget("anthropic").used() == 2000
+    assert pet.accounts.budget("anthropic").used() == 2000
 
 
 # ---------------------------------------------------------------- default and per-chat model, effort
@@ -533,7 +533,7 @@ def test_a_local_default_model_switches_back_to_local_ai(pet, app_env) -> None: 
 def test_effort_levels(pet, model: str, info: dict, levels) -> None:  # type: ignore[no-untyped-def,type-arg]
     ext = external.parse(model)
     if ext:
-        pet._ext_p(ext[0])["models"] = [{"id": ext[1], "name": "M", **info}]
+        pet.accounts.ext_p(ext[0])["models"] = [{"id": ext[1], "name": "M", **info}]
     pet.cfg.model = model
     assert pet._effort_levels() == levels
 
@@ -575,7 +575,7 @@ def test_a_connected_external_model_for_this_chat(pet, app_env) -> None:  # type
     pet._on_model_menu("chatmodel:anthropic:m1")
     assert pet.chat_model is None and "aren't connected" in chat.msgs[-1].text
     pet.creds.set("anthropic_key", "k")
-    pet._ext_p("anthropic")["models"] = [{"id": "m1", "name": "Claude One"}]
+    pet.accounts.ext_p("anthropic")["models"] = [{"id": "m1", "name": "Claude One"}]
     external.NAMES["anthropic:m1"] = "Claude One"
     pet._on_model_menu("chatmodel:anthropic:m1")
     assert pet.chat_model == "anthropic:m1" and pet.model_status.override == "anthropic:m1"
@@ -587,7 +587,7 @@ def test_a_connected_external_model_for_this_chat(pet, app_env) -> None:  # type
 def test_the_model_banner_for_a_chatgpt_plan(pet) -> None:  # type: ignore[no-untyped-def]
     chat = pet._ensure_chat()
     pet.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r"})
-    pet._ext_p("openai")["auth"] = "chatgpt"
+    pet.accounts.ext_p("openai")["auth"] = "chatgpt"
     pet.cfg.model = "openai:m1"
     pet._show_model_banner()
     assert chat.model_bar.isVisibleTo(chat) and "Using ChatGPT plan" in chat.model_bar.text()
@@ -615,7 +615,7 @@ def test_the_menu_popups_and_banner_tell_the_injected_description(make_app, sync
     pet = make_app(providers=_providers(openai=ZED))
     sync_background(pet)
     pet.creds.set("openai_key", "k")
-    pet._ext_p("openai")["models"] = MODELS
+    pet.accounts.ext_p("openai")["models"] = MODELS
     menu = {k.key: k for k in pet._external_menu().children}
     assert menu["ext_openai"].label == "Zed (ZedCo)" and menu["ext_anthropic"].label == "Claude (Anthropic)"
     assert menu["ext_openai"].children[0].label == "Zed key in"
@@ -629,7 +629,7 @@ def test_the_menu_popups_and_banner_tell_the_injected_description(make_app, sync
     pet.popups.open[-1].ok.click()
     assert app_env.opened_urls[-1] == "https://zed.example/usage"
     pet.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r"})
-    pet._ext_p("openai")["auth"] = "chatgpt"
+    pet.accounts.ext_p("openai")["auth"] = "chatgpt"
     pet.cfg.model = "openai:m1"
     pet._show_model_banner()
     assert "https://zed.example/usage" in pet.chat.model_bar.text()

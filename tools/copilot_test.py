@@ -443,11 +443,11 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     pet.save = lambda: None
     from pixelcat.ui import dialogs
     dialogs.KeyDialog.show_near = lambda self, *a: None   # (never shown: no focus taken from the user)
-    pet.creds = X.MemoryCredentials({"copilot_key": "github_pat_fake"})
-    pet._ext_p("copilot").update(auth="key", login="octocat", limit=0)
-    pet._set_ext_models("copilot", MODELS)
+    pet.creds = pet.accounts.creds = X.MemoryCredentials({"copilot_key": "github_pat_fake"})
+    pet.accounts.ext_p("copilot").update(auth="key", login="octocat", limit=0)
+    pet.accounts.set_models("copilot", MODELS)
     pet._copilot_quota(force=True)
-    wait(lambda: isinstance(pet._ext_p("copilot").get("quota"), dict), 30)
+    wait(lambda: isinstance(pet.accounts.ext_p("copilot").get("quota"), dict), 30)
     # the menu ---------------------------------------------------------------------------------------------
     items = {i.key: i for i in pet._menu_items()}
     ai = next(c for c in items["settings"].children if c.key == "set_model")
@@ -482,7 +482,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
           "understand" in answers[0] and "20,000" in answers[1] and answers[2] == "ok"
           and pet._credit_budget().limit == 12500 and custom.checked and custom.label == "Custom: 12,500 credits"
           and custom.note == "UP TO 20,000", str(answers))
-    q = pet._ext_p("copilot")["quota"]
+    q = pet.accounts.ext_p("copilot")["quota"]
     q["total"] = 3000.0                                   # (a smaller plan)
     labels = [c.label for c in next(c for c in pet._provider_menu("copilot").children
                                     if c.key == "ext_climit_copilot").children]
@@ -516,7 +516,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     say("hi")
     reply1 = next((mm.text for mm in reversed(chat.msgs) if mm.role == "cat"), "")
     check("a chat with a Copilot model: the answer arrives; tokens are counted",
-          "Meow, hi!" in reply1 and pet._budget("copilot").used() == 110, f"{reply1!r} {pet._budget('copilot').used()}")
+          "Meow, hi!" in reply1 and pet.accounts.budget("copilot").used() == 110, f"{reply1!r} {pet.accounts.budget('copilot').used()}")
     S["script"] = [reply("", [("call_t", "get_time", {})]), reply("It's time for a nap.")]
     say("what time is it?")
     reply2 = next((mm.text for mm in reversed(chat.msgs) if mm.role == "cat"), "")
@@ -569,7 +569,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     check("RAISE: the limit is raised until the month ends, and the request goes on",
           pet._credit_budget().allowed() == 3000 and "Still here!" in reply3, f"{pet._credit_budget().allowed()} {reply3!r}")
     # the plan's allowance used up -------------------------------------------------------------------------------
-    pet._ext_p("copilot")["credit_limit"] = 0
+    pet.accounts.ext_p("copilot")["credit_limit"] = 0
     S["script"] = [reply("allowance", status=402)] * 6
     n_pop = len(pet.popups.open)
     pet._on_user_message("one more?")

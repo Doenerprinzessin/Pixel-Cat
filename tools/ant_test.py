@@ -310,12 +310,12 @@ def app_flow() -> None:
           ask.title == "Sign in with Anthropic" and "sign-in helper" in text and "Allow" in text
           and "Console" in text and "Anthropic" in text, text[:120])
     ask._finish(True)
-    wait(lambda: pet._ext_auth("anthropic") == "signin" and pet._ext_models("anthropic"), 30)
+    wait(lambda: pet.accounts.auth("anthropic") == "signin" and pet.accounts.models("anthropic"), 30)
     connected = [p for p in pet.popups.open if p.title == "Claude is connected"]
     check("...one click: the helper is fetched, the browser opens, and Claude is connected with its models",
-          installs == [1] and opened and pet._ext_auth("anthropic") == "signin"
-          and [m["id"] for m in pet._ext_models("anthropic")] == ["claude-sonnet-5-5"] and bool(connected)
-          and S["auth"][-1] == "Bearer tok-from-ant", f"{installs} {opened[:1]} {pet._ext_auth('anthropic')}")
+          installs == [1] and opened and pet.accounts.auth("anthropic") == "signin"
+          and [m["id"] for m in pet.accounts.models("anthropic")] == ["claude-sonnet-5-5"] and bool(connected)
+          and S["auth"][-1] == "Bearer tok-from-ant", f"{installs} {opened[:1]} {pet.accounts.auth('anthropic')}")
     for p in list(pet.popups.open):
         try:
             p._finish(False)
@@ -331,7 +331,7 @@ def app_flow() -> None:
     (FAKE / "logged_out").unlink(missing_ok=True)
     pet._ext_disconnect("anthropic")
     wait(lambda: (FAKE / "logged_out").exists() and not T.signin_dir().exists())
-    check("app: Sign out signs Pixel Cat's profile out and forgets it", pet._ext_auth("anthropic") == ""
+    check("app: Sign out signs Pixel Cat's profile out and forgets it", pet.accounts.auth("anthropic") == ""
           and (FAKE / "logged_out").exists() and not T.signin_dir().exists())
     for p in list(pet.popups.open):
         try:

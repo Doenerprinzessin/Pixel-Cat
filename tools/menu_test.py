@@ -304,10 +304,10 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     pet.chats.save({"id": "20200102-000000-abcd", "created": 0, "msgs": [["user", "hi"]],
                     "history": [{"role": "user", "content": "hi"}], "model": "anthropic:claude-gone",
                     "chat_model": "anthropic:claude-gone"})
-    real_auth = pet._ext_auth
-    pet._ext_auth = lambda p: ""                     # type: ignore[method-assign]   (nothing connected)
+    real_auth = pet.accounts.auth
+    pet.accounts.auth = lambda p: ""                     # type: ignore[method-assign]   (nothing connected)
     pet.open_saved_chat("20200102-000000-abcd")
-    pet._ext_auth = real_auth                        # type: ignore[method-assign]
+    pet.accounts.auth = real_auth                        # type: ignore[method-assign]
     check("a chat whose model isn't there any more opens with the default model (and says so)",
           pet.chat_model is None and "isn't available" in chat.msgs[-1].text, chat.msgs[-1].text)
     pet.chats.delete_all()
@@ -339,9 +339,9 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
           low is False and planning is True and routine is False)
     pet._on_model_menu("chateffort:default")
     check("Default goes back", pet.chat_effort is None and not chat._model_temp)
-    pet._ext_p("anthropic")["models"] = [{"id": "claude-t", "name": "Claude T", "effort": ["low", "medium", "high"]},
+    pet.accounts.ext_p("anthropic")["models"] = [{"id": "claude-t", "name": "Claude T", "effort": ["low", "medium", "high"]},
                                          {"id": "claude-n", "name": "Claude N", "effort": []}]
-    pet._ext_p("copilot")["models"] = [{"id": "gpt-c", "name": "GPT C", "efforts": ["low", "medium", "high", "xhigh"]}]
+    pet.accounts.ext_p("copilot")["models"] = [{"id": "gpt-c", "name": "GPT C", "efforts": ["low", "medium", "high", "xhigh"]}]
     looks = {}
     for tag in ("anthropic:claude-t", "anthropic:claude-n", "copilot:gpt-c", "openai:gpt-o"):
         pet.chat_model = tag

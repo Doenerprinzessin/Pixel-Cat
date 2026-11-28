@@ -833,7 +833,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     saved = persistence.SavedState(autostart_asked=True)
     pet = PixelCatApp(app, cfg, saved, selftest=1, platform=build_platform(), providers=build_providers())
     pet.save = lambda: None
-    pet.creds = creds
+    pet.creds = pet.accounts.creds = creds
     pet.creds.set("anthropic_key", "sk-ant-secret-123")
     # the key dialog: a bad key, then a good one ----------------------------------------------------
     pet.creds.set("anthropic_key", None)
@@ -850,7 +850,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     wait(lambda: pet.creds.get("anthropic_key") == "sk-ant-good")
     check("key dialog: a wrong key is refused in the dialog; a good one is checked, kept, the models loaded",
           "wasn't accepted" in refused and pet.creds.get("anthropic_key") == "sk-ant-good"
-          and pet._ext_auth("anthropic") == "key" and len(pet._ext_models("anthropic")) == 2, refused)
+          and pet.accounts.auth("anthropic") == "key" and len(pet.accounts.models("anthropic")) == 2, refused)
     for p in list(pet.popups.open):
         try:
             p._finish(False)                         # (answered: the app forgets it too)
@@ -890,7 +890,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     pet._on_menu("ext:limit:anthropic:50000")
     pet._on_menu("ext:effort:low")
     pet._on_menu("ext:thinking")
-    check("menu: limit, effort and thinking change", pet._budget("anthropic").limit == 50000
+    check("menu: limit, effort and thinking change", pet.accounts.budget("anthropic").limit == 50000
           and saved.ext_settings["effort"] == "low" and saved.ext_settings["thinking"] is False)
     # a custom token limit (Token limit -> Custom...) ---------------------------------------------------
     lim_kids = next(c for c in pet._provider_menu("anthropic").children if c.key == "ext_limit_anthropic").children
@@ -907,7 +907,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
           "refused in the dialog; 3.5M is kept and shown as 'Custom: 3.5M tokens'",
           [c.label for c in lim_kids][-2:] == ["100M tokens", "Custom..."] and "understand" in answers[0]
           and "at least 1k" in answers[1] and "100M" in answers[2] and answers[3] == "ok"
-          and pet._budget("anthropic").limit == 3_500_000 and pet._budget("anthropic").allowed() == 3_500_000
+          and pet.accounts.budget("anthropic").limit == 3_500_000 and pet.accounts.budget("anthropic").allowed() == 3_500_000
           and custom.checked and custom.label == "Custom: 3.5M tokens", str(answers))
     pet._on_menu("ext:thinking")
     pet._on_menu("model:anthropic:claude-opus-5-5")
@@ -915,7 +915,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
           pet.cfg.model == "anthropic:claude-opus-5-5" and X.label(pet.cfg.model) == "Claude Opus 5.5 (Anthropic)")
     # chatting until the limit -------------------------------------------------------------------------
     S["mode"] = "text"
-    pet._ext_p("anthropic").update(limit=1000, maximum=2.0, period="day")
+    pet.accounts.ext_p("anthropic").update(limit=1000, maximum=2.0, period="day")
     saved.ext_usage["anthropic"] = {}
     pet._show_chat_quietly()
     chat = pet.chat
@@ -926,9 +926,9 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
         wait(lambda: (pet.worker is None and not pet._task_active) or chat.choice.isVisible() or len(pet.popups.open) > n)
 
     say("hi")
-    used1 = pet._budget("anthropic").used()
+    used1 = pet.accounts.budget("anthropic").used()
     say("and again")
-    used2, card0 = pet._budget("anthropic").used(), chat.choice.isVisible()
+    used2, card0 = pet.accounts.budget("anthropic").used(), chat.choice.isVisible()
     say("a third time")
     card1 = chat.choice.isVisible()
     labels = [b_.text() for b_ in chat._choice_btns]
@@ -937,15 +937,15 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
           f"{used1} {used2} {labels}")
     chat._choice_btns[1].click()
     wait(lambda: not pet._task_active)
-    check("RAISE: the request goes on with the higher limit", pet._budget("anthropic").allowed() == 1700
-          and pet._budget("anthropic").used() == 1800, str((pet._budget("anthropic").allowed(),
-                                                            pet._budget("anthropic").used())))
+    check("RAISE: the request goes on with the higher limit", pet.accounts.budget("anthropic").allowed() == 1700
+          and pet.accounts.budget("anthropic").used() == 1800, str((pet.accounts.budget("anthropic").allowed(),
+                                                            pet.accounts.budget("anthropic").used())))
     say("more")
     labels = [b_.text() for b_ in chat._choice_btns] if chat.choice.isVisible() else []
     chat._choice_btns[1].click() if labels else None
     wait(lambda: not pet._task_active)
     check("...asked again - raising goes up to the maximum (2k)", labels[1:2] == ["RAISE TO 2K"]
-          and pet._budget("anthropic").used() == 2400, str(labels))
+          and pet.accounts.budget("anthropic").used() == 2400, str(labels))
     n_pop = len(pet.popups.open)
     say("even more")
     wait(lambda: len(pet.popups.open) > n_pop)
@@ -966,7 +966,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     shown = pet.model_menu.isVisible()
     keys = [it.key for it in pet.model_menu.items]
     n0 = len(S["bodies"])
-    pet._ext_p("anthropic")["limit"] = 0                # (the other model: no limit for the test)
+    pet.accounts.ext_p("anthropic")["limit"] = 0                # (the other model: no limit for the test)
     pet._on_model_menu("chatmodel:anthropic:claude-haiku-5-5")
     wait(lambda: not pet._task_active)
     check("SWITCH MODEL: the model menu (with the Claude models) - picking one goes on with it",
@@ -991,12 +991,12 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     b_local = pet._ctx_budget()
     pet.chat_model, pet.cfg.model = "anthropic:claude-haiku-5-5", default
     b_claude = pet._ctx_budget()
-    pet._ext_p("anthropic")["limit"] = 0
+    pet.accounts.ext_p("anthropic")["limit"] = 0
     S["mode"] = "too_long_once"
     n0 = len(S["bodies"])
     say("summarize everything we did")
     reply = next((mm.text for mm in reversed(chat.msgs) if mm.role == "cat"), "")
-    learned = (pet._ext_p("anthropic").get("ctx_learned") or {}).get("claude-haiku-5-5", 0)
+    learned = (pet.accounts.ext_p("anthropic").get("ctx_learned") or {}).get("claude-haiku-5-5", 0)
     noted = any("shortened the older parts" in mm.text for mm in chat.msgs)
     check("Claude uses its own window (968k), local models keep num_ctx; 'too long' -> a smaller budget is kept for "
           "that model and the request is sent again, shortened",
@@ -1010,14 +1010,14 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     check("...still too long after two shorter tries: the chat says so (new chat)",
           len(S["bodies"]) == n0 + 3 and "longer than" in err and not pet._task_active, err[:120])
     S["mode"] = "text"
-    pet._ext_p("anthropic").pop("ctx_learned", None)
+    pet.accounts.ext_p("anthropic").pop("ctx_learned", None)
     pet.chat_model = local
     # Sign in with ChatGPT from the menu (the browser is faked) ------------------------------------------------
     import webbrowser
     webbrowser.open = lambda url, *a, **k: threading.Thread(target=lambda: requests.get(url, timeout=10),
                                                             daemon=True).start()
     pet.creds.set("chatgpt", None)
-    pet._ext_p("openai").pop("auth", None)
+    pet.accounts.ext_p("openai").pop("auth", None)
     S["refuse_codes"] = 1
     n_pop = len(pet.popups.open)
     pet._browser_start("openai")
@@ -1029,11 +1029,11 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
             seen.add(wait_pop.text.text())
         except (RuntimeError, AttributeError):
             pass
-        return pet._ext_auth("openai") == "chatgpt" and bool(pet._ext_models("openai"))
+        return pet.accounts.auth("openai") == "chatgpt" and bool(pet.accounts.models("openai"))
     wait(signed, 30)
     check("menu sign-in with ChatGPT: 'Finish in your browser' while it runs (and why it asks twice), then signed in",
           wait_pop is not None and wait_pop.title == "Finish in your browser" and any("One more step" in t for t in seen)
-          and pet._ext_auth("openai") == "chatgpt" and wait_pop not in pet.popups.open, f"{len(seen)} texts")
+          and pet.accounts.auth("openai") == "chatgpt" and wait_pop not in pet.popups.open, f"{len(seen)} texts")
     S["refuse_codes"] = 0
     for p in list(pet.popups.open):
         try:
@@ -1042,7 +1042,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
             pass
     # START OVER while OpenAI shows an error page (which never comes back to the cat)
     pet.creds.set("chatgpt", None)
-    pet._ext_p("openai").pop("auth", None)
+    pet.accounts.ext_p("openai").pop("auth", None)
     S["error_page"] = True
     n_auth, n_pop = len(S["authorize"]), len(pet.popups.open)
     pet._browser_start("openai")
@@ -1051,12 +1051,12 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     S["error_page"] = False
     if first is not None:
         first._finish(True)                             # START OVER
-    wait(lambda: pet._ext_auth("openai") == "chatgpt", 30)
+    wait(lambda: pet.accounts.auth("openai") == "chatgpt", 30)
     qs = S["authorize"][n_auth:]
     left = [p.title for p in pet.popups.open if p.title in ("Finish in your browser", "Sign in with ChatGPT")]
     check("START OVER (OpenAI showed an error page): a fresh sign-in starts and finishes; no stray popups",
           first is not None and first.title == "Finish in your browser" and len(qs) == 2
-          and all(q["client_id"] == "dynamic_agent_client" for q in qs) and pet._ext_auth("openai") == "chatgpt"
+          and all(q["client_id"] == "dynamic_agent_client" for q in qs) and pet.accounts.auth("openai") == "chatgpt"
           and not left, f"{len(qs)} authorizations, left {left}")
     for p in list(pet.popups.open):
         try:
@@ -1066,8 +1066,8 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     # ChatGPT plan indicator --------------------------------------------------------------------------------
     pet.creds.set("chatgpt", {"client_id": "oaiapp_123", "access_token": "chatgpt-AT", "refresh_token": "R1",
                               "expires_at": time.time() + 3000})
-    pet._ext_p("openai")["auth"] = "chatgpt"
-    pet._ext_p("openai")["models"] = [{"id": "gpt-6.1-sol", "name": "GPT-6.1 Sol"}]
+    pet.accounts.ext_p("openai")["auth"] = "chatgpt"
+    pet.accounts.ext_p("openai")["models"] = [{"id": "gpt-6.1-sol", "name": "GPT-6.1 Sol"}]
     pet._set_chat_model("openai:gpt-6.1-sol")
     wait(lambda: "Using ChatGPT plan" in chat.model_bar.text(), 10)
     check("a chat on the ChatGPT plan says so, with Manage usage; the model button shows the model",

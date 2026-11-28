@@ -40,7 +40,7 @@ from ..llm.tools import SCREEN_EYES, AppHooks, ToolBox, ToolError, ToolSpec
 from ..llm.watch import Watch, WatchManager
 from ..logsetup import RateLimitedLogger
 from ..persistence import SavedState, save_state
-from ..ports import ChatRequest, ModelProvider, Platform, ProviderInfo
+from ..ports import ChatRequest, ModelProvider, Platform
 from ..settings import Config
 from ..sprites.library import SpriteLibrary
 from ..ui.ball import BallOverlay
@@ -57,6 +57,7 @@ from .. import games as minigames
 from ..games.qt_host import QtHost
 from ..sprites import hats as hat_art
 from . import context
+from .accounts import Accounts
 from .geometry import rect_gap
 from .popups import Popups, paras
 from .minigames import Minigames
@@ -158,6 +159,7 @@ class PixelCatApp(QObject):
         self._chat_sig = ""                              # what was saved last (unchanged: not written again)
         self._download_ok: set[str] = set()              # models the user said yes to downloading
         self.creds = external.Credentials(secrets=platform.secrets)  # API keys and sign-ins (keys.dat, encrypted)
+        self.accounts = Accounts(providers, saved, self.creds, save=lambda: self.save())   # the providers' accounts
         self.popups = Popups(self.sprites, self.platform.windows, anchor=lambda: self._popup_anchor(),
                              hidden=lambda: self.hidden_fullscreen)   # popups next to the cat, background work
         self.progress_io = ProgressIO(saved, self.popups, platform.folders, self.menu, self.game,   # export / import
@@ -177,8 +179,8 @@ class PixelCatApp(QObject):
         self._gh_wait_pop: Any = None
         self._cop_pop: Any = None
         self._quota_t = 0.0
-        for _p in self._external:                        # the external models' names (for labels)
-            for _m in self._ext_models(_p):
+        for _p in self.accounts.external:                        # the external models' names (for labels)
+            for _m in self.accounts.models(_p):
                 external.NAMES[f"{_p}:{_m['id']}"] = _m["name"]
         self.menu.triggered.connect(self._on_menu)
         self.chat: ChatWindow | None = None
@@ -860,7 +862,7 @@ class PixelCatApp(QObject):
             return
         ext = external.parse(tag)
         if ext:
-            if self._ext_auth(ext[0]):
+            if self.accounts.auth(ext[0]):
                 self._set_default_model(tag)
             return
         if model_on_disk(tag):
@@ -928,9 +930,9 @@ class PixelCatApp(QObject):
         """The effort levels the chat's model has (None: it has none to pick)."""
         ext = external.parse(self._effective_model())
         if not ext:
-            return self._local.effort_levels({})
+            return self.accounts.local.effort_levels({})
         p, mid = ext
-        return self.providers[p].effort_levels(self._ext_info(p, mid))
+        return self.providers[p].effort_levels(self.accounts.info(p, mid))
 
     def _default_effort(self) -> str:
         """The effort a chat has without its own: Settings (online models) or the thinking setting."""
@@ -988,7 +990,7 @@ class PixelCatApp(QObject):
         assert self.chat is not None
         ext = external.parse(tag)
         if ext:
-            if not self._ext_auth(ext[0]):
+            if not self.accounts.auth(ext[0]):
                 self.chat.add("info", f"{self.providers[ext[0]].info.brand} models aren't connected - Settings > "
                                       "AI model > External AI models.")
                 return
@@ -1024,48 +1026,10 @@ class PixelCatApp(QObject):
                 QTimer.singleShot(0, self._request)
 
     # ---------------------------------------------------------------- external AI models
-    def _ext_p(self, p: str) -> dict[str, Any]:
-        return self.saved.ext_settings.setdefault(p, {})
-
-    @property
-    def _local(self) -> ModelProvider:
-        """The local models' provider (Ollama)."""
-        return next(prov for prov in self.providers.values() if prov.info.local)
-
-    @property
-    def _external(self) -> dict[str, ProviderInfo]:
-        """The external (online) providers' descriptions by key, in the settings' order."""
-        return {p: prov.info for p, prov in self.providers.items() if not prov.info.local}
-
-    @property
-    def _credit_p(self) -> str:
-        """The provider whose plan counts AI credits (Copilot): the credit limit and the plan's quota are its."""
-        return next(p for p, prov in self.providers.items() if prov.info.credits)
-
-    def _budget(self, p: str) -> external.Budget:
-        return external.Budget(self._ext_p(p), self.saved.ext_usage.setdefault(p, {}))
-
-    def _ext_auth(self, p: str) -> str:
-        """How a provider is connected: "key", "signin" (Anthropic, GitHub), "chatgpt", or "" (not)."""
-        return self.providers[p].auth(self.creds, self._ext_p(p).get("auth", ""))
-
-    def _ext_models(self, p: str) -> list[dict[str, Any]]:
-        ms = self._ext_p(p).get("models")
-        return [m for m in ms if isinstance(m, dict) and m.get("id")] if isinstance(ms, list) else []
-
-    def _ext_info(self, p: str, mid: str) -> dict[str, Any]:
-        return next((m for m in self._ext_models(p) if m["id"] == mid), {})
-
-    def _set_ext_models(self, p: str, ms: list[dict[str, Any]]) -> None:
-        self._ext_p(p)["models"] = ms
-        for m in ms:
-            external.NAMES[f"{p}:{m['id']}"] = m["name"]
-        self.save()
-
     def _external_menu(self) -> MenuItem:
         """Settings -> AI model -> External AI models."""
         st = self.saved.ext_settings
-        kids = [self._provider_menu(p) for p in self._external]
+        kids = [self._provider_menu(p) for p in self.accounts.external]
         kids.append(MenuItem("ext:thinking", "Thinking", checked=bool(st.get("thinking", True)), separator_before=True))
         kids.append(MenuItem("ext_effort", "Effort", "bolt_on", children=[
             MenuItem(f"ext:effort:{k}", v, radio=True, checked=st.get("effort", "medium") == k)
@@ -1077,8 +1041,8 @@ class PixelCatApp(QObject):
 
     def _provider_menu(self, p: str) -> MenuItem:
         prov = self.providers[p].info
-        auth = self._ext_auth(p)
-        b = self._budget(p)
+        auth = self.accounts.auth(p)
+        b = self.accounts.budget(p)
         fmt = external.fmt_tokens
         if auth == "chatgpt":
             email = (self.creds.get("chatgpt") or {}).get("email", "")
@@ -1086,11 +1050,11 @@ class PixelCatApp(QObject):
         else:
             state = {"key": prov.key_state, "signin": prov.signed_in}.get(auth, "Not connected")
             if prov.shows_login:
-                login = self._ext_p(p).get("login", "")
+                login = self.accounts.ext_p(p).get("login", "")
                 state += f" ({login})" if login and auth else ""
         kids = [MenuItem(f"ext:state:{p}", state, info=True)]
         if auth:
-            ms = self._ext_models(p)
+            ms = self.accounts.models(p)
             kids.append(MenuItem(f"ext_models_{p}", "Model", "bolt_on", children=(
                 [MenuItem(f"model:{p}:{m['id']}", m["name"], radio=True, checked=self.cfg.model == f"{p}:{m['id']}")
                  for m in ms]
@@ -1099,7 +1063,7 @@ class PixelCatApp(QObject):
         if auth not in ("signin", "chatgpt") and self._signin_available(p):
             kids.append(MenuItem(f"ext:signin:{p}", prov.signin, "arrow"))
         kids.append(MenuItem(f"ext:key:{p}", prov.key_change if auth == "key" else prov.key_use, "plus"))
-        maximum = float(self._ext_p(p).get("maximum", external.DEFAULTS["maximum"]) or 0)
+        maximum = float(self.accounts.ext_p(p).get("maximum", external.DEFAULTS["maximum"]) or 0)
         custom = b.limit not in external.LIMITS
         kids.append(MenuItem(f"ext_limit_{p}", "Token limit", "dot", separator_before=True,
                              note=f"{fmt(b.limit)}/{b.period}" if b.limit else "NONE", children=[
@@ -1152,8 +1116,8 @@ class PixelCatApp(QObject):
                                  bar=min(1.0, used / max(1e-9, allowed)), note="THIS MONTH"))
         elif used:
             kids.append(MenuItem("ext:cused:copilot", f"Used {fc(used)} credits this month", info=True))
-        q = self._ext_p(self._credit_p).get("quota")
-        if isinstance(q, dict) and self._ext_auth(self._credit_p):
+        q = self.accounts.ext_p(self.accounts.credit_p).get("quota")
+        if isinstance(q, dict) and self.accounts.auth(self.accounts.credit_p):
             if q.get("unlimited"):
                 kids.append(MenuItem("ext:quota:copilot", "Copilot plan: no monthly limit", info=True))
             elif q.get("total"):
@@ -1193,10 +1157,10 @@ class PixelCatApp(QObject):
                 self._ask_credit_limit()
             return
         elif what == "period" and parts[2] in external.PERIODS:
-            self._ext_p(p)["period"] = parts[2]
-            self._budget(p).u["start"] = external.period_start(parts[2], datetime.now()).timestamp()
+            self.accounts.ext_p(p)["period"] = parts[2]
+            self.accounts.budget(p).u["start"] = external.period_start(parts[2], datetime.now()).timestamp()
         elif what == "max":
-            self._ext_p(p)["maximum"] = float(parts[2])
+            self.accounts.ext_p(p)["maximum"] = float(parts[2])
         elif what == "refresh":
             self._ext_load_models(p, announce=True)
         elif what in ("signin", "key", "out"):
@@ -1216,11 +1180,11 @@ class PixelCatApp(QObject):
             self.menu.refresh(self._menu_items())
 
     def _set_token_limit(self, p: str, n: int) -> None:
-        self._ext_p(p)["limit"] = n
-        self._budget(p).u["allowed"] = n                # a new limit starts without raises
+        self.accounts.ext_p(p)["limit"] = n
+        self.accounts.budget(p).u["allowed"] = n                # a new limit starts without raises
 
     def _set_credit_limit(self, n: float) -> None:
-        self._ext_p(self._credit_p)["credit_limit"] = n
+        self.accounts.ext_p(self.accounts.credit_p)["credit_limit"] = n
         self._credit_budget().u["allowed"] = n          # (also without raises)
 
     def _show_amount_dialog(self, dlg: Any) -> None:
@@ -1263,7 +1227,7 @@ class PixelCatApp(QObject):
         """Token limit -> Custom...: any amount up to 100M tokens."""
         from ..ui.dialogs import AmountDialog
 
-        b = self._budget(p)
+        b = self.accounts.budget(p)
         fmt = external.fmt_tokens
         brand = self.providers[p].info.brand
         dlg = AmountDialog(f"Token limit for {brand} models",
@@ -1298,7 +1262,7 @@ class PixelCatApp(QObject):
     def _credit_cap(self) -> float | None:
         """The most credits the cat may be given: the Copilot plan's monthly total (None: not known
         or no monthly limit)."""
-        q = self._ext_p(self._credit_p).get("quota")
+        q = self.accounts.ext_p(self.accounts.credit_p).get("quota")
         if isinstance(q, dict) and not q.get("unlimited") and float(q.get("total") or 0) > 0:
             return float(q["total"])
         return None
@@ -1326,14 +1290,14 @@ class PixelCatApp(QObject):
             except RuntimeError:
                 pass
             return
-        cp = self._credit_p
-        auth = self._ext_auth(cp)
+        cp = self.accounts.credit_p
+        auth = self.accounts.auth(cp)
         if self._credit_cap() is None and auth:          # (the plan's total isn't known yet: ask GitHub)
             prov = self.providers[cp]
 
             def got(q: Any) -> None:
                 if isinstance(q, dict):
-                    self._ext_p(cp)["quota"] = q
+                    self.accounts.ext_p(cp)["quota"] = q
                 self._apply_credit_limit(v, dlg)
             self.popups.in_background(lambda: prov.quota(self.creds, auth, start=True), got)
             return
@@ -1359,7 +1323,7 @@ class PixelCatApp(QObject):
             log.info("copilot credit limit: %s (custom)", fc(v))
 
     def _ext_load_models(self, p: str, announce: bool = False, after: Any = None) -> None:
-        auth = self._ext_auth(p)
+        auth = self.accounts.auth(p)
         if not auth:
             return
 
@@ -1374,7 +1338,7 @@ class PixelCatApp(QObject):
                 if announce:
                     self.popups.popup("Models", paras([html.escape(prov.key_problem(res))]), "OK")
                 return
-            self._set_ext_models(p, res)
+            self.accounts.set_models(p, res)
             log.info("%s: %d models", p, len(res))
             if self.menu.isVisible():
                 self.menu.refresh(self._menu_items())
@@ -1384,7 +1348,7 @@ class PixelCatApp(QObject):
 
     def _ext_connected(self, p: str) -> None:
         prov = self.providers[p].info
-        n = len(self._ext_models(p))
+        n = len(self.accounts.models(p))
         pop = self.popups.popup(f"{prov.brand} is connected", paras([
             f"{n} {prov.brand} models are ready." if n else f"{prov.brand} is ready.",
             f"Pick one in Settings &gt; AI model &gt; External AI models &gt; {prov.brand} &gt; Model - or just for "
@@ -1439,8 +1403,8 @@ class PixelCatApp(QObject):
                     pass                                 # (the dialog was closed meanwhile)
                 return
             self.creds.set(f"{p}_key", key)
-            self._ext_p(p)["auth"] = "key"
-            self._set_ext_models(p, res)
+            self.accounts.ext_p(p)["auth"] = "key"
+            self.accounts.set_models(p, res)
             log.info("%s connected with an API key (%d models)", p, len(res))
             try:
                 dlg.checked(True, "")
@@ -1537,7 +1501,7 @@ class PixelCatApp(QObject):
                 msg = self.providers[p].error_text(res, f"The sign-in didn't work ({res}).")
                 self.popups.popup("Sign in with Anthropic", paras([html.escape(msg)]), "OK")
             return
-        self._ext_p(p)["auth"] = "signin"
+        self.accounts.ext_p(p)["auth"] = "signin"
         self.save()
         self._ext_load_models(p, announce=True, after=lambda: self._ext_connected(p))
 
@@ -1598,7 +1562,7 @@ class PixelCatApp(QObject):
             if "cancelled" not in msg:
                 self.popups.popup("Sign in with ChatGPT", paras([html.escape(msg)]), "OK")
             return
-        s = self._ext_p(p)
+        s = self.accounts.ext_p(p)
         if not res.get("plan"):
             self.popups.popup("Signed in - but no plan usage", paras([
                 "You're signed in, but using your ChatGPT plan wasn't allowed, so OpenAI models can't run on it yet.",
@@ -1616,7 +1580,7 @@ class PixelCatApp(QObject):
             pop = self.popups.popup("Using your ChatGPT plan", paras([
                 "Chats with OpenAI models now use your ChatGPT plan's usage. ChatGPT's settings show how much I "
                 "used and let you cap it - the Manage usage link above the chat's input takes you there.",
-                f"{len(self._ext_models(p))} models are ready - pick one in Settings &gt; AI model &gt; "
+                f"{len(self.accounts.models(p))} models are ready - pick one in Settings &gt; AI model &gt; "
                 "External AI models &gt; ChatGPT &gt; Model."]), "PICK A MODEL", "LATER")
             pop.answered.connect(lambda ok: self._open_menu_at(["settings", "set_model", "ext", f"ext_{p}",
                                                                   f"ext_models_{p}"]) if ok else None)
@@ -1693,10 +1657,10 @@ class PixelCatApp(QObject):
                 return
             login, ms = res
             self.creds.set(f"{p}_key", key)
-            s = self._ext_p(p)
+            s = self.accounts.ext_p(p)
             s["auth"], s["login"] = "key", login
             self._drop_copilot_chat()
-            self._set_ext_models(p, ms)
+            self.accounts.set_models(p, ms)
             log.info("Copilot connected with a GitHub token (%d models)", len(ms))
             try:
                 dlg.checked(True, "")
@@ -1754,7 +1718,7 @@ class PixelCatApp(QObject):
             if "cancelled" not in msg:
                 self.popups.popup("Sign in with GitHub", paras([html.escape(msg)]), "OK")
             return
-        s = self._ext_p(p)
+        s = self.accounts.ext_p(p)
         s["auth"], s["login"] = "signin", res.get("login", "")
         self._drop_copilot_chat()
         self.save()
@@ -1766,7 +1730,7 @@ class PixelCatApp(QObject):
         self._ext_load_models(p, announce=True, after=loaded)
 
     def _credit_budget(self) -> external.CreditBudget:
-        return external.CreditBudget(self._ext_p(self._credit_p),
+        return external.CreditBudget(self.accounts.ext_p(self.accounts.credit_p),
                                      self.saved.ext_usage.setdefault("copilot_credits", {}))
 
     def _on_copilot_credits(self, credits: float) -> None:
@@ -1789,7 +1753,7 @@ class PixelCatApp(QObject):
         cb = self._credit_budget()
         fc = external.fmt_credits
         used, allowed, nxt = cb.used(), cb.allowed(), cb.next_allowed()
-        q = self._ext_p(self._credit_p).get("quota")
+        q = self.accounts.ext_p(self.accounts.credit_p).get("quota")
         plan = (f" (Copilot's own counter for your whole plan: {fc(q.get('used', 0))} of {fc(q['total'])})"
                 if isinstance(q, dict) and q.get("total") and not q.get("unlimited") else "")
         text = (f"🐾 <b>Copilot credit limit reached.</b> I've used {fc(used)} of the {fc(allowed)} AI credits you gave "
@@ -1804,7 +1768,7 @@ class PixelCatApp(QObject):
         if self.chat is None or not self._task_active:
             return
         if key != "raise":
-            self._limit_answer(self._credit_p, key)
+            self._limit_answer(self.accounts.credit_p, key)
             return
         cb = self._credit_budget()
         new = cb.raise_limit()
@@ -1815,8 +1779,8 @@ class PixelCatApp(QObject):
 
     def _copilot_quota(self, force: bool = False) -> None:
         """The Copilot plan's own allowance for the menu (after requests, at most every 2 minutes)."""
-        cp = self._credit_p
-        auth = self._ext_auth(cp)
+        cp = self.accounts.credit_p
+        auth = self.accounts.auth(cp)
         if not auth or (not force and time.time() - self._quota_t < 120):
             return
         self._quota_t = time.time()
@@ -1824,7 +1788,7 @@ class PixelCatApp(QObject):
 
         def got(q: Any) -> None:
             if isinstance(q, dict):
-                self._ext_p(cp)["quota"] = q
+                self.accounts.ext_p(cp)["quota"] = q
                 self.save()
                 if self.menu.isVisible():
                     self.menu.refresh(self._menu_items())
@@ -1860,8 +1824,8 @@ class PixelCatApp(QObject):
 
     def _ext_disconnect(self, p: str, only_key: bool = False) -> None:
         prov = self.providers[p].info
-        auth = self._ext_auth(p)
-        s = self._ext_p(p)
+        auth = self.accounts.auth(p)
+        s = self.accounts.ext_p(p)
         if only_key or auth == "key":
             self.creds.set(f"{p}_key", None)
             if s.get("auth") == "key":
@@ -1883,12 +1847,12 @@ class PixelCatApp(QObject):
             return
         if prov.credits:
             s.pop("quota", None)
-        if prov.shows_login and not self._ext_auth(p):
+        if prov.shows_login and not self.accounts.auth(p):
             s.pop("login", None)
         if prov.keeps_chat:
             self._stop_copilot(background=True)
         self.save()
-        if not self._ext_auth(p):
+        if not self.accounts.auth(p):
             if (external.parse(self.cfg.model) or ("",))[0] == p:
                 self._set_default_model(models.DEFAULT)
             if (external.parse(self.chat_model) or ("",))[0] == p:
@@ -1900,8 +1864,8 @@ class PixelCatApp(QObject):
     def _ext_chat_items(self) -> list[MenuItem]:
         """The chat's model menu: the connected providers' models."""
         out = []
-        for p, prov in self._external.items():
-            ms = self._ext_models(p) if self._ext_auth(p) else []
+        for p, prov in self.accounts.external.items():
+            ms = self.accounts.models(p) if self.accounts.auth(p) else []
             if ms:
                 out.append(MenuItem(f"chatmodels_{p}", f"{prov.brand} models", "chat", separator_before=not out,
                                     children=[MenuItem(f"chatmodel:{p}:{m['id']}", m["name"], radio=True,
@@ -1912,7 +1876,7 @@ class PixelCatApp(QObject):
         """The request for an external model - or None (not connected, or the token limit)."""
         assert self.chat is not None
         prov = self.providers[p].info
-        auth = self._ext_auth(p)
+        auth = self.accounts.auth(p)
         if not auth:
             self.chat.add("error", f"{prov.brand} models aren't connected yet. Sign in or add an API key in "
                                    "Settings > AI model > External AI models.")
@@ -1923,7 +1887,7 @@ class PixelCatApp(QObject):
         st = self.saved.ext_settings
         think, effort = self._ext_think_effort()
         tools = self.toolbox.schemas() if self.cfg.enable_tools else None
-        req = ChatRequest(mid, msgs, tools, think, effort, self.creds, auth, info=self._ext_info(p, mid))
+        req = ChatRequest(mid, msgs, tools, think, effort, self.creds, auth, info=self.accounts.info(p, mid))
         if prov.credits and not self._credit_gate():
             return None
         if prov.keeps_chat:
@@ -1974,7 +1938,7 @@ class PixelCatApp(QObject):
         self.chat.ask_confirm(f"let Copilot read the web page {url}?", answered, allow_always=True)
 
     def _on_ext_used(self, provider: str, tokens: int) -> None:
-        b = self._budget(provider)
+        b = self.accounts.budget(provider)
         b.add(tokens)
         self.save()
         log.info("%s: %d tokens (%d %s)", provider, tokens, b.used(), external.PERIOD_WORD[b.period])
@@ -1984,7 +1948,7 @@ class PixelCatApp(QObject):
 
     def _ext_gate(self, p: str) -> bool:
         """The token limit before a request: fine / suggest switching or raising / all used."""
-        st = self._budget(p).status()
+        st = self.accounts.budget(p).status()
         if st == "ok":
             return True
         assert self.chat is not None
@@ -1997,7 +1961,7 @@ class PixelCatApp(QObject):
 
     def _limit_card(self, p: str) -> None:
         assert self.chat is not None
-        b = self._budget(p)
+        b = self.accounts.budget(p)
         prov = self.providers[p].info
         fmt = external.fmt_tokens
         used, allowed, nxt = b.used(), b.allowed(), b.next_allowed()
@@ -2013,7 +1977,7 @@ class PixelCatApp(QObject):
         if self.chat is None or not self._task_active:
             return
         if key == "raise":
-            b = self._budget(p)
+            b = self.accounts.budget(p)
             new = b.raise_limit()
             self.save()
             self.chat.add("info", f"Okay - the {self.providers[p].info.brand} limit is {external.fmt_tokens(new)} until "
@@ -2032,12 +1996,12 @@ class PixelCatApp(QObject):
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
 
-        ext = self._external
+        ext = self.accounts.external
         prov = ext.get(p) or external.ANTHROPIC     # (an unknown provider: told Anthropic's way)
         why = info.get("why", "")
         ok, url = "SWITCH MODEL", None
         if why == "own":
-            b = self._budget(p)
+            b = self.accounts.budget(p)
             title = "All tokens used"
             lines = [f"All {external.fmt_tokens(b.maximum or b.allowed())} tokens for {prov.brand} models "
                      f"{external.PERIOD_WORD[b.period]} are used up.",
@@ -2056,7 +2020,7 @@ class PixelCatApp(QObject):
             ok, url = "MANAGE USAGE", prov.usage_url
         elif why == "copilot":
             title = "Copilot allowance used up"
-            q = self._ext_p(self._credit_p).get("quota")
+            q = self.accounts.ext_p(self.accounts.credit_p).get("quota")
             when = self._quota_reset_note(q).replace("RESETS ", "").title() if isinstance(q, dict) else ""
             lines = ["Your Copilot plan's AI credits are used up for now - or a budget your organization set for "
                      "Copilot is reached.",
@@ -2096,7 +2060,7 @@ class PixelCatApp(QObject):
         ext = external.parse(self._effective_model())
         prov = self.providers[ext[0]].info if ext else None
         if (text is None and prov is not None and prov.signin_kind == "browser"
-                and self._ext_auth(prov.key) == "chatgpt"):
+                and self.accounts.auth(prov.key) == "chatgpt"):
             self.chat.set_model_banner("Using ChatGPT plan", ("Manage usage", prov.usage_url))
         else:
             self.chat.set_model_banner(text)
@@ -2367,7 +2331,7 @@ class PixelCatApp(QObject):
         tag = data.get("chat_model")
         if isinstance(tag, str) and tag:
             ext = external.parse(tag)
-            if (self._ext_auth(ext[0]) if ext else models.find(tag) is not None and model_on_disk(tag)):
+            if (self.accounts.auth(ext[0]) if ext else models.find(tag) is not None and model_on_disk(tag)):
                 self.chat_model = tag
                 self.model_status.override = tag
                 self.model_status.ensure(force=True)
@@ -2650,14 +2614,14 @@ class PixelCatApp(QObject):
         if not ext:
             return self.cfg.num_ctx
         p, mid = ext
-        prov, info = self.providers[p], self._ext_info(p, mid)
+        prov, info = self.providers[p], self.accounts.info(p, mid)
         budget = prov.max_input(mid, info)
         if budget is None:
             return self.cfg.num_ctx
         if prov.refresh_models_for_context(info) and p not in self._ctx_reloaded:
             self._ctx_reloaded.add(p)                    # (a list saved before windows were kept: get it again)
             self._ext_load_models(p)
-        learned = (self._ext_p(p).get("ctx_learned") or {}).get(mid)
+        learned = (self.accounts.ext_p(p).get("ctx_learned") or {}).get(mid)
         return min(budget, int(learned)) if learned else budget
 
     def _ctx_shrink(self, p: str, mid: str, detail: str) -> bool:
@@ -2680,7 +2644,7 @@ class PixelCatApp(QObject):
         else:
             new = sent * 0.75
         new = int(max(external.MIN_BUDGET, min(new, self._ctx_budget() * 0.9)))
-        self._ext_p(p).setdefault("ctx_learned", {})[mid] = new
+        self.accounts.ext_p(p).setdefault("ctx_learned", {})[mid] = new
         self.save()
         self._sent = None                                # (rebuilt, not just extended)
         log.info("%s %s: the request was too long (about %d tokens) - its budget is now %d", p, mid, sent, new)
@@ -2777,7 +2741,7 @@ class PixelCatApp(QObject):
         msgs = [sys_msg] + self._context()
         ext = external.parse(self._effective_model())
         if ext:
-            if self.providers[ext[0]].max_input(ext[1], self._ext_info(*ext)) is not None:
+            if self.providers[ext[0]].max_input(ext[1], self.accounts.info(*ext)) is not None:
                 # (how big this request is, if it turns out too long)
                 self._sent_est = context.tokens(msgs) + len(json.dumps(self.toolbox.schemas())) // 3
             worker = self._ext_worker(ext[0], ext[1], msgs)
@@ -2793,7 +2757,7 @@ class PixelCatApp(QObject):
             tools = self.toolbox.schemas() if (self.cfg.enable_tools and self.native_tools) else None
             think = self._think_now()
             req = ChatRequest(self._effective_model(), msgs, tools, think, cfg=self.cfg)
-            local = self._local
+            local = self.accounts.local
             worker = QtChatWorker(functools.partial(local.new_chat, req), provider=local.info.key,
                                   model=req.model, local=True)
         worker.token.connect(self._on_token)

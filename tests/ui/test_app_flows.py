@@ -54,7 +54,7 @@ def test_anthropic_sign_in(bg, app_env, monkeypatch, have_helper: bool) -> None:
     ask.ok.click()
     assert steps == ([] if have_helper else ["install"]) + ["login ant.exe"]
     assert app_env.opened_urls == ["https://platform.claude.com/oauth"]
-    assert bg._ext_auth("anthropic") == "signin" and bg._ext_models("anthropic") == MODELS
+    assert bg.accounts.auth("anthropic") == "signin" and bg.accounts.models("anthropic") == MODELS
     assert _titles(bg)[-1] == "Claude is connected"
 
 
@@ -70,7 +70,7 @@ def test_anthropic_helper_download_fails(bg, monkeypatch) -> None:  # type: igno
     bg.popups.open[-1].ok.click()
     pop = bg.popups.open[-1]
     assert "The download was damaged." in pop.text.text() and pop.ok.text() == "API KEY"
-    assert bg._ext_auth("anthropic") == ""
+    assert bg.accounts.auth("anthropic") == ""
 
 
 def test_github_sign_in(bg, app_env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -89,7 +89,7 @@ def test_github_sign_in(bg, app_env, monkeypatch) -> None:  # type: ignore[no-un
     assert bg.popups.open[-1].title == "Sign in with GitHub"
     bg.popups.open[-1].ok.click()
     assert app_env.clipboard.text() == "ABCD-1234" and app_env.opened_urls == ["https://github.com/login/device"]
-    assert bg._ext_auth("copilot") == "signin" and bg._ext_p("copilot")["login"] == "octocat"
+    assert bg.accounts.auth("copilot") == "signin" and bg.accounts.ext_p("copilot")["login"] == "octocat"
     assert _titles(bg)[-1] == "Copilot is connected"
 
 
@@ -106,7 +106,7 @@ def test_chatgpt_sign_in(bg, monkeypatch) -> None:  # type: ignore[no-untyped-de
     bg._on_menu("ext:signin:openai")
     assert bg.popups.open[-1].title == "Sign in with ChatGPT"
     bg.popups.open[-1].ok.click()
-    assert bg._ext_auth("openai") == "chatgpt" and _titles(bg)[-1] == "Using your ChatGPT plan"
+    assert bg.accounts.auth("openai") == "chatgpt" and _titles(bg)[-1] == "Using your ChatGPT plan"
 
 
 # ---------------------------------------------------------------- the cat under the mouse
@@ -145,7 +145,7 @@ def claude(pet, monkeypatch):  # type: ignore[no-untyped-def]
 
     monkeypatch.setattr(anthropic_client, "AnthropicChat", make)
     pet.creds.set("anthropic_key", "k")
-    pet._ext_p("anthropic")["models"] = [{"id": "m1", "name": "Claude One", "context": 200_000}]
+    pet.accounts.ext_p("anthropic")["models"] = [{"id": "m1", "name": "Claude One", "context": 200_000}]
     pet.cfg.model = "anthropic:m1"
     pet.open_chat()
     return made
@@ -165,7 +165,7 @@ def test_an_external_answer_counts_its_tokens(pet, claude) -> None:  # type: ign
     w.events.used("anthropic", 4321)
     w.raw, w.note = [{"type": "text", "text": "Hello!"}], "This model always thinks."
     w.events.done("Hello!", [])
-    assert pet._budget("anthropic").used() == 4321
+    assert pet.accounts.budget("anthropic").used() == 4321
     assert pet.history[-1]["raw"] == [{"type": "text", "text": "Hello!"}]
     assert any(m.text == "This model always thinks." for m in pet.chat.msgs)
 
@@ -173,9 +173,9 @@ def test_an_external_answer_counts_its_tokens(pet, claude) -> None:  # type: ign
 def test_a_too_long_request_is_shortened_and_sent_again(pet, claude) -> None:  # type: ignore[no-untyped-def]
     _say(pet, "a long story")
     claude[-1].events.failed("too_long", json.dumps({"limit": 100_000, "actual": 150_000}))
-    assert len(claude) == 2 and pet._ext_p("anthropic")["ctx_learned"]["m1"] >= external.MIN_BUDGET
+    assert len(claude) == 2 and pet.accounts.ext_p("anthropic")["ctx_learned"]["m1"] >= external.MIN_BUDGET
     assert "shortened the older parts" in pet.chat.msgs[-2].text
-    learned = pet._ext_p("anthropic")["ctx_learned"]["m1"]
+    learned = pet.accounts.ext_p("anthropic")["ctx_learned"]["m1"]
     assert pet._ctx_budget() == learned
     claude[-1].events.failed("too_long", "{}")
     claude[-1].events.failed("too_long", "{}")
@@ -201,7 +201,7 @@ def test_other_external_failures_end_the_task(pet, claude, kind: str) -> None:  
     ("anthropic", "m1", {"context": 200_000}, external.max_input("anthropic", "m1", {"context": 200_000})),
     ("openai", "gpt-x", {}, external.max_input("openai", "gpt-x", {})), ("copilot", "m1", {}, 65536)])
 def test_context_budget_per_provider(pet, p: str, mid: str, info: dict, budget: int) -> None:  # type: ignore[no-untyped-def,type-arg]
-    pet._ext_p(p)["models"] = [{"id": mid, "name": "M", **info}]
+    pet.accounts.ext_p(p)["models"] = [{"id": mid, "name": "M", **info}]
     pet.cfg.model = f"{p}:{mid}"
     assert pet._ctx_budget() == budget
 

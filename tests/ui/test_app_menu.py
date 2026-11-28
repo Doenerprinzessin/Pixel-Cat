@@ -113,7 +113,7 @@ def test_external_is_marked_best_on_a_pc_without_room_for_a_local_ai(pet) -> Non
 
 def connect(pet, p: str, auth: str) -> None:  # type: ignore[no-untyped-def]
     """Put a provider into a connection state the way the sign-in / key flows leave it."""
-    s = pet._ext_p(p)
+    s = pet.accounts.ext_p(p)
     if auth == "key":
         pet.creds.set(f"{p}_key", "secret")
         if p == "copilot":
@@ -172,7 +172,7 @@ def test_provider_menu_per_connection(pet, p: str, auth: str) -> None:  # type: 
     label, kids = PROVIDER_SNAPSHOT[(p, auth)]
     assert tree([item])[0][0] == label
     assert [x if isinstance(x, str) else x[0] for x in tree(item.children)] == [k.format(p=p) for k in kids]
-    assert pet._ext_auth(p) == auth
+    assert pet.accounts.auth(p) == auth
 
 
 @pytest.mark.parametrize("p", list(external.PROVIDERS))
@@ -206,7 +206,7 @@ def test_copilot_credit_limit_choices(pet) -> None:  # type: ignore[no-untyped-d
 
 def test_copilot_credits_with_a_known_plan(pet) -> None:  # type: ignore[no-untyped-def]
     connect(pet, "copilot", "key")
-    pet._ext_p("copilot")["quota"] = {"total": 1500, "used": 300, "reset": "2026-12-15T12:00:00Z"}
+    pet.accounts.ext_p("copilot")["quota"] = {"total": 1500, "used": 300, "reset": "2026-12-15T12:00:00Z"}
     kids = pet._provider_menu("copilot").children
     assert tree(find(kids, "ext_climit_copilot").children) == [
         "ext:climit:copilot:0 | No limit", "ext:climit:copilot:500 | 500 credits",
@@ -215,7 +215,7 @@ def test_copilot_credits_with_a_known_plan(pet) -> None:  # type: ignore[no-unty
     quota = find(kids, "ext:quota:copilot")
     assert quota.label == "Copilot plan: 300 of 1,500 used" and quota.bar == pytest.approx(0.2)
     assert quota.note.startswith("RESETS ") and quota.note.endswith(" 15")     # (the month: the locale's)
-    pet._ext_p("copilot")["quota"] = {"unlimited": True}
+    pet.accounts.ext_p("copilot")["quota"] = {"unlimited": True}
     assert "ext:quota:copilot | Copilot plan: no monthly limit" in tree(pet._provider_menu("copilot").children)
 
 
