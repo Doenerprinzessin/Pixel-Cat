@@ -1020,7 +1020,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     pet._ext_p("openai").pop("auth", None)
     S["refuse_codes"] = 1
     n_pop = len(pet._popups)
-    pet._chatgpt_start()
+    pet._browser_start("openai")
     wait_pop = pet._popups[-1] if len(pet._popups) > n_pop else None
     seen: set[str] = set()
 
@@ -1045,7 +1045,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     pet._ext_p("openai").pop("auth", None)
     S["error_page"] = True
     n_auth, n_pop = len(S["authorize"]), len(pet._popups)
-    pet._chatgpt_start()
+    pet._browser_start("openai")
     wait(lambda: len(S["authorize"]) > n_auth, 10)
     first = pet._popups[-1] if len(pet._popups) > n_pop else None
     S["error_page"] = False

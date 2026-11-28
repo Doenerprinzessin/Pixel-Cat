@@ -103,6 +103,81 @@ class ProviderInfo:
     key_hint: str        # what a key starts with
     usage_url: str       # where the account's usage / credits are
     local: bool = False  # the models run on this PC (Ollama): no account, no key, no budget
+    # How "Sign in with ..." works (the app's flow and its sign-in object, see ModelProvider.signin):
+    # "cli" a helper program signs in (Anthropic's ant), "browser" the browser comes back to the PC (ChatGPT),
+    # "device" a code is entered on the provider's page (GitHub); "" no sign-in.
+    signin_kind: str = ""
+    signed_in: str = ""                            # the menu's state line when signed in
+    signed_out: str = ""                           # what the popup says after signing out
+    # The key / token: "api" an API key (checked by listing the models), "token" a GitHub token (it comes with
+    # the account's login; its problems are told GitHub's way).
+    key_kind: str = "api"
+    key_state: str = "Connected with an API key"   # the menu's state line when connected with it
+    key_use: str = "Use an API key..."             # the menu entry to add one...
+    key_change: str = "Change API key..."          # ...and to change it
+    key_remove: str = "Remove API key"             # ...and to remove it
+    key_removed: str = ""                          # what the popup says after removing it
+    key_title: str = ""                            # the key dialog's title...
+    key_text: str = ""                             # ...its text...
+    key_noun: str = "key"                          # ...and what it calls the key
+    out_of_credits: str = ""                       # the popup when the account's API credits are used up
+    shows_login: bool = False                      # the menu shows the account's login (GitHub)
+    credits: bool = False                          # the plan counts AI credits (Copilot): credit limit, plan quota
+    keeps_chat: bool = False                       # the provider keeps the chat (Copilot's session, see Conversation)
+    runtime: bool = False                          # a program of its own is needed first (Copilot's runtime)
+    build_part: str = ""                           # --selftest: the part of the build it belongs to
+
+
+class CliSignIn(Protocol):
+    """Signing in through the provider's own helper program (Anthropic's ``ant``).  Blocking unless noted."""
+
+    def find(self) -> str | None:
+        """The helper program, if it is here."""
+        ...
+
+    def install(self, progress: Callable[[int, int], None] | None = None, cancel: Any = None) -> str:
+        """Get the helper program (``progress(done, total)``, ``cancel``: an Event); returns its path."""
+        ...
+
+    def login(self, exe: str, open_url: Callable[[str], Any], cancel: Any = None) -> Any:
+        """Sign in with it (``open_url``: shows the provider's page); raises if that didn't work."""
+        ...
+
+    def sign_out(self, creds: Any) -> Any:
+        """Sign out (the result isn't used)."""
+        ...
+
+
+class BrowserSignIn(Protocol):
+    """Signing in in the browser, which comes back to the PC (ChatGPT)."""
+
+    def sign_in(self, creds: Any, cancel: Any = None, again: Callable[[], None] | None = None) -> dict[str, Any]:
+        """Sign in (blocking; ``again()``: the browser asks once more); returns what was allowed ({"plan": ...})."""
+        ...
+
+    def start_over(self, creds: Any) -> None:
+        """Forget an attempt that wasn't confirmed, so the next one starts fresh."""
+        ...
+
+    def sign_out(self, creds: Any) -> bool:
+        """Sign out (blocking); True: the provider confirmed it."""
+        ...
+
+
+class DeviceSignIn(Protocol):
+    """Signing in with a code the user enters on the provider's page (GitHub)."""
+
+    def available(self) -> bool:
+        """This build can sign in this way."""
+        ...
+
+    def sign_in(self, creds: Any, show_code: Callable[[str, str], None], cancel: Any = None) -> dict[str, Any]:
+        """Sign in (blocking; ``show_code(code, url)``); returns the account ({"login": ...})."""
+        ...
+
+    def sign_out(self, creds: Any) -> None:
+        """Sign out (quick: it forgets the sign-in)."""
+        ...
 
 
 class ModelProvider(Protocol):
@@ -156,12 +231,21 @@ class ModelProvider(Protocol):
         """A chat the provider keeps itself (Copilot's session), or None (each request sends the whole chat)."""
         ...
 
+    def signin(self) -> CliSignIn | BrowserSignIn | DeviceSignIn | None:
+        """How to sign in, as :attr:`ProviderInfo.signin_kind` says (None: no sign-in).  Loads the sign-in
+        module now, on the caller's thread."""
+        ...
+
+    def active(self) -> bool:
+        """Something of it may run that :meth:`shutdown` stops (False: never used)."""
+        ...
+
     def shutdown(self, timeout: float) -> None:
         """Quitting / signing out: stop what the provider runs (nothing if it was never used)."""
         ...
 
-    def self_check(self) -> None:
-        """--selftest: build the provider's SDK client without using it, and log how that went."""
+    def self_check(self) -> str:
+        """--selftest: build the provider's SDK client without using it; what to log ("" nothing), raises if broken."""
         ...
 
     def error_text(self, exc: BaseException, fallback: str) -> str:

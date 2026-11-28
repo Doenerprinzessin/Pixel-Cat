@@ -127,6 +127,28 @@ def test_selftest_finishes_by_itself_without_asking(make_app, qtbot, app_env) ->
     assert app_env.ensures == [] and not hasattr(pet, "_dialog")
 
 
+def test_selftest_checks_each_part_of_the_build_once(pet, monkeypatch, caplog) -> None:  # type: ignore[no-untyped-def]
+    import logging
+
+    import anthropic
+    from copilot._cli_version import CLI_VERSION
+
+    from pixelcat.llm import copilot_client
+
+    monkeypatch.setattr(copilot_client, "new_client", lambda token, path: None)
+    monkeypatch.setattr(copilot_client, "runtime_path", lambda: None)
+    external_ok = f"selftest: external models ok (anthropic {anthropic.__version__})"
+    with caplog.at_level(logging.INFO, logger="pixelcat.app"):
+        pet._selftest_providers()
+        monkeypatch.setattr(copilot_client, "new_client", lambda token, path: 1 / 0)
+        pet._selftest_providers()
+    assert [(r.name, r.getMessage()) for r in caplog.records] == [
+        ("pixelcat.app", external_ok),
+        ("pixelcat.app", f"selftest: copilot sdk ok (runtime {CLI_VERSION}, downloaded on first use)"),
+        ("pixelcat.app", external_ok), ("pixelcat.app", "selftest: copilot sdk broken")]
+    assert caplog.records[-1].exc_info is not None
+
+
 # ---------------------------------------------------------------- the loops
 @pytest.fixture
 def started(pet):  # type: ignore[no-untyped-def]

@@ -394,10 +394,22 @@ class PixelCatApp(QObject):
                      self.brain.state.value, self.brain.mode, self.brain.x, self.brain.y,
                      len(self.brain.smap.surfaces) if self.brain.smap else 0,
                      len(self.brain.smap.walls) if self.brain.smap else 0, out)
-            for prov in self.providers.values():         # each provider's parts are in the build
-                prov.self_check()
+            self._selftest_providers()
         finally:
             self.quit()
+
+    def _selftest_providers(self) -> None:
+        """The providers' parts are in the build: one line per part (the external models, Copilot's SDK)."""
+        parts: dict[str, list[ModelProvider]] = {}
+        for prov in self.providers.values():
+            if prov.info.build_part:
+                parts.setdefault(prov.info.build_part, []).append(prov)
+        for part, provs in parts.items():
+            try:
+                details = [prov.self_check() for prov in provs]
+                log.info("selftest: %s ok (%s)", part, ", ".join(d for d in details if d))
+            except Exception:  # noqa: BLE001
+                log.exception("selftest: %s broken", part)
 
     def _ask_autostart(self) -> None:
         dlg = PixelDialog("Meow! Start with Windows?",
@@ -943,7 +955,7 @@ class PixelCatApp(QObject):
         """The effort levels the chat's model has (None: it has none to pick)."""
         ext = external.parse(self._effective_model())
         if not ext:
-            return self.providers["ollama"].effort_levels({})
+            return self._local.effort_levels({})
         p, mid = ext
         return self.providers[p].effort_levels(self._ext_info(p, mid))
 
@@ -1052,6 +1064,16 @@ class PixelCatApp(QObject):
     def _ext_p(self, p: str) -> dict[str, Any]:
         return self.saved.ext_settings.setdefault(p, {})
 
+    @property
+    def _local(self) -> ModelProvider:
+        """The local models' provider (Ollama)."""
+        return next(prov for prov in self.providers.values() if prov.info.local)
+
+    @property
+    def _credit_p(self) -> str:
+        """The provider whose plan counts AI credits (Copilot): the credit limit and the plan's quota are its."""
+        return next(p for p, prov in self.providers.items() if prov.info.credits)
+
     def _budget(self, p: str) -> external.Budget:
         return external.Budget(self._ext_p(p), self.saved.ext_usage.setdefault(p, {}))
 
@@ -1093,12 +1115,11 @@ class PixelCatApp(QObject):
         if auth == "chatgpt":
             email = (self.creds.get("chatgpt") or {}).get("email", "")
             state = "Signed in with ChatGPT" + (f" ({email})" if email else "")
-        elif p == "copilot":
-            login = self._ext_p(p).get("login", "")
-            state = ({"key": "Connected with a GitHub token", "signin": "Signed in with GitHub"}.get(auth, "Not connected")
-                     + (f" ({login})" if login and auth else ""))
         else:
-            state = {"key": "Connected with an API key", "signin": "Signed in with Anthropic"}.get(auth, "Not connected")
+            state = {"key": prov.key_state, "signin": prov.signed_in}.get(auth, "Not connected")
+            if prov.shows_login:
+                login = self._ext_p(p).get("login", "")
+                state += f" ({login})" if login and auth else ""
         kids = [MenuItem(f"ext:state:{p}", state, info=True)]
         if auth:
             ms = self._ext_models(p)
@@ -1107,13 +1128,9 @@ class PixelCatApp(QObject):
                  for m in ms]
                 + [MenuItem(f"ext:refresh:{p}", "Reload the list" if ms else "Load the model list", "arrow",
                             separator_before=bool(ms))])))
-        if auth not in ("signin", "chatgpt") and (p != "copilot" or self._github_signin_available()):
+        if auth not in ("signin", "chatgpt") and self._signin_available(p):
             kids.append(MenuItem(f"ext:signin:{p}", prov.signin, "arrow"))
-        if p == "copilot":
-            kids.append(MenuItem(f"ext:key:{p}", "Change GitHub token..." if auth == "key" else "Use a GitHub token...",
-                                 "plus"))
-        else:
-            kids.append(MenuItem(f"ext:key:{p}", "Change API key..." if auth == "key" else "Use an API key...", "plus"))
+        kids.append(MenuItem(f"ext:key:{p}", prov.key_change if auth == "key" else prov.key_use, "plus"))
         maximum = float(self._ext_p(p).get("maximum", external.DEFAULTS["maximum"]) or 0)
         custom = b.limit not in external.LIMITS
         kids.append(MenuItem(f"ext_limit_{p}", "Token limit", "dot", separator_before=True,
@@ -1134,11 +1151,11 @@ class PixelCatApp(QObject):
                                  bar=min(1.0, used / max(1, allowed)), note=external.PERIOD_WORD[b.period].upper()))
         elif b.used():
             kids.append(MenuItem(f"ext:used:{p}", f"Used {fmt(b.used())} {external.PERIOD_WORD[b.period]}", info=True))
-        if p == "copilot":
+        if prov.credits:
             kids += self._credit_items()
         if auth:
-            kids.append(MenuItem(f"ext:out:{p}", "Sign out" if auth in ("signin", "chatgpt") else
-                                 ("Remove token" if p == "copilot" else "Remove API key"), "close", separator_before=True))
+            kids.append(MenuItem(f"ext:out:{p}", "Sign out" if auth in ("signin", "chatgpt") else prov.key_remove,
+                                 "close", separator_before=True))
         return MenuItem(f"ext_{p}", f"{prov.brand} ({prov.name})", "chat", children=kids, note="ON" if auth else "")
 
     def _credit_items(self) -> list[MenuItem]:
@@ -1167,8 +1184,8 @@ class PixelCatApp(QObject):
                                  bar=min(1.0, used / max(1e-9, allowed)), note="THIS MONTH"))
         elif used:
             kids.append(MenuItem("ext:cused:copilot", f"Used {fc(used)} credits this month", info=True))
-        q = self._ext_p("copilot").get("quota")
-        if isinstance(q, dict) and self._ext_auth("copilot"):
+        q = self._ext_p(self._credit_p).get("quota")
+        if isinstance(q, dict) and self._ext_auth(self._credit_p):
             if q.get("unlimited"):
                 kids.append(MenuItem("ext:quota:copilot", "Copilot plan: no monthly limit", info=True))
             elif q.get("total"):
@@ -1217,8 +1234,8 @@ class PixelCatApp(QObject):
         elif what in ("signin", "key", "out"):
             self.menu.close()
             if what == "signin":
-                {"anthropic": self._anthropic_signin, "openai": self._chatgpt_signin,
-                 "copilot": self._github_signin}[p]()
+                {"cli": self._cli_signin, "browser": self._browser_signin,
+                 "device": self._device_signin}[self.providers[p].info.signin_kind](p)
             elif what == "key":
                 self._ask_key(p)
             else:
@@ -1235,7 +1252,7 @@ class PixelCatApp(QObject):
         self._budget(p).u["allowed"] = n                # a new limit starts without raises
 
     def _set_credit_limit(self, n: float) -> None:
-        self._ext_p("copilot")["credit_limit"] = n
+        self._ext_p(self._credit_p)["credit_limit"] = n
         self._credit_budget().u["allowed"] = n          # (also without raises)
 
     def _show_amount_dialog(self, dlg: Any) -> None:
@@ -1312,7 +1329,7 @@ class PixelCatApp(QObject):
     def _credit_cap(self) -> float | None:
         """The most credits the cat may be given: the Copilot plan's monthly total (None: not known
         or no monthly limit)."""
-        q = self._ext_p("copilot").get("quota")
+        q = self._ext_p(self._credit_p).get("quota")
         if isinstance(q, dict) and not q.get("unlimited") and float(q.get("total") or 0) > 0:
             return float(q["total"])
         return None
@@ -1340,13 +1357,14 @@ class PixelCatApp(QObject):
             except RuntimeError:
                 pass
             return
-        auth = self._ext_auth("copilot")
+        cp = self._credit_p
+        auth = self._ext_auth(cp)
         if self._credit_cap() is None and auth:          # (the plan's total isn't known yet: ask GitHub)
-            prov = self.providers["copilot"]
+            prov = self.providers[cp]
 
             def got(q: Any) -> None:
                 if isinstance(q, dict):
-                    self._ext_p("copilot")["quota"] = q
+                    self._ext_p(cp)["quota"] = q
                 self._apply_credit_limit(v, dlg)
             self._in_background(lambda: prov.quota(self.creds, auth, start=True), got)
             return
@@ -1386,7 +1404,8 @@ class PixelCatApp(QObject):
                 log.warning("couldn't load the %s models: %s", p, res)
                 if announce:
                     self._popup("Models", self._paras([html.escape(
-                        self._copilot_problem(res) if p == "copilot" else self._key_problem(res))]), "OK")
+                        self._copilot_problem(res) if prov.info.key_kind == "token" else self._key_problem(res))]),
+                        "OK")
                 return
             self._set_ext_models(p, res)
             log.info("%s: %d models", p, len(res))
@@ -1423,21 +1442,22 @@ class PixelCatApp(QObject):
         return f"That didn't work: {str(exc)[:160]}"
 
     def _ask_key(self, p: str) -> None:
+        prov = self.providers[p].info
+        if prov.runtime:
+            self._runtime_ready(p, lambda: self._key_dialog_for(p))
+            return
+        self._key_dialog_for(p)
+
+    def _key_dialog_for(self, p: str) -> None:
+        """The dialog for a provider's API key / GitHub token."""
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
 
         from .ui.dialogs import KeyDialog
 
-        if p == "copilot":
-            self._copilot_ready(self._ask_token)
-            return
-        prov = external.PROVIDERS[p]
-        host = "api.anthropic.com" if p == "anthropic" else "api.openai.com"
-        dlg = KeyDialog(f"{prov.name} API key",
-                        f"Paste a key from your {prov.name} account. I keep it encrypted for your Windows account and "
-                        f"only ever send it to {host}.<br><br>Chats with {prov.brand} models go to {prov.name}, "
-                        "including what my tools read (screenshots, files, window text).",
-                        f"{prov.key_hint}...", bool(self.creds.get(f"{p}_key")))
+        prov = self.providers[p].info
+        dlg = KeyDialog(prov.key_title, prov.key_text, f"{prov.key_hint}...", bool(self.creds.get(f"{p}_key")),
+                        noun=prov.key_noun)
         dlg.link.connect(lambda: QDesktopServices.openUrl(QUrl(prov.key_url)))
         dlg.submitted.connect(lambda key, d=dlg: self._check_key(p, key, d))
         dlg.removed.connect(lambda: self._ext_disconnect(p, only_key=True))
@@ -1446,10 +1466,10 @@ class PixelCatApp(QObject):
         self._key_dialog = dlg
 
     def _check_key(self, p: str, key: str, dlg: Any) -> None:
-        if p == "copilot":
-            self._check_token(key, dlg)
-            return
         prov = self.providers[p]
+        if prov.info.key_kind == "token":
+            self._check_token(p, key, dlg)
+            return
 
         def work() -> list[dict[str, Any]]:
             return prov.check_key(key)[1]
@@ -1473,14 +1493,13 @@ class PixelCatApp(QObject):
             self._ext_connected(p)
         self._in_background(work, got)
 
-    def _anthropic_signin(self) -> None:
+    def _cli_signin(self, p: str) -> None:
         """Sign in with Anthropic: one click - Pixel Cat gets Anthropic's sign-in helper if it
         isn't here yet, then the browser opens and the user only signs in there."""
-        from .llm import ant_tool
+        signin = self.providers[p].signin()
+        self._in_background(signin.find, lambda exe: self._cli_signin_ask(p, exe))
 
-        self._in_background(ant_tool.find, self._anthropic_signin_ask)
-
-    def _anthropic_signin_ask(self, exe: Any) -> None:
+    def _cli_signin_ask(self, p: str, exe: Any) -> None:
         have = isinstance(exe, str)
         lines = ["Your browser opens Anthropic's page: sign in, pick your organization and click "
                  "<b>Allow</b>. That's all - I notice it by myself."]
@@ -1492,28 +1511,27 @@ class PixelCatApp(QObject):
                   "from a claude.ai subscription.",
                   "Chats with Claude go to Anthropic, including what my tools read (screenshots, files, window text)."]
         pop = self._popup("Sign in with Anthropic", self._paras(lines), "SIGN IN", "CANCEL")
-        pop.answered.connect(lambda ok, e=exe: self._anthropic_go(e if isinstance(e, str) else None) if ok else None)
+        pop.answered.connect(lambda ok, e=exe: self._cli_go(p, e if isinstance(e, str) else None) if ok else None)
 
-    def _anthropic_go(self, exe: str | None) -> None:
-        from .llm import ant_tool
-
+    def _cli_go(self, p: str, exe: str | None) -> None:
+        signin = self.providers[p].signin()
         if self._signin_cancel is not None:
             self._signin_cancel.set()
         cancel = threading.Event()
         self._signin_cancel = cancel
         if exe is not None:
-            self._anthropic_login(exe, cancel)
+            self._cli_login(p, exe, cancel)
             return
         pop = self._popup("Sign in with Anthropic", self._paras(["Getting Anthropic's sign-in helper…"]), "CANCEL")
         pop.answered.connect(lambda _ok: cancel.set())
         self._ant_pop = pop
 
         def progress(done: int, total: int) -> None:
-            self._later.ran.emit(self._ant_progress, (done, total))
-        self._in_background(lambda: ant_tool.install(progress, cancel),
-                            lambda res, c=cancel: self._ant_installed(res, c))
+            self._later.ran.emit(self._cli_progress, (done, total))
+        self._in_background(lambda: signin.install(progress, cancel),
+                            lambda res, c=cancel: self._cli_installed(p, res, c))
 
-    def _ant_progress(self, value: Any) -> None:
+    def _cli_progress(self, value: Any) -> None:
         pop = getattr(self, "_ant_pop", None)
         done, total = value
         if pop is None:
@@ -1536,26 +1554,23 @@ class PixelCatApp(QObject):
         if pop in self._popups:
             self._popups.remove(pop)
 
-    def _ant_installed(self, res: Any, cancel: threading.Event) -> None:
-        from .llm import ant_tool
-
+    def _cli_installed(self, p: str, res: Any, cancel: threading.Event) -> None:
         self._dismiss(getattr(self, "_ant_pop", None))
         self._ant_pop = None
         if cancel.is_set():
             return
         if isinstance(res, Exception):
-            msg = str(res) if isinstance(res, ant_tool.AntError) else f"That didn't work ({res})."
+            msg = self.providers[p].error_text(res, f"That didn't work ({res}).")
             pop = self._popup("Sign in with Anthropic", self._paras([html.escape(msg),
                               "You can also use an API key instead - that needs nothing else."]), "API KEY", "CLOSE")
-            pop.answered.connect(lambda ok: self._ask_key("anthropic") if ok else None)
+            pop.answered.connect(lambda ok: self._ask_key(p) if ok else None)
             return
-        self._anthropic_login(res, cancel)
+        self._cli_login(p, res, cancel)
 
-    def _anthropic_login(self, exe: str, cancel: threading.Event) -> None:
+    def _cli_login(self, p: str, exe: str, cancel: threading.Event) -> None:
         import webbrowser
 
-        from .llm import ant_tool
-
+        signin = self.providers[p].signin()
         opened: list[str] = []
 
         def open_url(url: str) -> None:
@@ -1567,24 +1582,22 @@ class PixelCatApp(QObject):
             "No page? Click OPEN AGAIN."]), "OPEN AGAIN", "CANCEL")
         pop.answered.connect(lambda ok: (webbrowser.open(opened[-1]) if opened else None) if ok else cancel.set())
         self._ant_wait_pop = pop
-        self._in_background(lambda: ant_tool.login(exe, open_url, cancel),
-                            lambda res, c=cancel: self._anthropic_signed_in(res, c))
+        self._in_background(lambda: signin.login(exe, open_url, cancel),
+                            lambda res, c=cancel: self._cli_signed_in(p, res, c))
 
-    def _anthropic_signed_in(self, res: Any, cancel: threading.Event) -> None:
-        from .llm import ant_tool
-
+    def _cli_signed_in(self, p: str, res: Any, cancel: threading.Event) -> None:
         self._dismiss(getattr(self, "_ant_wait_pop", None))
         self._ant_wait_pop = None
         if isinstance(res, Exception):
             if not cancel.is_set():
-                msg = str(res) if isinstance(res, ant_tool.AntError) else f"The sign-in didn't work ({res})."
+                msg = self.providers[p].error_text(res, f"The sign-in didn't work ({res}).")
                 self._popup("Sign in with Anthropic", self._paras([html.escape(msg)]), "OK")
             return
-        self._ext_p("anthropic")["auth"] = "signin"
+        self._ext_p(p)["auth"] = "signin"
         self.save()
-        self._ext_load_models("anthropic", announce=True, after=lambda: self._ext_connected("anthropic"))
+        self._ext_load_models(p, announce=True, after=lambda: self._ext_connected(p))
 
-    def _chatgpt_signin(self) -> None:
+    def _browser_signin(self, p: str) -> None:
         pop = self._popup("Sign in with ChatGPT", self._paras([
             "Your browser opens OpenAI's sign-in. Once you allow it there, chats with OpenAI models use your "
             "ChatGPT plan instead of API credits.",
@@ -1593,11 +1606,10 @@ class PixelCatApp(QObject):
             "On Plus, the 5-hour limit is shared with your other apps; Pro has no 5-hour limit.",
             "Your chats go to OpenAI, including what my tools read (screenshots, files, window text)."]),
             "SIGN IN", "CANCEL")
-        pop.answered.connect(lambda ok: self._chatgpt_start() if ok else None)
+        pop.answered.connect(lambda ok: self._browser_start(p) if ok else None)
 
-    def _chatgpt_start(self) -> None:
-        from .llm import chatgpt_signin
-
+    def _browser_start(self, p: str) -> None:
+        signin = self.providers[p].signin()
         if self._signin_cancel is not None:
             self._signin_cancel.set()
         ev = threading.Event()
@@ -1607,23 +1619,21 @@ class PixelCatApp(QObject):
             "I notice it by myself.",
             "OpenAI shows an error instead (for example about a workspace)? Close that page and click START OVER."]),
             "START OVER", "CANCEL")
-        pop.answered.connect(lambda ok, e=ev: (e.set(), self._chatgpt_restart() if ok else None))
+        pop.answered.connect(lambda ok, e=ev: (e.set(), self._browser_restart(p) if ok else None))
         self._gpt_wait_pop = pop
 
         def again() -> None:                         # (from the sign-in thread)
-            self._later.ran.emit(self._chatgpt_again, None)
-        self._in_background(lambda: chatgpt_signin.sign_in(self.creds, cancel=ev, again=again),
-                            lambda res, p=pop, e=ev: self._chatgpt_done(res, p, e))
+            self._later.ran.emit(self._browser_again, None)
+        self._in_background(lambda: signin.sign_in(self.creds, cancel=ev, again=again),
+                            lambda res, pp=pop, e=ev: self._browser_done(p, res, pp, e))
 
-    def _chatgpt_restart(self) -> None:
+    def _browser_restart(self, p: str) -> None:
         """START OVER: a fresh registration, with OpenAI's account/workspace picker."""
-        from .llm import chatgpt_signin
-
-        chatgpt_signin.forget_unconfirmed(self.creds)
+        self.providers[p].signin().start_over(self.creds)
         log.info("ChatGPT sign-in: starting over")
-        QTimer.singleShot(700, self._chatgpt_start)   # (the old attempt lets go of its port first)
+        QTimer.singleShot(700, self, lambda: self._browser_start(p))   # (the old attempt lets go of its port first)
 
-    def _chatgpt_again(self, _r: Any) -> None:
+    def _browser_again(self, _r: Any) -> None:
         pop = getattr(self, "_gpt_wait_pop", None)
         try:
             if pop is not None:
@@ -1633,20 +1643,18 @@ class PixelCatApp(QObject):
         except RuntimeError:
             pass
 
-    def _chatgpt_done(self, res: Any, pop: Any = None, ev: threading.Event | None = None) -> None:
-        from .llm import chatgpt_signin
-
+    def _browser_done(self, p: str, res: Any, pop: Any = None, ev: threading.Event | None = None) -> None:
         self._dismiss(pop)
         if self._gpt_wait_pop is pop:
             self._gpt_wait_pop = None
         if ev is not None and ev is not self._signin_cancel:
             return                                   # (an attempt that was started over)
         if isinstance(res, Exception):
-            msg = str(res) if isinstance(res, chatgpt_signin.SignInError) else f"The sign-in didn't work ({res})."
+            msg = self.providers[p].error_text(res, f"The sign-in didn't work ({res}).")
             if "cancelled" not in msg:
                 self._popup("Sign in with ChatGPT", self._paras([html.escape(msg)]), "OK")
             return
-        s = self._ext_p("openai")
+        s = self._ext_p(p)
         if not res.get("plan"):
             self._popup("Signed in - but no plan usage", self._paras([
                 "You're signed in, but using your ChatGPT plan wasn't allowed, so OpenAI models can't run on it yet.",
@@ -1659,28 +1667,27 @@ class PixelCatApp(QObject):
 
         def ready() -> None:
             if not first:
-                self._ext_connected("openai")
+                self._ext_connected(p)
                 return
             pop = self._popup("Using your ChatGPT plan", self._paras([
                 "Chats with OpenAI models now use your ChatGPT plan's usage. ChatGPT's settings show how much I "
                 "used and let you cap it - the Manage usage link above the chat's input takes you there.",
-                f"{len(self._ext_models('openai'))} models are ready - pick one in Settings &gt; AI model &gt; "
+                f"{len(self._ext_models(p))} models are ready - pick one in Settings &gt; AI model &gt; "
                 "External AI models &gt; ChatGPT &gt; Model."]), "PICK A MODEL", "LATER")
-            pop.answered.connect(lambda ok: self._open_menu_at(["settings", "set_model", "ext", "ext_openai",
-                                                                  "ext_models_openai"]) if ok else None)
-        self._ext_load_models("openai", after=ready)
+            pop.answered.connect(lambda ok: self._open_menu_at(["settings", "set_model", "ext", f"ext_{p}",
+                                                                  f"ext_models_{p}"]) if ok else None)
+        self._ext_load_models(p, after=ready)
         self._show_model_banner()
 
     # ---------------------------------------------------------------- GitHub Copilot
-    @staticmethod
-    def _github_signin_available() -> bool:
-        from .llm import github_signin
+    def _signin_available(self, p: str) -> bool:
+        """Whether "Sign in with ..." can be offered (GitHub's needs this build's app id)."""
+        prov = self.providers[p]
+        return prov.info.signin_kind != "device" or prov.signin().available()
 
-        return github_signin.available()
-
-    def _copilot_ready(self, then: Any) -> None:
+    def _runtime_ready(self, p: str, then: Any) -> None:
         """Copilot needs GitHub's runtime (about 100 MB): get it first if it isn't here yet."""
-        prov = self.providers["copilot"]
+        prov = self.providers[p]
 
         def got(ready: Any) -> None:
             if ready is True:
@@ -1692,18 +1699,18 @@ class PixelCatApp(QObject):
                 "your PC.",
                 "Chats with Copilot models go to GitHub, including what my tools read (screenshots, files, window "
                 "text), and use your Copilot plan's AI credits."]), "GET IT", "CANCEL")
-            pop.answered.connect(lambda ok: self._copilot_install(then) if ok else None)
+            pop.answered.connect(lambda ok: self._runtime_install(p, then) if ok else None)
         self._in_background(prov.runtime_ready, got)
 
-    def _copilot_install(self, then: Any) -> None:
-        prov = self.providers["copilot"]
+    def _runtime_install(self, p: str, then: Any) -> None:
+        prov = self.providers[p]
         cancel = threading.Event()
         pop = self._popup("GitHub Copilot", self._paras(["Getting GitHub's Copilot runtime…"]), "CANCEL")
         pop.answered.connect(lambda _ok: cancel.set())
         self._cop_pop = pop
 
         def progress(done: int, total: int) -> None:
-            self._later.ran.emit(self._cop_progress, (done, total))
+            self._later.ran.emit(self._runtime_progress, (done, total))
 
         def finished(res: Any) -> None:
             self._dismiss(self._cop_pop)
@@ -1717,7 +1724,7 @@ class PixelCatApp(QObject):
             then()
         self._in_background(lambda: prov.install_runtime(progress, cancel), finished)
 
-    def _cop_progress(self, value: Any) -> None:
+    def _runtime_progress(self, value: Any) -> None:
         pop = self._cop_pop
         done, total = value
         if pop is None:
@@ -1728,29 +1735,8 @@ class PixelCatApp(QObject):
         except RuntimeError:
             self._cop_pop = None
 
-    def _ask_token(self) -> None:
-        from PySide6.QtCore import QUrl
-        from PySide6.QtGui import QDesktopServices
-
-        from .ui.dialogs import KeyDialog
-
-        prov = external.COPILOT
-        dlg = KeyDialog("GitHub token for Copilot",
-                        "Paste a <b>fine-grained</b> GitHub token with the <b>Copilot Requests</b> permission (under "
-                        "Account permissions). I keep it encrypted for your Windows account and only ever hand it to "
-                        "GitHub's Copilot runtime, which sends it to GitHub.<br><br>Chats with Copilot models go to "
-                        "GitHub, including what my tools read (screenshots, files, window text), and use your Copilot "
-                        "plan's AI credits.",
-                        f"{prov.key_hint}...", bool(self.creds.get("copilot_key")), noun="token")
-        dlg.link.connect(lambda: QDesktopServices.openUrl(QUrl(prov.key_url)))
-        dlg.submitted.connect(lambda key, d=dlg: self._check_token(key, d))
-        dlg.removed.connect(lambda: self._ext_disconnect("copilot", only_key=True))
-        mon = self._cat_monitor()
-        dlg.show_near(self.overlay.cat_rect(), mon.work, self.ui_unit(mon))
-        self._key_dialog = dlg
-
-    def _check_token(self, key: str, dlg: Any) -> None:
-        prov = self.providers["copilot"]
+    def _check_token(self, p: str, key: str, dlg: Any) -> None:
+        prov = self.providers[p]
 
         def got(res: Any) -> None:
             if isinstance(res, Exception):
@@ -1761,18 +1747,19 @@ class PixelCatApp(QObject):
                     pass                                 # (the dialog was closed meanwhile)
                 return
             login, ms = res
-            self.creds.set("copilot_key", key)
-            s = self._ext_p("copilot")
+            self.creds.set(f"{p}_key", key)
+            s = self._ext_p(p)
             s["auth"], s["login"] = "key", login
             self._drop_copilot_chat()
-            self._set_ext_models("copilot", ms)
+            self._set_ext_models(p, ms)
             log.info("Copilot connected with a GitHub token (%d models)", len(ms))
             try:
                 dlg.checked(True, "")
             except RuntimeError:
                 pass
-            self._ext_connected("copilot")
-            self._copilot_quota(force=True)
+            self._ext_connected(p)
+            if prov.info.credits:
+                self._copilot_quota(force=True)
         self._in_background(lambda: prov.check_key(key), got)
 
     @staticmethod
@@ -1787,7 +1774,7 @@ class PixelCatApp(QObject):
             return "I couldn't reach GitHub - is the internet on?"
         return str(exc)[:200] if kind == "install" else f"That didn't work: {str(exc)[:160]}"
 
-    def _github_signin(self) -> None:
+    def _device_signin(self, p: str) -> None:
         pop = self._popup("Sign in with GitHub", self._paras([
             "Your browser opens GitHub with a short code: enter it there and allow Pixel Cat. That's all - I notice "
             "it by myself.",
@@ -1795,22 +1782,21 @@ class PixelCatApp(QObject):
             "organization's rules decide whether apps like this may use it.",
             "Chats with Copilot models go to GitHub, including what my tools read (screenshots, files, window text)."]),
             "SIGN IN", "CANCEL")
-        pop.answered.connect(lambda ok: self._copilot_ready(self._github_start) if ok else None)
+        pop.answered.connect(lambda ok: self._runtime_ready(p, lambda: self._device_start(p)) if ok else None)
 
-    def _github_start(self) -> None:
-        from .llm import github_signin
-
+    def _device_start(self, p: str) -> None:
+        signin = self.providers[p].signin()
         if self._signin_cancel is not None:
             self._signin_cancel.set()
         ev = threading.Event()
         self._signin_cancel = ev
 
         def show_code(code: str, uri: str) -> None:      # (from the sign-in thread)
-            self._later.ran.emit(self._github_code, (code, uri, ev))
-        self._in_background(lambda: github_signin.sign_in(self.creds, show_code, ev),
-                            lambda res, e=ev: self._github_done(res, e))
+            self._later.ran.emit(self._device_code, (code, uri, ev))
+        self._in_background(lambda: signin.sign_in(self.creds, show_code, ev),
+                            lambda res, e=ev: self._device_done(p, res, e))
 
-    def _github_code(self, value: Any) -> None:
+    def _device_code(self, value: Any) -> None:
         import webbrowser
 
         code, uri, ev = value
@@ -1825,30 +1811,30 @@ class PixelCatApp(QObject):
         self._gh_wait_pop = pop
         webbrowser.open(uri)
 
-    def _github_done(self, res: Any, ev: threading.Event) -> None:
-        from .llm import github_signin
-
+    def _device_done(self, p: str, res: Any, ev: threading.Event) -> None:
         self._dismiss(self._gh_wait_pop)
         self._gh_wait_pop = None
         if ev is not self._signin_cancel:
             return                                       # (an attempt that was started over)
         if isinstance(res, Exception):
-            msg = str(res) if isinstance(res, github_signin.SignInError) else f"The sign-in didn't work ({res})."
+            msg = self.providers[p].error_text(res, f"The sign-in didn't work ({res}).")
             if "cancelled" not in msg:
                 self._popup("Sign in with GitHub", self._paras([html.escape(msg)]), "OK")
             return
-        s = self._ext_p("copilot")
+        s = self._ext_p(p)
         s["auth"], s["login"] = "signin", res.get("login", "")
         self._drop_copilot_chat()
         self.save()
 
         def loaded() -> None:
-            self._ext_connected("copilot")
-            self._copilot_quota(force=True)
-        self._ext_load_models("copilot", announce=True, after=loaded)
+            self._ext_connected(p)
+            if self.providers[p].info.credits:
+                self._copilot_quota(force=True)
+        self._ext_load_models(p, announce=True, after=loaded)
 
     def _credit_budget(self) -> external.CreditBudget:
-        return external.CreditBudget(self._ext_p("copilot"), self.saved.ext_usage.setdefault("copilot_credits", {}))
+        return external.CreditBudget(self._ext_p(self._credit_p),
+                                     self.saved.ext_usage.setdefault("copilot_credits", {}))
 
     def _on_copilot_credits(self, credits: float) -> None:
         cb = self._credit_budget()
@@ -1870,7 +1856,7 @@ class PixelCatApp(QObject):
         cb = self._credit_budget()
         fc = external.fmt_credits
         used, allowed, nxt = cb.used(), cb.allowed(), cb.next_allowed()
-        q = self._ext_p("copilot").get("quota")
+        q = self._ext_p(self._credit_p).get("quota")
         plan = (f" (Copilot's own counter for your whole plan: {fc(q.get('used', 0))} of {fc(q['total'])})"
                 if isinstance(q, dict) and q.get("total") and not q.get("unlimited") else "")
         text = (f"🐾 <b>Copilot credit limit reached.</b> I've used {fc(used)} of the {fc(allowed)} AI credits you gave "
@@ -1885,7 +1871,7 @@ class PixelCatApp(QObject):
         if self.chat is None or not self._task_active:
             return
         if key != "raise":
-            self._limit_answer("copilot", key)
+            self._limit_answer(self._credit_p, key)
             return
         cb = self._credit_budget()
         new = cb.raise_limit()
@@ -1896,23 +1882,24 @@ class PixelCatApp(QObject):
 
     def _copilot_quota(self, force: bool = False) -> None:
         """The Copilot plan's own allowance for the menu (after requests, at most every 2 minutes)."""
-        auth = self._ext_auth("copilot")
+        cp = self._credit_p
+        auth = self._ext_auth(cp)
         if not auth or (not force and time.time() - self._quota_t < 120):
             return
         self._quota_t = time.time()
-        prov = self.providers["copilot"]
+        prov = self.providers[cp]
 
         def got(q: Any) -> None:
             if isinstance(q, dict):
-                self._ext_p("copilot")["quota"] = q
+                self._ext_p(cp)["quota"] = q
                 self.save()
                 if self.menu.isVisible():
                     self.menu.refresh(self._menu_items())
         self._in_background(lambda: prov.quota(self.creds, auth, start=force), got)
 
-    def _copilot_chat(self) -> Any:
+    def _copilot_chat(self, p: str) -> Any:
         if self._copilot is None:
-            self._copilot = self.providers["copilot"].new_conversation()
+            self._copilot = self.providers[p].new_conversation()
         return self._copilot
 
     def _drop_copilot_chat(self) -> None:
@@ -1924,6 +1911,8 @@ class PixelCatApp(QObject):
     def _stop_copilot(self, background: bool = False) -> None:
         """Quit / sign-out: the chat's session is deleted and GitHub's runtime stops (the providers stop
         only what they ever started)."""
+        if not any(prov.active() for prov in self.providers.values()):
+            return                                       # (never used: nothing to stop)
         chat, self._copilot = self._copilot, None
 
         def stop() -> None:
@@ -1944,34 +1933,26 @@ class PixelCatApp(QObject):
             self.creds.set(f"{p}_key", None)
             if s.get("auth") == "key":
                 s["auth"] = ""
-            msg = "The GitHub token is removed." if p == "copilot" else f"The {prov.name} API key is removed."
-        elif auth == "chatgpt":
-            from .llm import chatgpt_signin
-
+            msg = prov.key_removed
+        elif auth in ("signin", "chatgpt"):
+            signin = self.providers[p].signin()
             s["auth"] = ""
-            msg = "Signed out of ChatGPT."
-            self._in_background(lambda: chatgpt_signin.sign_out(self.creds), lambda ok: None if ok is True else self._popup(
-                "Signed out", self._paras(["OpenAI couldn't confirm the sign-out. To be sure, disconnect Pixel Cat in "
-                                           "ChatGPT's settings (Connected apps)."]), "OK"))
-        elif auth == "signin" and p == "copilot":
-            from .llm import github_signin
-
-            s["auth"] = ""
-            github_signin.sign_out(self.creds)
-            msg = ("Signed out of GitHub. To take back Pixel Cat's access completely: GitHub settings &gt; "
-                   "Applications &gt; Authorized OAuth Apps.")
-        elif auth == "signin":
-            from .llm import ant_tool
-
-            s["auth"] = ""
-            msg = "Signed out of Anthropic."
-            self._in_background(lambda: ant_tool.logout(ant_tool.find()), lambda _r: None)
+            msg = prov.signed_out
+            if prov.signin_kind == "browser":
+                self._in_background(lambda: signin.sign_out(self.creds), lambda ok: None if ok is True else self._popup(
+                    "Signed out", self._paras(["OpenAI couldn't confirm the sign-out. To be sure, disconnect Pixel Cat "
+                                               "in ChatGPT's settings (Connected apps)."]), "OK"))
+            elif prov.signin_kind == "device":
+                signin.sign_out(self.creds)              # (quick: it forgets the token)
+            else:
+                self._in_background(lambda: signin.sign_out(self.creds), lambda _r: None)
         else:
             return
-        if p == "copilot":
+        if prov.credits:
             s.pop("quota", None)
-            if not self._ext_auth(p):
-                s.pop("login", None)
+        if prov.shows_login and not self._ext_auth(p):
+            s.pop("login", None)
+        if prov.keeps_chat:
             self._stop_copilot(background=True)
         self.save()
         if not self._ext_auth(p):
@@ -2010,14 +1991,14 @@ class PixelCatApp(QObject):
         think, effort = self._ext_think_effort()
         tools = self.toolbox.schemas() if self.cfg.enable_tools else None
         req = ChatRequest(mid, msgs, tools, think, effort, self.creds, auth, info=self._ext_info(p, mid))
-        if p == "copilot":
-            if not self._credit_gate():
-                return None
-            req.conversation, req.history = self._copilot_chat(), self.history
+        if prov.credits and not self._credit_gate():
+            return None
+        if prov.keeps_chat:
+            req.conversation, req.history = self._copilot_chat(p), self.history
             req.system = str(msgs[0].get("content", "")) if msgs else ""
         req.web = bool(st.get("web_search", True))
         w = QtChatWorker(functools.partial(self.providers[p].new_chat, req), provider=p, model=mid, local=False)
-        if p == "copilot":
+        if prov.credits:
             w.credits.connect(self._on_copilot_credits)
             w.permission.connect(self._copilot_permission)
         w.used.connect(self._on_ext_used)
@@ -2064,7 +2045,8 @@ class PixelCatApp(QObject):
         b.add(tokens)
         self.save()
         log.info("%s: %d tokens (%d %s)", provider, tokens, b.used(), external.PERIOD_WORD[b.period])
-        if provider == "copilot":
+        prov = self.providers.get(provider)
+        if prov is not None and prov.info.credits:
             self._copilot_quota()
 
     def _ext_gate(self, p: str) -> bool:
@@ -2140,7 +2122,7 @@ class PixelCatApp(QObject):
             ok, url = "MANAGE USAGE", prov.usage_url
         elif why == "copilot":
             title = "Copilot allowance used up"
-            q = self._ext_p("copilot").get("quota")
+            q = self._ext_p(self._credit_p).get("quota")
             when = self._quota_reset_note(q).replace("RESETS ", "").title() if isinstance(q, dict) else ""
             lines = ["Your Copilot plan's AI credits are used up for now - or a budget your organization set for "
                      "Copilot is reached.",
@@ -2150,9 +2132,7 @@ class PixelCatApp(QObject):
             ok, url = "COPILOT SETTINGS", prov.usage_url
         elif why == "credits":
             title = "Credits used up"
-            lines = (["Your Anthropic credit balance is used up. Add credits in the Claude Console (Billing) - or "
-                      "claim the API credits your Claude plan may include."] if p == "anthropic" else
-                     ["Your OpenAI API credits are used up. Add credits on platform.openai.com (Billing)."])
+            lines = [external.PROVIDERS.get(p, external.OPENAI).out_of_credits]
             ok, url = "OPEN BILLING", external.BILLING.get(p)
         else:
             title = "Spend limit reached"
@@ -2180,8 +2160,10 @@ class PixelCatApp(QObject):
             return
         text = self.model_status.banner()
         ext = external.parse(self._effective_model())
-        if text is None and ext and ext[0] == "openai" and self._ext_auth("openai") == "chatgpt":
-            self.chat.set_model_banner("Using ChatGPT plan", ("Manage usage", external.OPENAI.usage_url))
+        prov = external.PROVIDERS[ext[0]] if ext else None
+        if (text is None and prov is not None and prov.signin_kind == "browser"
+                and self._ext_auth(prov.key) == "chatgpt"):
+            self.chat.set_model_banner("Using ChatGPT plan", ("Manage usage", prov.usage_url))
         else:
             self.chat.set_model_banner(text)
 
@@ -3276,7 +3258,8 @@ class PixelCatApp(QObject):
             tools = self.toolbox.schemas() if (self.cfg.enable_tools and self.native_tools) else None
             think = self._think_now()
             req = ChatRequest(self._effective_model(), msgs, tools, think, cfg=self.cfg)
-            worker = QtChatWorker(functools.partial(self.providers["ollama"].new_chat, req), provider="ollama",
+            local = self._local
+            worker = QtChatWorker(functools.partial(local.new_chat, req), provider=local.info.key,
                                   model=req.model, local=True)
         worker.token.connect(self._on_token)
         worker.thinking.connect(self._on_thinking)

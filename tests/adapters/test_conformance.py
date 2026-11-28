@@ -1,6 +1,6 @@
 """Every adapter implements every port: each method and property, with the port's parameter names and defaults.
-The chat ports (``ports.llm``) too: the model providers, the chat jobs, the Qt bridge's events sink and Copilot's
-conversation."""
+The chat ports (``ports.llm``) too: the model providers, the chat jobs, the Qt bridge's events sink, Copilot's
+conversation and the three ways to sign in."""
 from __future__ import annotations
 
 import inspect
@@ -10,6 +10,7 @@ import pytest
 
 from pixelcat import ports
 from pixelcat.adapters import llm, null
+from pixelcat.adapters.llm import signin
 from pixelcat.adapters.windows import escwatch, notifications
 from pixelcat.adapters.windows import platform as windows
 from pixelcat.llm import anthropic_client, copilot_client, ollama_client, openai_client, qt_chat
@@ -39,6 +40,9 @@ CHAT_IMPLEMENTATIONS = {
     ports.ChatJob: (anthropic_client.AnthropicChat, openai_client.OpenAIChat, copilot_client.CopilotJob,
                     ollama_client.OllamaChat),
     ports.Conversation: (copilot_client.CopilotChat,),
+    ports.CliSignIn: (signin.AntSignIn,),
+    ports.BrowserSignIn: (signin.ChatGPTSignIn,),
+    ports.DeviceSignIn: (signin.GitHubSignIn,),
 }
 CASES = [(port, impl) for port, impls in IMPLEMENTATIONS.items() for impl in impls]
 CHAT_CASES = [(port, impl) for port, impls in CHAT_IMPLEMENTATIONS.items() for impl in impls]

@@ -2,15 +2,13 @@
 runtime (``pixelcat.llm.copilot_client``, imported when needed - it starts nothing until it is used)."""
 from __future__ import annotations
 
-import logging
 import sys
 from typing import Any, Callable
 
 from ...llm import external
-from ...ports.llm import ChatEvents, ChatJob, ChatRequest, Conversation, ProviderInfo
+from ...ports.llm import ChatEvents, ChatJob, ChatRequest, Conversation, DeviceSignIn, ProviderInfo
 from .base import ProviderBase
-
-log = logging.getLogger(__name__)
+from .signin import GitHubSignIn
 
 CLIENT = "pixelcat.llm.copilot_client"
 
@@ -66,18 +64,22 @@ class CopilotProvider(ProviderBase):
 
         return copilot_client.CopilotChat()
 
+    def signin(self) -> DeviceSignIn:
+        from ...llm import github_signin  # noqa: F401 - (loaded now, on the caller's thread)
+
+        return GitHubSignIn()
+
+    def active(self) -> bool:
+        return CLIENT in sys.modules             # (never used: nothing runs, and the SDK isn't loaded for it)
+
     def shutdown(self, timeout: float) -> None:
-        mod = sys.modules.get(CLIENT)            # (never used: nothing runs, and the SDK isn't loaded for it)
+        mod = sys.modules.get(CLIENT)
         if mod is not None:
             mod.shutdown(timeout)
 
-    def self_check(self) -> None:
-        try:
-            from copilot._cli_version import CLI_VERSION
+    def self_check(self) -> str:
+        from copilot._cli_version import CLI_VERSION
 
-            from ...llm import copilot_client, github_signin  # noqa: F401
-            copilot_client.new_client("selftest", "copilot-runtime.exe")     # (made, never started)
-            log.info("selftest: copilot sdk ok (runtime %s, %s)", CLI_VERSION,
-                     "here" if copilot_client.runtime_path() else "downloaded on first use")
-        except Exception:  # noqa: BLE001
-            log.exception("selftest: copilot sdk broken")
+        from ...llm import copilot_client, github_signin  # noqa: F401
+        copilot_client.new_client("selftest", "copilot-runtime.exe")     # (made, never started)
+        return f"runtime {CLI_VERSION}, {'here' if copilot_client.runtime_path() else 'downloaded on first use'}"

@@ -262,11 +262,11 @@ def test_copilot_without_its_runtime_offers_to_get_it(bg, monkeypatch) -> None: 
     assert installs == [True] and isinstance(bg._key_dialog, KeyDialog)
 
 
-@pytest.mark.parametrize(("p", "method"), [("anthropic", "_anthropic_signin"), ("openai", "_chatgpt_signin"),
-                                           ("copilot", "_github_signin")])
+@pytest.mark.parametrize(("p", "method"), [("anthropic", "_cli_signin"), ("openai", "_browser_signin"),
+                                           ("copilot", "_device_signin")])
 def test_menu_sign_in_entry_starts_that_providers_sign_in(pet, monkeypatch, p: str, method: str) -> None:  # type: ignore[no-untyped-def]
     started: list[str] = []
-    monkeypatch.setattr(pet, method, lambda: started.append(p))
+    monkeypatch.setattr(pet, method, started.append)
     pet._on_menu(f"ext:signin:{p}")
     assert started == [p]
 
@@ -276,24 +276,24 @@ def test_chatgpt_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-unt
 
     monkeypatch.setattr(openai_client, "list_models", lambda creds, auth: MODELS)
     bg.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r", "email": "cat@example.com"})
-    bg._chatgpt_done({"plan": True})
+    bg._browser_done("openai", {"plan": True})
     assert bg._ext_auth("openai") == "chatgpt" and bg._ext_p("openai")["welcomed"]
     assert bg._popups[-1].title == "Using your ChatGPT plan"
-    bg._chatgpt_done({"plan": True})
+    bg._browser_done("openai", {"plan": True})
     assert bg._popups[-1].title == "ChatGPT is connected"
 
 
 def test_chatgpt_sign_in_without_plan_usage(bg) -> None:  # type: ignore[no-untyped-def]
-    bg._chatgpt_done({"plan": False})
+    bg._browser_done("openai", {"plan": False})
     assert bg._popups[-1].title == "Signed in - but no plan usage" and bg._ext_auth("openai") == ""
 
 
 def test_a_failed_or_cancelled_sign_in(bg) -> None:  # type: ignore[no-untyped-def]
     from pixelcat.llm import chatgpt_signin
 
-    bg._chatgpt_done(chatgpt_signin.SignInError("cancelled"))
+    bg._browser_done("openai", chatgpt_signin.SignInError("cancelled"))
     assert bg._popups == []
-    bg._chatgpt_done(chatgpt_signin.SignInError("The browser closed"))
+    bg._browser_done("openai", chatgpt_signin.SignInError("The browser closed"))
     assert bg._popups[-1].title == "Sign in with ChatGPT" and "browser closed" in bg._popups[-1].text.text()
 
 
@@ -307,9 +307,9 @@ def test_github_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-unty
     ev = threading.Event()
     bg._signin_cancel = ev
     bg.creds.set("copilot_signin", {"token": "t"})
-    bg._github_done({"login": "octocat"}, threading.Event())         # an attempt that was started over
+    bg._device_done("copilot", {"login": "octocat"}, threading.Event())         # an attempt that was started over
     assert bg._ext_auth("copilot") == ""
-    bg._github_done({"login": "octocat"}, ev)
+    bg._device_done("copilot", {"login": "octocat"}, ev)
     assert bg._ext_auth("copilot") == "signin" and bg._ext_p("copilot")["login"] == "octocat"
     assert bg._ext_models("copilot") == MODELS and bg._ext_p("copilot")["quota"] == {"unlimited": True}
 
@@ -320,7 +320,7 @@ def test_anthropic_sign_in_result(bg, monkeypatch) -> None:  # type: ignore[no-u
     from pixelcat.llm import anthropic_client
 
     monkeypatch.setattr(anthropic_client, "list_models", lambda creds, auth="key": MODELS)
-    bg._anthropic_signed_in("ok", threading.Event())
+    bg._cli_signed_in("anthropic", "ok", threading.Event())
     assert bg._ext_auth("anthropic") == "signin" and bg._ext_models("anthropic") == MODELS
 
 
@@ -394,6 +394,37 @@ def test_signing_out_of_github_and_removing_the_token(bg) -> None:  # type: igno
     bg._ext_disconnect("copilot", only_key=True)
     assert bg._ext_auth("copilot") == "" and "login" not in s and bg.chat_model is None
     assert bg._popups[-1].text.text().endswith("The GitHub token is removed.</p>")
+
+
+class _Session:
+    def __init__(self) -> None:
+        self.closed: list[float] = []
+
+    def close(self, timeout: float = 6.0) -> None:
+        self.closed.append(timeout)
+
+
+def test_stopping_copilot_stops_nothing_when_no_provider_ever_ran(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import threading
+
+    threads: list = []  # type: ignore[type-arg]
+    monkeypatch.setattr(threading, "Thread", lambda *a, **kw: threads.append(kw))
+    for prov in pet.providers.values():
+        monkeypatch.setattr(prov, "active", lambda: False)
+    pet._copilot = session = _Session()
+    pet._stop_copilot(background=True)
+    assert threads == [] and pet._copilot is session and session.closed == []
+
+
+def test_stopping_copilot_closes_its_session_and_stops_the_providers(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    stopped: list = []  # type: ignore[type-arg]
+    for p, prov in pet.providers.items():
+        monkeypatch.setattr(prov, "active", lambda p=p: p == "copilot")
+        monkeypatch.setattr(prov, "shutdown", lambda timeout, p=p: stopped.append((p, timeout)))
+    pet._copilot = session = _Session()
+    pet._stop_copilot()
+    assert pet._copilot is None and session.closed == [3.0]
+    assert stopped == [(p, 4.0) for p in pet.providers]
 
 
 # ---------------------------------------------------------------- limits while chatting

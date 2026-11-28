@@ -43,13 +43,45 @@ log = logging.getLogger(__name__)
 
 Provider = ProviderInfo     # (the name it had before the port)
 
+
+def _key_text(name: str, brand: str, host: str) -> str:
+    return (f"Paste a key from your {name} account. I keep it encrypted for your Windows account and "
+            f"only ever send it to {host}.<br><br>Chats with {brand} models go to {name}, "
+            "including what my tools read (screenshots, files, window text).")
+
+
+_OPENAI_CREDITS = "Your OpenAI API credits are used up. Add credits on platform.openai.com (Billing)."
+
 ANTHROPIC = Provider("anthropic", "Anthropic", "Claude", "Sign in with Anthropic",
-                     "https://platform.claude.com/settings/keys", "sk-ant-", "https://platform.claude.com/")
+                     "https://platform.claude.com/settings/keys", "sk-ant-", "https://platform.claude.com/",
+                     signin_kind="cli", signed_in="Signed in with Anthropic", signed_out="Signed out of Anthropic.",
+                     key_removed="The Anthropic API key is removed.", key_title="Anthropic API key",
+                     key_text=_key_text("Anthropic", "Claude", "api.anthropic.com"),
+                     out_of_credits="Your Anthropic credit balance is used up. Add credits in the Claude Console "
+                                    "(Billing) - or claim the API credits your Claude plan may include.",
+                     build_part="external models")
 OPENAI = Provider("openai", "OpenAI", "ChatGPT", "Sign in with ChatGPT",
-                  "https://platform.openai.com/api-keys", "sk-", "https://chatgpt.com/settings/usage")
+                  "https://platform.openai.com/api-keys", "sk-", "https://chatgpt.com/settings/usage",
+                  signin_kind="browser", signed_in="Signed in with ChatGPT", signed_out="Signed out of ChatGPT.",
+                  key_removed="The OpenAI API key is removed.", key_title="OpenAI API key",
+                  key_text=_key_text("OpenAI", "ChatGPT", "api.openai.com"), out_of_credits=_OPENAI_CREDITS,
+                  build_part="external models")
 COPILOT = Provider("copilot", "GitHub", "Copilot", "Sign in with GitHub",
                    "https://github.com/settings/personal-access-tokens/new", "github_pat_",
-                   "https://github.com/settings/copilot")
+                   "https://github.com/settings/copilot",
+                   signin_kind="device", signed_in="Signed in with GitHub",
+                   signed_out="Signed out of GitHub. To take back Pixel Cat's access completely: GitHub settings "
+                              "&gt; Applications &gt; Authorized OAuth Apps.",
+                   key_kind="token", key_state="Connected with a GitHub token", key_use="Use a GitHub token...",
+                   key_change="Change GitHub token...", key_remove="Remove token",
+                   key_removed="The GitHub token is removed.", key_title="GitHub token for Copilot",
+                   key_text="Paste a <b>fine-grained</b> GitHub token with the <b>Copilot Requests</b> permission "
+                            "(under Account permissions). I keep it encrypted for your Windows account and only ever "
+                            "hand it to GitHub's Copilot runtime, which sends it to GitHub.<br><br>Chats with Copilot "
+                            "models go to GitHub, including what my tools read (screenshots, files, window text), and "
+                            "use your Copilot plan's AI credits.",
+                   key_noun="token", out_of_credits=_OPENAI_CREDITS,   # (the OpenAI text, as before)
+                   shows_login=True, credits=True, keeps_chat=True, runtime=True, build_part="copilot sdk")
 PROVIDERS: dict[str, Provider] = {p.key: p for p in (ANTHROPIC, OPENAI, COPILOT)}
 
 LIMITS = [0, 50_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000, 25_000_000,

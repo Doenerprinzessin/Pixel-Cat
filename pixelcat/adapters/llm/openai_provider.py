@@ -2,14 +2,12 @@
 (``pixelcat.llm.openai_client``, imported when needed)."""
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from ...llm import external
-from ...ports.llm import ChatEvents, ChatJob, ChatRequest, ProviderInfo
+from ...ports.llm import BrowserSignIn, ChatEvents, ChatJob, ChatRequest, ProviderInfo
 from .base import ProviderBase
-
-log = logging.getLogger(__name__)
+from .signin import ChatGPTSignIn
 
 
 class OpenAIProvider(ProviderBase):
@@ -41,8 +39,11 @@ class OpenAIProvider(ProviderBase):
 
         return openai_client.OpenAIChat(req, events)
 
-    def self_check(self) -> None:
-        try:                                     # (the ok line is the Anthropic provider's)
-            from ...llm import chatgpt_signin, openai_client  # noqa: F401
-        except Exception:  # noqa: BLE001
-            log.exception("selftest: external models broken")
+    def signin(self) -> BrowserSignIn:
+        from ...llm import chatgpt_signin  # noqa: F401 - (loaded now, on the caller's thread)
+
+        return ChatGPTSignIn()
+
+    def self_check(self) -> str:
+        from ...llm import chatgpt_signin, openai_client  # noqa: F401
+        return ""

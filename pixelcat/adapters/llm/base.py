@@ -5,11 +5,11 @@ import sys
 from typing import Any, Callable
 
 from ...llm import external
-from ...ports.llm import Conversation
+from ...ports.llm import BrowserSignIn, CliSignIn, Conversation, DeviceSignIn
 
 
 class ProviderBase:
-    """No plan quota, nothing to install, no conversation of its own, nothing to stop."""
+    """No plan quota, nothing to install, no conversation of its own, no sign-in, nothing to stop."""
 
     # (module, exception class): failures whose message is meant for the user.  Looked up in sys.modules only:
     # an exception of a module that was never loaded can't be one of them.
@@ -37,11 +37,17 @@ class ProviderBase:
     def new_conversation(self) -> Conversation | None:
         return None
 
+    def signin(self) -> CliSignIn | BrowserSignIn | DeviceSignIn | None:
+        return None
+
+    def active(self) -> bool:
+        return False
+
     def shutdown(self, timeout: float) -> None:
         return None
 
-    def self_check(self) -> None:
-        return None
+    def self_check(self) -> str:
+        return ""
 
     def error_text(self, exc: BaseException, fallback: str) -> str:
         for module, name in self.own_errors:

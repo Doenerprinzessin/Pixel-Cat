@@ -1,10 +1,9 @@
 """The AI model providers (pixelcat/adapters/llm): what each one answers without a request - how it is connected,
-its effort levels, how much a request may hold, which errors speak for themselves - and that they stay light:
-a provider never used loads no SDK and stops nothing."""
+its effort levels, how much a request may hold, which errors speak for themselves, how it signs in and out, its
+--selftest check - and that they stay light: a provider never used loads no SDK and stops nothing."""
 from __future__ import annotations
 
 import json
-import logging
 import os
 import subprocess
 import sys
@@ -124,31 +123,74 @@ def test_copilot_shutdown_stops_the_runtime_once_it_was_loaded(monkeypatch) -> N
     assert stopped == [4.0]
 
 
-def test_copilot_self_check_builds_a_client_it_never_starts(monkeypatch, caplog) -> None:  # type: ignore[no-untyped-def]
+def test_copilot_self_check_builds_a_client_it_never_starts(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from copilot._cli_version import CLI_VERSION
+
     from pixelcat.llm import copilot_client
 
     made: list = []  # type: ignore[type-arg]
     monkeypatch.setattr(copilot_client, "new_client", lambda token, path: made.append((token, path)))
     monkeypatch.setattr(copilot_client, "runtime_path", lambda: None)
-    with caplog.at_level(logging.INFO):
-        PROVIDERS["copilot"].self_check()
-    assert made == [("selftest", "copilot-runtime.exe")]
-    assert [r.getMessage().split(" (")[0] for r in caplog.records] == ["selftest: copilot sdk ok"]
-    assert caplog.records[0].getMessage().endswith(", downloaded on first use)")
+    assert PROVIDERS["copilot"].self_check() == f"runtime {CLI_VERSION}, downloaded on first use"
+    monkeypatch.setattr(copilot_client, "runtime_path", lambda: "rt")
+    assert PROVIDERS["copilot"].self_check().endswith(", here")
+    assert made == [("selftest", "copilot-runtime.exe")] * 2
 
 
-def test_a_failing_self_check_is_logged_not_raised(monkeypatch, caplog) -> None:  # type: ignore[no-untyped-def]
+def test_the_self_checks_say_what_they_found_or_raise(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import anthropic
+
     from pixelcat.llm import copilot_client
 
+    checks = {p: prov.self_check() for p, prov in PROVIDERS.items()}
+    assert checks["anthropic"] == f"anthropic {anthropic.__version__}" and checks["openai"] == checks["ollama"] == ""
+    assert [p.info.build_part for p in PROVIDERS.values()] == ["external models"] * 2 + ["copilot sdk", ""]
     monkeypatch.setattr(copilot_client, "new_client", lambda token, path: 1 / 0)
-    with caplog.at_level(logging.INFO):
+    with pytest.raises(ZeroDivisionError):
         PROVIDERS["copilot"].self_check()
-    assert [r.getMessage() for r in caplog.records] == ["selftest: copilot sdk broken"]
+
+
+@pytest.mark.parametrize(("p", "module", "calls"), [
+    ("anthropic", "ant_tool", [("find", (), "find", ()), ("install", ("prog", "ev"), "install", ("prog", "ev")),
+                               ("login", ("ant.exe", "open", "ev"), "login", ("ant.exe", "open", "ev"))]),
+    ("openai", "chatgpt_signin", [("sign_in", ("creds", "ev", "again"), "sign_in", ("creds",)),
+                                  ("start_over", ("creds",), "forget_unconfirmed", ("creds",)),
+                                  ("sign_out", ("creds",), "sign_out", ("creds",))]),
+    ("copilot", "github_signin", [("available", (), "available", ()),
+                                  ("sign_in", ("creds", "show", "ev"), "sign_in", ("creds", "show", "ev")),
+                                  ("sign_out", ("creds",), "sign_out", ("creds",))]),
+])
+def test_signin_calls_the_sign_in_module_when_it_runs(monkeypatch, p: str, module: str, calls: list) -> None:  # type: ignore[no-untyped-def,type-arg]
+    import importlib
+
+    mod = importlib.import_module(f"pixelcat.llm.{module}")
+    signin = PROVIDERS[p].signin()
+    assert PROVIDERS[p].info.signin_kind == {"anthropic": "cli", "openai": "browser", "copilot": "device"}[p]
+    for method, args, func, want in calls:
+        seen: list = []  # type: ignore[type-arg]
+        monkeypatch.setattr(mod, func, lambda *a, _s=seen, **kw: (_s.append(a), "res")[1])
+        res = getattr(signin, method)(*args)
+        assert seen == [want] and res in ("res", None), (method, seen)
+
+
+def test_signing_in_and_out_by_kind(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from pixelcat.llm import ant_tool, chatgpt_signin
+
+    gpt: list = []  # type: ignore[type-arg]
+    monkeypatch.setattr(chatgpt_signin, "sign_in", lambda creds, **kw: (gpt.append(kw), {"plan": True})[1])
+    assert PROVIDERS["openai"].signin().sign_in("creds", "ev", "again") == {"plan": True}
+    assert gpt == [{"cancel": "ev", "again": "again"}]
+    out: list = []  # type: ignore[type-arg]
+    monkeypatch.setattr(ant_tool, "find", lambda: "ant.exe")
+    monkeypatch.setattr(ant_tool, "logout", out.append)
+    PROVIDERS["anthropic"].signin().sign_out("creds")
+    assert out == ["ant.exe"] and PROVIDERS["ollama"].signin() is None
 
 
 _PROBE = """
 import json, sys
 from pixelcat.adapters.llm import build_providers
+print("@@active " + json.dumps([prov.active() for prov in build_providers().values()]))
 for prov in build_providers().values():
     prov.shutdown(0.1)
     prov.error_text(RuntimeError("x"), "y")
@@ -163,5 +205,12 @@ def test_providers_are_light_and_one_never_used_stops_nothing() -> None:
     res = subprocess.run([sys.executable, "-c", _PROBE], cwd=ROOT, capture_output=True, text=True, timeout=60,
                          env={**os.environ, "PYTHONPATH": str(ROOT)})
     lines = [line for line in res.stdout.splitlines() if line.startswith("@@")]
-    assert lines, res.stderr
+    assert len(lines) == 2, res.stderr
+    assert json.loads(lines[0].removeprefix("@@active ")) == [False] * 4
     assert json.loads(lines[-1][2:]) == []
+
+
+def test_copilot_is_active_once_its_client_was_loaded() -> None:
+    from pixelcat.llm import copilot_client  # noqa: F401
+
+    assert [p.active() for p in PROVIDERS.values()] == [False, False, True, False]

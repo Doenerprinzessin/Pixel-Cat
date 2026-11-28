@@ -2,14 +2,12 @@
 (``pixelcat.llm.anthropic_client``, imported when needed)."""
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from ...llm import external
-from ...ports.llm import ChatEvents, ChatJob, ChatRequest, ProviderInfo
+from ...ports.llm import ChatEvents, ChatJob, ChatRequest, CliSignIn, ProviderInfo
 from .base import ProviderBase
-
-log = logging.getLogger(__name__)
+from .signin import AntSignIn
 
 
 class AnthropicProvider(ProviderBase):
@@ -47,12 +45,14 @@ class AnthropicProvider(ProviderBase):
 
         return anthropic_client.AnthropicChat(req, events)
 
-    def self_check(self) -> None:
-        try:                                     # the external models' parts are in the build
-            import anthropic
+    def signin(self) -> CliSignIn:
+        from ...llm import ant_tool  # noqa: F401 - (loaded now, on the caller's thread)
 
-            from ...llm import ant_tool, anthropic_client  # noqa: F401
-            anthropic.Anthropic(api_key="selftest")            # (made, never used)
-            log.info("selftest: external models ok (anthropic %s)", anthropic.__version__)
-        except Exception:  # noqa: BLE001
-            log.exception("selftest: external models broken")
+        return AntSignIn()
+
+    def self_check(self) -> str:
+        import anthropic
+
+        from ...llm import ant_tool, anthropic_client  # noqa: F401
+        anthropic.Anthropic(api_key="selftest")            # (made, never used)
+        return f"anthropic {anthropic.__version__}"
