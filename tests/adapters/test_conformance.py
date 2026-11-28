@@ -11,28 +11,31 @@ import pytest
 from pixelcat import ports
 from pixelcat.adapters import llm, null
 from pixelcat.adapters.llm import anthropic_client, copilot_client, ollama_client, openai_client, signin
+from pixelcat.adapters.macos import escwatch as mac_escwatch
+from pixelcat.adapters.macos import notifications as mac_notifications
+from pixelcat.adapters.macos import platform as macos
 from pixelcat.adapters.windows import escwatch, notifications
 from pixelcat.adapters.windows import platform as windows
 from pixelcat.llm import qt_chat
 
 IMPLEMENTATIONS = {
-    ports.DisplayPort: (windows.WindowsDisplay, null.NullDisplay),
-    ports.WindowPort: (windows.WindowsWindows, null.NullWindows),
-    ports.InputPort: (windows.WindowsInput, null.NullInput),
-    ports.EscapeWatcher: (escwatch.EscWatcher, null.NullEscapeWatcher),
-    ports.ClipboardPort: (windows.WindowsClipboard, null.NullClipboard),
-    ports.AccessibilityPort: (windows.WindowsAccessibility, null.NullAccessibility),
-    ports.CapturePort: (windows.WindowsCapture, null.NullCapture),
-    ports.SystemPort: (windows.WindowsSystem, null.NullSystem),
-    ports.AppsPort: (windows.WindowsApps, null.NullApps),
-    ports.ProcessPort: (windows.WindowsProcesses, null.NullProcesses),
-    ports.NotificationPort: (windows.WindowsNotifications, null.NullNotifications),
-    ports.NotificationFeed: (notifications.Feed, null.NullFeed),
-    ports.SecretStore: (windows.WindowsSecretStore, null.NullSecretStore),
-    ports.KnownFolders: (windows.WindowsKnownFolders, null.NullKnownFolders),
-    ports.AutostartPort: (windows.WindowsAutostart, null.NullAutostart),
-    ports.SaveMarks: (windows.WindowsSaveMarks, null.NullSaveMarks),
-    ports.InstallerPort: (windows.WindowsInstaller, null.NullInstaller),
+    ports.DisplayPort: (windows.WindowsDisplay, null.NullDisplay, macos.MacDisplay),
+    ports.WindowPort: (windows.WindowsWindows, null.NullWindows, macos.MacWindows),
+    ports.InputPort: (windows.WindowsInput, null.NullInput, macos.MacInput),
+    ports.EscapeWatcher: (escwatch.EscWatcher, null.NullEscapeWatcher, mac_escwatch.MacEscapeWatcher),
+    ports.ClipboardPort: (windows.WindowsClipboard, null.NullClipboard, macos.MacClipboard),
+    ports.AccessibilityPort: (windows.WindowsAccessibility, null.NullAccessibility, macos.MacAccessibility),
+    ports.CapturePort: (windows.WindowsCapture, null.NullCapture, macos.MacCapture),
+    ports.SystemPort: (windows.WindowsSystem, null.NullSystem, macos.MacSystem),
+    ports.AppsPort: (windows.WindowsApps, null.NullApps, macos.MacApps),
+    ports.ProcessPort: (windows.WindowsProcesses, null.NullProcesses, macos.MacProcesses),
+    ports.NotificationPort: (windows.WindowsNotifications, null.NullNotifications, macos.MacNotifications),
+    ports.NotificationFeed: (notifications.Feed, null.NullFeed, mac_notifications.MacFeed),
+    ports.SecretStore: (windows.WindowsSecretStore, null.NullSecretStore, macos.MacSecretStore),
+    ports.KnownFolders: (windows.WindowsKnownFolders, null.NullKnownFolders, macos.MacKnownFolders),
+    ports.AutostartPort: (windows.WindowsAutostart, null.NullAutostart, macos.MacAutostart),
+    ports.SaveMarks: (windows.WindowsSaveMarks, null.NullSaveMarks, macos.MacSaveMarks),
+    ports.InstallerPort: (windows.WindowsInstaller, null.NullInstaller, macos.MacInstaller),
 }
 CHAT_IMPLEMENTATIONS = {
     ports.ModelProvider: (llm.AnthropicProvider, llm.OpenAIProvider, llm.CopilotProvider, llm.OllamaProvider),
@@ -75,18 +78,18 @@ def test_implements_every_member(port, impl):  # type: ignore[no-untyped-def]
             assert _params(got) == _params(member), f"{impl.__qualname__}.{name}{inspect.signature(got)}"
 
 
-@pytest.mark.parametrize("port, impl", [c for c in CASES if c[1].__module__ != escwatch.__name__
-                                        and c[1].__module__ != notifications.__name__],
+@pytest.mark.parametrize("port, impl", [c for c in CASES if c[1].__module__ not in (escwatch.__name__,
+                                                                                 notifications.__name__)],
                          ids=lambda x: getattr(x, "__qualname__", ""))
 def test_adds_no_public_methods(port, impl):  # type: ignore[no-untyped-def]
     assert set(_members(impl)) <= set(_members(port))
 
 
-@pytest.mark.parametrize("build", [windows.build, null.build], ids=["windows", "null"])
-def test_build_fills_each_port_with_its_implementation(build):  # type: ignore[no-untyped-def]
+@pytest.mark.parametrize(("build", "index"), [(windows.build, 0), (null.build, 1), (macos.build, 2)],
+                         ids=["windows", "null", "macos"])
+def test_build_fills_each_port_with_its_implementation(build, index):  # type: ignore[no-untyped-def]
     platform = build()
     hints = {f.name: f.type for f in fields(ports.Platform)}
-    index = 0 if build is windows.build else 1
     for name, hint in hints.items():
         if name not in ("name", "profile"):        # (the profile is data, not a port)
             assert type(getattr(platform, name)) is IMPLEMENTATIONS[getattr(ports, hint)][index], name

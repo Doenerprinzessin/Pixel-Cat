@@ -6,6 +6,8 @@ The layout (ports and adapters):
 * ``pixelcat/ports``: the interfaces the core talks to: the standard library and the domain (Qt only for type hints).
 * ``pixelcat/adapters/windows``: all Win32 code (ctypes, winreg, msvcrt, _winapi, os.startfile ...).
 * ``pixelcat/adapters/null``: does nothing, loads anywhere: no Win32.
+* ``pixelcat/adapters/macos``: all pyobjc code (objc, AppKit, Quartz ...), reached only through the lazy proxies of
+  its ``_objc`` module, so every module of it loads without pyobjc; no Win32, no other adapter.
 * ``pixelcat/adapters/llm``: the AI model providers and their clients and sign-ins: no Win32, no Qt (they run on
   worker threads).
 * ``pixelcat/bootstrap.py``: the composition root, the only one that picks an adapter.
@@ -42,6 +44,13 @@ PKG = ROOT / "pixelcat"
 # Win32 lives in pixelcat/adapters/windows only.  (os.startfile is checked too; ctypes.wintypes is part of ctypes.)
 WIN32 = {"ctypes", "_ctypes", "winreg", "msvcrt", "_winapi", "nt", "winsound"}
 QT = {"PySide6", "shiboken6", "shibokensupport"}   # shibokensupport: embedded in shiboken6
+# pyobjc lives in pixelcat/adapters/macos only.
+PYOBJC = {"objc", "AppKit", "Foundation", "Quartz", "CoreGraphics", "ApplicationServices", "HIServices", "Security",
+          "ScreenCaptureKit", "CoreAudio", "PyObjCTools", "Cocoa", "CoreFoundation"}
+# Core files that may ask which OS they run on (sys.platform); everything else goes through the ports.
+SYS_PLATFORM_ALLOWED = {
+    "paths.py": "the data folders are needed before the platform's adapter is built (logging, the config)",
+}
 # Where Qt belongs (core files or packages).  Every other core module may use Qt in type hints only.
 QT_ALLOWED = {
     "app/controller.py": "the application: QApplication, the windows, timers and the tray",
@@ -206,6 +215,9 @@ CORE_QT_FREE = [p for p in CORE if not _covered(_rel(p), QT_ALLOWED)]
 DOMAIN = [p for p in CORE if _covered(_rel(p), {"domain"})]
 PORTS = [p for p in CORE if _covered(_rel(p), {"ports"})]
 NULL_ADAPTER = [p for p in ALL_FILES if _covered(_rel(p), {"adapters/null"})]
+MACOS_ADAPTER = [p for p in ALL_FILES if _covered(_rel(p), {"adapters/macos"})]
+NON_MACOS = [p for p in ALL_FILES if p not in MACOS_ADAPTER]
+MACOS_ADAPTER_MODULES = sorted(_module_name(p) for p in MACOS_ADAPTER)
 LLM_ADAPTER = [p for p in ALL_FILES if _covered(_rel(p), {"adapters/llm"})]
 # Every core module, found the way Python finds them (recursively, through the subpackages).
 CORE_MODULES = ["pixelcat"] + sorted(
@@ -220,7 +232,7 @@ LLM_ADAPTER_MODULES = sorted(_module_name(p) for p in LLM_ADAPTER)
 
 
 def test_the_file_lists_cover_the_whole_core():
-    assert WINDOWS_ADAPTER and NULL_ADAPTER and DOMAIN and PORTS and CORE_QT_FREE
+    assert WINDOWS_ADAPTER and NULL_ADAPTER and MACOS_ADAPTER and DOMAIN and PORTS and CORE_QT_FREE
     assert {_module_name(p) for p in CORE} == set(CORE_MODULES), "a folder in pixelcat/ lacks its __init__.py?"
     for name in ("pixelcat.settings", "pixelcat.progress", "pixelcat.paths", "pixelcat.persistence",
                  "pixelcat.savecrypt", "pixelcat.chats", "pixelcat.llm.tools", "pixelcat.sprites.raster",
@@ -310,6 +322,63 @@ def test_null_adapter_imports_only_stdlib_domain_ports_and_qt(path):
                  if not (_is(name, "pixelcat.domain") or _is(name, "pixelcat.ports")
                          or _is(name, "pixelcat.adapters.null") or _stdlib(name) or _top(name) in QT))
     assert not bad, f"pixelcat/{_rel(path)} imports {bad}; the null adapter must load on any platform"
+
+
+@pytest.mark.parametrize("path", NON_MACOS, ids=_rel)
+def test_only_the_macos_adapter_uses_pyobjc(path):
+    bad = sorted(name for name in _scan(path).imports if _top(name) in PYOBJC)
+    assert not bad, f"pixelcat/{_rel(path)} imports {bad}; pyobjc belongs in pixelcat/adapters/macos (behind a port)"
+
+
+@pytest.mark.parametrize("path", MACOS_ADAPTER, ids=_rel)
+def test_macos_adapter_uses_no_other_adapter(path):
+    bad = sorted(name for name in _scan(path).imports
+                 if (_is(name, "pixelcat.adapters") and name != "pixelcat.adapters"
+                     and not _is(name, "pixelcat.adapters.macos")) or _is(name, "pixelcat.bootstrap"))
+    assert not bad, (f"pixelcat/{_rel(path)} imports {bad}; the macOS adapter stands alone (the fallback without "
+                     "pyobjc is bootstrap's job)")
+
+
+@pytest.mark.parametrize("path", MACOS_ADAPTER, ids=_rel)
+def test_macos_adapter_reaches_pyobjc_only_through_its_lazy_proxies(path):
+    scan = _scan(path)
+    bad = sorted(name for name in scan.runtime if _top(name) in PYOBJC)
+    assert not bad, (f"pixelcat/{_rel(path)} imports {bad} when it is loaded or called; use the proxies of "
+                     "adapters/macos/_objc.py, so the adapter loads without pyobjc and tests can fake it")
+    if _rel(path) != "adapters/macos/_objc.py":
+        assert not scan.dynamic, f"pixelcat/{_rel(path)} imports a module named at run time (lines {scan.dynamic})"
+
+
+def test_the_macos_proxies_stand_for_pyobjc_modules():
+    from pixelcat.adapters.macos import _objc
+
+    modules = {object.__getattribute__(getattr(_objc, name), "_module") for name in _objc.PROXIES}
+    assert modules <= PYOBJC
+
+
+def _sys_platform_lines(path: Path) -> list[int]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    sys_names = {a.asname or a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names
+                 if a.name == "sys"}
+    lines = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "platform"
+             and isinstance(n.value, ast.Name) and n.value.id in sys_names]
+    lines += [n.lineno for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == "sys"
+              and any(a.name == "platform" for a in n.names)]
+    return sorted(lines)
+
+
+@pytest.mark.parametrize("path", CORE, ids=_rel)
+def test_core_asks_for_the_os_only_where_allowed(path):
+    lines = _sys_platform_lines(path)
+    assert not lines or _rel(path) in SYS_PLATFORM_ALLOWED, (
+        f"pixelcat/{_rel(path)} checks sys.platform (lines {lines}); ask a port (or the platform's Profile) instead")
+
+
+def test_the_sys_platform_check_sees_its_forms(tmp_path):
+    src = tmp_path / "x.py"
+    src.write_text("import sys as s\nfrom sys import platform\nif s.platform == 'darwin':\n    pass\n",
+                   encoding="utf-8")
+    assert _sys_platform_lines(src) == [2, 3]
 
 
 def test_the_llm_adapter_exists():
@@ -529,3 +598,68 @@ def test_llm_adapter_loads_without_win32_qt_or_another_adapter(name):
     assert res["error"] is None, res["error"]
     assert not [m for m in res["loaded"] if _top(m) in QT or _not_for_the_llm_adapter(m)]
     assert not [m for m, by in res["events"] if _top(m) in WIN32 and _is(by, "pixelcat")]
+
+
+# Imports each module of the macOS adapter in a fresh interpreter where pyobjc can't be imported, and records the
+# Win32, pyobjc or adapter modules loaded on the way (by whom).
+_MACOS_PROBE = """
+import json, sys
+PYOBJC = set(sys.argv[2].split(","))
+WIN32 = ("ctypes", "_ctypes", "winreg", "msvcrt", "_winapi", "winsound")
+events = []
+
+def importer():
+    frame = sys._getframe(2)
+    while frame is not None:
+        name = frame.f_globals.get("__name__", "?")
+        if not (name == "importlib" or name.startswith(("importlib.", "_frozen_importlib"))):
+            return name
+        frame = frame.f_back
+    return "?"
+
+class NoPyObjC:
+    @staticmethod
+    def find_spec(name, path=None, target=None):
+        top = name.split(".")[0]
+        if top in PYOBJC:
+            events.append((name, importer()))
+            raise ImportError(f"no pyobjc here ({name})")
+        if top in WIN32 or name.startswith("pixelcat.adapters."):
+            events.append((name, importer()))
+        return None
+
+sys.meta_path.insert(0, NoPyObjC)
+error = None
+try:
+    __import__(sys.argv[1])
+except BaseException as exc:
+    error = f"{type(exc).__name__}: {exc}"
+print("@@probe" + json.dumps({"events": events, "error": error}))
+"""
+
+
+@cache
+def _macos_probes() -> dict[str, dict]:
+    def probe(name: str) -> dict:
+        env = {**os.environ, "PYTHONPATH": str(ROOT), "QT_QPA_PLATFORM": "offscreen"}
+        res = subprocess.run([sys.executable, "-c", _MACOS_PROBE, name, ",".join(sorted(PYOBJC))], cwd=ROOT,
+                             capture_output=True, text=True, timeout=120, env=env)
+        lines = [line for line in res.stdout.splitlines() if line.startswith("@@probe")]
+        assert lines, f"probing {name} failed:\n{res.stderr}"
+        return json.loads(lines[-1][len("@@probe"):])
+
+    with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
+        return dict(zip(MACOS_ADAPTER_MODULES, pool.map(probe, MACOS_ADAPTER_MODULES)))
+
+
+@pytest.mark.parametrize("name", MACOS_ADAPTER_MODULES)
+def test_macos_adapter_loads_without_pyobjc_win32_or_another_adapter(name):
+    res = _macos_probes()[name]
+    assert res["error"] is None, f"importing {name} without pyobjc fails: {res['error']}"
+    pyobjc = sorted(f"{m} (by {by})" for m, by in res["events"] if _top(m) in PYOBJC)
+    assert not pyobjc, f"importing {name} asks for pyobjc: {pyobjc}; use the lazy proxies of _objc"
+    win32 = sorted(f"{m} (by {by})" for m, by in res["events"] if _top(m) in WIN32 and _is(by, "pixelcat"))
+    assert not win32, f"importing {name} loads {win32}"
+    others = sorted(m for m, _by in res["events"]
+                    if _is(m, "pixelcat.adapters") and not _is(m, "pixelcat.adapters.macos"))
+    assert not others, f"importing {name} loads {others}"

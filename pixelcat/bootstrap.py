@@ -5,17 +5,29 @@ which passes the ports on to its parts.  Nothing else in the core imports ``pixe
 """
 from __future__ import annotations
 
+import importlib.util
+import logging
 import sys
 
 from .ports import ModelProvider, Platform
 
+log = logging.getLogger(__name__)
+
 
 def build_platform(platform: str = sys.platform) -> Platform:
-    """The ports for ``platform`` (a ``sys.platform`` value): Windows, or the null adapter elsewhere."""
+    """The ports for ``platform`` (a ``sys.platform`` value): Windows, macOS (with pyobjc), or the null adapter
+    elsewhere."""
     if platform == "win32":
         from .adapters.windows import platform as windows
 
         return windows.build()
+    if platform == "darwin":
+        if importlib.util.find_spec("objc") is not None:
+            from .adapters.macos import platform as macos
+
+            return macos.build()
+        log.warning("pyobjc is not installed (pip install -r requirements.txt): the cat can't see or use the "
+                    "desktop on this Mac")
     from .adapters import null
 
     return null.build()

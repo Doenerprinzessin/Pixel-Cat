@@ -16,4 +16,4 @@ That’s where the Cat Pass comes in. Every game gives you XP, which fills up th
 
 And if you don’t like how the menus and the chat look, there’s a Style setting with 10 different looks (Cat Chat, Modern White, Modern Black, Midnight, Retro Terminal and more), plus accent colors, sizes and fonts.
 
-Running the tests (for developers): `pip install -r requirements-dev.txt`, then `python -m pytest`. The suite also runs on macOS and Linux: Windows-only tests (marked `windows`) are skipped there, and Qt runs headless. GitHub Actions runs it on Windows and macOS for every push.
+Running the tests (for developers): `pip install -r requirements-dev.txt`, then `python -m pytest`. The suite also runs on macOS and Linux: Windows-only tests (marked `windows`) are skipped there, and Qt runs headless. Tests marked `macos` run only on macOS (read-only, they never ask for a permission); the ones that drive the real Mac (`macos_live`: mouse, keys, volume, a test Keychain item) run only with `PIXELCAT_MACOS_LIVE=1`. GitHub Actions runs it on Windows and macOS for every push.
