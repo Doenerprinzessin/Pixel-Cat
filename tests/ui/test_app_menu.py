@@ -306,7 +306,7 @@ def test_auto_mode(pet) -> None:  # type: ignore[no-untyped-def]
 def test_start_with_windows(pet, app_env) -> None:  # type: ignore[no-untyped-def]
     pet._on_menu("autostart")
     assert app_env.autostart_set == [True] and pet.saved.autostart_asked
-    app_env.desktop.autostart = True
+    app_env.autostart = True
     assert find(pet.menus.menu_items(), "autostart").checked
     pet._on_menu("autostart")
     assert app_env.autostart_set == [True, False]

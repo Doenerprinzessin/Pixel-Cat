@@ -2,8 +2,9 @@
 
 The widgets and the app controller reach the desktop (window styles, the cursor, monitors, the window
 list, the PC, DPAPI...) only through the ports of ``fake_platform``; what those ports answer comes from
-:class:`Desktop` here.  Ollama, the Copilot runtime and the browser are replaced too, so the tests do the
-same on macOS and on a real Windows desktop.
+:class:`Desktop` (the pointer, the monitors, the windows) and :class:`AppEnv` (autostart, the PC, DPAPI)
+here.  Ollama, the Copilot runtime and the browser are replaced too, so the tests do the same on macOS and
+on a real Windows desktop.
 """
 from __future__ import annotations
 
@@ -21,17 +22,14 @@ MONITOR = Monitor(handle=1, rect=(0, 0, 1920, 1080), work=(0, 0, 1920, 1040), dp
 
 @dataclass
 class Desktop:
-    """What the fake desktop reports, and what was asked of it."""
+    """What the fake desktop reports (what was asked of it is recorded by the ports of ``fake_platform``)."""
 
     cursor: tuple[int, int] = (5000, 5000)          # far away from everything
-    buttons_down: bool = False
-    idle: float = 0.0
     monitors: list[Monitor] = field(default_factory=lambda: [MONITOR])
     windows: list[Any] = field(default_factory=list)
     foreground: int = 0
     fullscreen: bool = False
     user_state: UserState = UserState.NORMAL
-    autostart: bool = False
 
 
 def _fake_protect(data: bytes) -> bytes:
@@ -55,8 +53,6 @@ def desktop(fake_platform) -> Desktop:  # type: ignore[no-untyped-def]
     d = Desktop()
     inp, disp, wins = fake_platform.input, fake_platform.display, fake_platform.windows
     inp.answers("cursor_pos", lambda: d.cursor)
-    inp.answers("mouse_buttons_down", lambda: d.buttons_down)
-    inp.answers("idle_seconds", lambda: d.idle)
     disp.returns("window_dpi", 96)
     disp.answers("monitors", lambda: list(d.monitors))
     disp.answers("user_state", lambda: d.user_state)
@@ -96,8 +92,8 @@ def _flush_deletes() -> None:
 
 @pytest.fixture(autouse=True)
 def close_new_windows(qapp):  # type: ignore[no-untyped-def]
-    """Every window a test opened (popups, effects, the tray's menu...) is deleted before the
-    desktop stubs are undone - so no timer of a leftover window runs later against real Win32
+    """Every window a test opened (popups, effects, the tray's menu...) is deleted at the end of the
+    test - so no timer of a leftover window runs later against another test's fake platform
     (and queued single-shot calls to a deleted app object are dropped)."""
     import shiboken6
 
@@ -154,6 +150,7 @@ class AppEnv:
     user_settings: list[tuple[str, Any]] = field(default_factory=list)
     ensures: list[bool] = field(default_factory=list)
     opened_urls: list[str] = field(default_factory=list)
+    autostart: bool = False                         # what "start with Windows" reports
     autostart_set: list[bool] = field(default_factory=list)
     clipboard: Any = field(default_factory=lambda: Clipboard())
 
@@ -185,7 +182,7 @@ def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path, fake_pl
     monkeypatch.setattr(app_mod, "save_state", lambda st, *a, **k: env.saved_states.append(st))
     monkeypatch.setattr(persistence, "last_load", "fresh")            # (another test may have loaded a save)
     monkeypatch.setattr(ProgressIO, "_documents", staticmethod(lambda: tmp_path / "Documents"))
-    fake_platform.autostart.answers("enabled", lambda: desktop.autostart)
+    fake_platform.autostart.answers("enabled", lambda: env.autostart)
     fake_platform.autostart.answers("set", lambda on: (env.autostart_set.append(on), True)[1])
     monkeypatch.setattr(SpriteLibrary, "prewarm", lambda self, poses, scale: 0)     # (a 1 s warm-up cache)
     fake_platform.system.answers("hardware", lambda fresh=False: Hardware(
