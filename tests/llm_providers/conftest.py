@@ -6,7 +6,7 @@
 * ``creds``: in-memory credentials (never written, never encrypted).
 * ``fake_crypt``: a reversible fake secret store (pass it as ``secrets=``), so keys.dat
   tests never reach Windows' DPAPI (they run the same on Windows CI).
-* ``record``: a Recorder of every signal a provider worker emits, in order.
+* ``record``: a Recorder of every event a provider's chat job reports, in order.
 * Module globals the providers keep between requests (learned settings, model names, test
   endpoints) are reset for every test.
 """
@@ -68,6 +68,6 @@ def provider_state(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture
-def record(qapp):
-    """``rec = record(worker)``: a Recorder (the QApplication exists first)."""
+def record():
+    """``rec = record(job)``: a Recorder of what the job (built with a RecordingEvents) reports."""
     return Recorder

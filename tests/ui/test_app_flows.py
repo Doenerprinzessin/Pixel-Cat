@@ -9,6 +9,7 @@ import pytest
 
 from pixelcat.engine.states import S
 from pixelcat.llm import external
+from pixelcat.llm.chat_job import ExternalChat
 from pixelcat.llm.watch import Watch
 
 pytestmark = pytest.mark.qt
@@ -126,8 +127,8 @@ def test_click_double_click_drag_and_drop(pet) -> None:  # type: ignore[no-untyp
 
 
 # ---------------------------------------------------------------- external models
-class FakeExternal(external.ExternalWorker):
-    def start(self) -> None:  # type: ignore[override]
+class FakeExternal(ExternalChat):
+    def run(self) -> None:
         pass
 
 
@@ -137,12 +138,12 @@ def claude(pet, monkeypatch):  # type: ignore[no-untyped-def]
 
     made: list = []  # type: ignore[type-arg]
 
-    def make(mid, msgs, tools, think, effort, creds, info, auth):  # type: ignore[no-untyped-def]
-        w = FakeExternal("anthropic", mid, msgs, tools, think, effort, creds)
+    def make(req, events):  # type: ignore[no-untyped-def]
+        w = FakeExternal("anthropic", req, events)
         made.append(w)
         return w
 
-    monkeypatch.setattr(anthropic_client, "AnthropicWorker", make)
+    monkeypatch.setattr(anthropic_client, "AnthropicChat", make)
     pet.creds.set("anthropic_key", "k")
     pet._ext_p("anthropic")["models"] = [{"id": "m1", "name": "Claude One", "context": 200_000}]
     pet.cfg.model = "anthropic:m1"
@@ -159,11 +160,11 @@ def test_an_external_answer_counts_its_tokens(pet, claude) -> None:  # type: ign
     _say(pet, "hi claude")
     w = claude[-1]
     assert w.messages[-1]["content"] == "hi claude" and w.web is True
-    w.status.emit(external.SEARCHING)
+    w.events.status(external.SEARCHING)
     assert pet.chat.msgs[-1].text == external.SEARCHING
-    w.used.emit("anthropic", 4321)
+    w.events.used("anthropic", 4321)
     w.raw, w.note = [{"type": "text", "text": "Hello!"}], "This model always thinks."
-    w.done.emit("Hello!", [])
+    w.events.done("Hello!", [])
     assert pet._budget("anthropic").used() == 4321
     assert pet.history[-1]["raw"] == [{"type": "text", "text": "Hello!"}]
     assert any(m.text == "This model always thinks." for m in pet.chat.msgs)
@@ -171,13 +172,13 @@ def test_an_external_answer_counts_its_tokens(pet, claude) -> None:  # type: ign
 
 def test_a_too_long_request_is_shortened_and_sent_again(pet, claude) -> None:  # type: ignore[no-untyped-def]
     _say(pet, "a long story")
-    claude[-1].failed.emit("too_long", json.dumps({"limit": 100_000, "actual": 150_000}))
+    claude[-1].events.failed("too_long", json.dumps({"limit": 100_000, "actual": 150_000}))
     assert len(claude) == 2 and pet._ext_p("anthropic")["ctx_learned"]["m1"] >= external.MIN_BUDGET
     assert "shortened the older parts" in pet.chat.msgs[-2].text
     learned = pet._ext_p("anthropic")["ctx_learned"]["m1"]
     assert pet._ctx_budget() == learned
-    claude[-1].failed.emit("too_long", "{}")
-    claude[-1].failed.emit("too_long", "{}")
+    claude[-1].events.failed("too_long", "{}")
+    claude[-1].events.failed("too_long", "{}")
     assert len(claude) == 3 and pet.chat.msgs[-1].role == "error" and not pet._task_active
 
 
@@ -192,7 +193,7 @@ def test_a_provider_limit_pauses_the_task(pet, claude) -> None:  # type: ignore[
 @pytest.mark.parametrize("kind", ["auth", "ext_offline", "refused"])
 def test_other_external_failures_end_the_task(pet, claude, kind: str) -> None:  # type: ignore[no-untyped-def]
     _say(pet, "hi")
-    claude[-1].failed.emit(kind, "detail")
+    claude[-1].events.failed(kind, "detail")
     assert pet.chat.msgs[-1].role == "error" and not pet._task_active
 
 
@@ -241,7 +242,7 @@ def test_a_wake_waits_while_the_cat_is_busy(pet, workers) -> None:  # type: igno
     pet._end_task()
     pet._drain_wakes()
     assert pet._wakes == [] and len(workers) == 1 and pet._task_wake
-    workers[-1].done.emit("Done: it happened.", [])
+    workers[-1].events.done("Done: it happened.", [])
     assert pet.brain.bubble.kind == "bubble_exclaim"
 
 

@@ -44,6 +44,8 @@ from pixelcat.bootstrap import build_platform  # noqa: E402
 from pixelcat.llm import copilot_client as CC  # noqa: E402
 from pixelcat.llm import external as X  # noqa: E402
 from pixelcat.llm import github_signin as GS  # noqa: E402
+from pixelcat.llm.qt_chat import QtChatWorker  # noqa: E402
+from pixelcat.ports.llm import ChatRequest  # noqa: E402
 
 SECRETS = build_platform().secrets                 # keys.dat, as the app keeps it
 
@@ -161,10 +163,10 @@ def run_worker(chat, history: list, model: str = "fake-model", think: bool = Tru
                timeout: float = 60.0, info: dict | None = None, cancel_after: float | None = None,
                web: bool = False, on_perm=None) -> dict:
     out: dict = {"tokens": [], "thinking": 0, "done": None, "failed": None, "used": [], "credits": []}
-    w = CC.CopilotWorker(model, chat, history, "You are Pixel, a test cat.", TOOLS, think, effort,
-                         X.MemoryCredentials({}), "key", info if info is not None else
-                         next((m for m in MODELS if m["id"] == model), {}))
-    w.web = web
+    req = ChatRequest(model, history, TOOLS, think, effort, X.MemoryCredentials({}), "key",
+                      info if info is not None else next((m for m in MODELS if m["id"] == model), {}), web=web,
+                      history=history, system="You are Pixel, a test cat.", conversation=chat)
+    w = QtChatWorker(lambda events: CC.CopilotJob(req, events), provider="copilot", model=model, local=False)
     if on_perm is not None:
         w.permission.connect(on_perm)
     w.token.connect(lambda t: out["tokens"].append(t))

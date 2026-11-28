@@ -49,6 +49,8 @@ from pixelcat.llm import anthropic_client as AC  # noqa: E402
 from pixelcat.llm import chatgpt_signin as CS  # noqa: E402
 from pixelcat.llm import external as X  # noqa: E402
 from pixelcat.llm import openai_client as OC  # noqa: E402
+from pixelcat.llm.qt_chat import QtChatWorker  # noqa: E402
+from pixelcat.ports.llm import ChatRequest  # noqa: E402
 
 SECRETS = build_platform().secrets                 # keys.dat, as the app keeps it
 
@@ -398,9 +400,19 @@ CS.URLS.update(issuer=BASE + "/auth", authorize=BASE + "/auth/authorize", token=
 CS.PORT = 0
 
 
+def anthropic_worker(model, messages, tools, think, effort, creds, info=None, auth="key") -> QtChatWorker:
+    req = ChatRequest(model, messages, tools, think, effort, creds, auth, info or {})
+    return QtChatWorker(lambda events: AC.AnthropicChat(req, events), provider="anthropic", model=model, local=False)
+
+
+def openai_worker(model, messages, tools, think, effort, creds, auth="key") -> QtChatWorker:
+    req = ChatRequest(model, messages, tools, think, effort, creds, auth)
+    return QtChatWorker(lambda events: OC.OpenAIChat(req, events), provider="openai", model=model, local=False)
+
+
 def run_worker(w, timeout: float = 20.0, web: bool = False) -> dict:
     out: dict = {"tokens": [], "thinking": 0, "done": None, "failed": None, "used": [], "status": []}
-    w.web = web
+    w.job.web = web
     w.status.connect(lambda s: out["status"].append(s))
     w.token.connect(lambda t: out["tokens"].append(t))
     w.thinking.connect(lambda n: out.__setitem__("thinking", n))
@@ -545,7 +557,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     S["mode"] = "tool"
     tools = [{"type": "function", "function": {"name": "open_app", "description": "Open an app",
                                                "parameters": {"type": "object", "properties": {"name": {"type": "string"}}}}}]
-    out = run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], tools, True, "high", creds, info))
+    out = run_worker(anthropic_worker("claude-opus-5-5", HISTORY[:2], tools, True, "high", creds, info))
     body, hdr = S["bodies"][-1], S["headers"][-1]
     check("Claude: streamed text, thinking shown, the tool call (with its id and arguments)",
           out["done"] is not None and out["done"][0] == "Hello there!" and out["thinking"] > 0
@@ -559,33 +571,33 @@ def main() -> int:  # noqa: C901 - a linear test script
           and body.get("fallbacks") == "default" and "thinking-binding-controls-2026-08-01" in hdr.get("anthropic-beta", "")
           and "server-side-fallback-2026-07-01" in hdr.get("anthropic-beta", "") and key_of(hdr) == "sk-ant-secret-123",
           json.dumps({k: body.get(k) for k in ("thinking", "output_config", "fallbacks")}))
-    w = AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], tools, True, "high", creds, info)
+    w = anthropic_worker("claude-opus-5-5", HISTORY[:2], tools, True, "high", creds, info)
     run_worker(w)
     check("...the reply's own blocks kept for next time (thinking with its signature)",
           w.raw is not None and w.raw[0].get("type") == "thinking" and w.raw[0].get("signature") == "SIG1")
     S["mode"] = "off_once"
     n0 = len(S["bodies"])
-    out = run_worker(AC.AnthropicWorker("claude-sonnet-5-5", HISTORY[:2], None, False, "max", creds, info))
+    out = run_worker(anthropic_worker("claude-sonnet-5-5", HISTORY[:2], None, False, "max", creds, info))
     sent = [bd.get("thinking", {}).get("type") for bd in S["bodies"][n0:]]
     check("thinking off: 'disabled' refused -> 'between_tools' (effort capped at high) - and remembered",
           out["done"] is not None and sent == ["disabled", "between_tools"]
           and S["bodies"][-1]["output_config"]["effort"] == "high", str(sent))
     n0 = len(S["bodies"])
-    run_worker(AC.AnthropicWorker("claude-sonnet-5-5", HISTORY[:2], None, False, "low", creds, info))
+    run_worker(anthropic_worker("claude-sonnet-5-5", HISTORY[:2], None, False, "low", creds, info))
     check("...the next request starts with what worked", [bd.get("thinking", {}).get("type")
                                                           for bd in S["bodies"][n0:]] == ["between_tools"])
     S["mode"] = "rate"
-    out = run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info))
+    out = run_worker(anthropic_worker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info))
     det = json.loads(out["failed"][1]) if out["failed"] and out["failed"][0] == "limit" else {}
     left = (datetime.fromtimestamp(det["reset"]) - datetime.now()).total_seconds() if det.get("reset") else 0
     check("rate limit: reported as the provider's limit, with when it lifts", det.get("why") == "rate"
           and 500 < left < 700, str(out["failed"]))
     S["mode"] = "credits"
-    out = run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info))
+    out = run_worker(anthropic_worker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info))
     check("credits used up: the provider's limit (no reset)", out["failed"] and out["failed"][0] == "limit"
           and json.loads(out["failed"][1])["why"] == "credits", str(out["failed"]))
     S["mode"] = "refusal"
-    out = run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info))
+    out = run_worker(anthropic_worker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info))
     check("a refusal is reported (not shown as an empty answer)", out["failed"] and out["failed"][0] == "refused",
           str(out["failed"]))
     S["mode"] = "text"
@@ -597,7 +609,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     (d / "credentials" / "default.json").write_text(json.dumps({"access_token": "tok-signin",
                                                                 "expires_at": int(time.time()) + 3600}))
     os.environ["ANTHROPIC_API_KEY"] = "sk-ant-env"     # (must not be used for the sign-in)
-    run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info, auth="signin"))
+    run_worker(anthropic_worker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info, auth="signin"))
     os.environ.pop("ANTHROPIC_API_KEY")
     shutil.rmtree(d)
     check("signed in with Anthropic: Pixel Cat's own sign-in is used - not the saved key, not the environment",
@@ -607,14 +619,14 @@ def main() -> int:  # noqa: C901 - a linear test script
           and ms[0]["adaptive"] and ms[0]["effort"][-1] == "max" and ms[1]["effort"] == []
           and ms[0]["context"] == 1_000_000)
     S["mode"] = "too_long"
-    out = run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info))
+    out = run_worker(anthropic_worker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info))
     S["mode"] = "text"
     check("Claude: a request that is too long is reported as such (with the numbers)",
           out["failed"] is not None and out["failed"][0] == "too_long"
           and json.loads(out["failed"][1])["limit"] == 200_000, str(out["failed"]))
     # Claude's web search -------------------------------------------------------------------------
     S["mode"] = "search"
-    out = run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], tools, True, "medium", creds, info), web=True)
+    out = run_worker(anthropic_worker("claude-opus-5-5", HISTORY[:2], tools, True, "medium", creds, info), web=True)
     body = S["bodies"][-1]
     ws = [t for t in body.get("tools", []) if t.get("name") == "web_search"]
     text = out["done"][0] if out["done"] else ""
@@ -623,14 +635,14 @@ def main() -> int:  # noqa: C901 - a linear test script
           ws == [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}] and len(body["tools"]) == 2
           and "Cats are napping." in text and "**Sources:** [Cat News](https://news.example.org/cats)" in text
           and X.SEARCHING in out["status"], f"{ws} {text!r} {out['status']}")
-    run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], tools, True, "medium", creds, info), web=False)
-    run_worker(AC.AnthropicWorker("claude-old", HISTORY[:2], tools, True, "medium", creds,
-                                  dict(info, web_search=False)), web=True)
+    run_worker(anthropic_worker("claude-opus-5-5", HISTORY[:2], tools, True, "medium", creds, info), web=False)
+    run_worker(anthropic_worker("claude-old", HISTORY[:2], tools, True, "medium", creds,
+                                dict(info, web_search=False)), web=True)
     check("...off (Settings) or a model without it: no web search tool",
           all(t.get("name") != "web_search" for b_ in S["bodies"][-2:] for t in b_.get("tools", [])))
     S["mode"] = "pause_once"
     n0 = len(S["bodies"])
-    out = run_worker(AC.AnthropicWorker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info), web=True)
+    out = run_worker(anthropic_worker("claude-opus-5-5", HISTORY[:2], None, True, "medium", creds, info), web=True)
     cont = S["bodies"][-1]["messages"][-1] if len(S["bodies"]) > n0 else {}
     check("a reply paused during long searches (pause_turn) is sent back and continued; tokens of both counted",
           len(S["bodies"]) == n0 + 2 and cont.get("role") == "assistant"
@@ -638,7 +650,7 @@ def main() -> int:  # noqa: C901 - a linear test script
           and "Cats are napping." in out["done"][0] and len(out["used"]) == 2, str(cont)[:200])
     S["mode"] = "search_off"
     n0 = len(S["bodies"])
-    w_ = AC.AnthropicWorker("claude-sonnet-5-5", HISTORY[:2], None, True, "medium", creds, info)
+    w_ = anthropic_worker("claude-sonnet-5-5", HISTORY[:2], None, True, "medium", creds, info)
     out = run_worker(w_, web=True)
     check("web search turned off for the organization: asked again without it, and the chat is told once",
           out["done"] is not None and len(S["bodies"]) == n0 + 2 and "turned off" in w_.note, w_.note)
@@ -647,7 +659,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     # OpenAI --------------------------------------------------------------------------------------
     creds.set("openai_key", "sk-oa-1")
     S["oa_mode"] = "tool"
-    out = run_worker(OC.OpenAIWorker("gpt-6.1", HISTORY[:2], tools, True, "high", creds, "key"))
+    out = run_worker(openai_worker("gpt-6.1", HISTORY[:2], tools, True, "high", creds, "key"))
     body = S["bodies"][-1]
     check("OpenAI: streamed text, the tool call, tokens counted",
           out["done"] == ("Hi from GPT", [{"id": "call_9", "name": "open_app", "arguments": {"name": "Paint"}}])
@@ -658,20 +670,20 @@ def main() -> int:  # noqa: C901 - a linear test script
           and S["headers"][-1]["Authorization"] == "Bearer sk-oa-1")
     S["oa_mode"] = "no_effort"
     n0 = len(S["bodies"])
-    out = run_worker(OC.OpenAIWorker("o5-mini", HISTORY[:2], None, True, "medium", creds, "key"))
+    out = run_worker(openai_worker("o5-mini", HISTORY[:2], None, True, "medium", creds, "key"))
     check("reasoning.effort refused -> asked again without it", out["done"] is not None
           and ["reasoning" in bd for bd in S["bodies"][n0:]] == [True, False])
     S["oa_mode"] = "plan"
-    out = run_worker(OC.OpenAIWorker("gpt-6.1", HISTORY[:2], None, True, "medium", creds, "key"))
+    out = run_worker(openai_worker("gpt-6.1", HISTORY[:2], None, True, "medium", creds, "key"))
     check("the ChatGPT plan's limit: the provider's limit (no reset time made up)",
           out["failed"] and json.loads(out["failed"][1]) == {"provider": "openai", "why": "plan", "detail": "limit",
                                                              "reset": None}, str(out["failed"]))
     S["oa_mode"] = "too_long"
-    out = run_worker(OC.OpenAIWorker("gpt-6.1", HISTORY[:2], None, True, "medium", creds, "key"))
+    out = run_worker(openai_worker("gpt-6.1", HISTORY[:2], None, True, "medium", creds, "key"))
     check("OpenAI: context_length_exceeded is reported as 'too long'", out["failed"] is not None
           and out["failed"][0] == "too_long", str(out["failed"]))
     S["oa_mode"] = "search"
-    out = run_worker(OC.OpenAIWorker("gpt-6.1", HISTORY[:2], tools, True, "medium", creds, "key"), web=True)
+    out = run_worker(openai_worker("gpt-6.1", HISTORY[:2], tools, True, "medium", creds, "key"), web=True)
     body = S["bodies"][-1]
     text = out["done"][0] if out["done"] else ""
     check("OpenAI web search (on): {type: web_search} next to the cat's tools; 'searching' shown; the inline "
@@ -681,7 +693,7 @@ def main() -> int:  # noqa: C901 - a linear test script
           and text.endswith("**Sources:** [Cat - Wiki](https://wiki.example.org/Cat)"), repr(text))
     S["oa_mode"] = "no_search"
     n0 = len(S["bodies"])
-    w_ = OC.OpenAIWorker("gpt-6.1-mini", HISTORY[:2], None, False, "medium", creds, "key")
+    w_ = openai_worker("gpt-6.1-mini", HISTORY[:2], None, False, "medium", creds, "key")
     out = run_worker(w_, web=True)
     check("...a model that refuses web search: asked again without it (and the chat is told)",
           out["done"] is not None and [{"type": "web_search"} in b_.get("tools", []) for b_ in S["bodies"][n0:]]
@@ -746,13 +758,13 @@ def main() -> int:  # noqa: C901 - a linear test script
     S["bad_sig"] = False
     check("...an ID token with a bad signature is refused", "signature" in bad, bad)
     S["oa_mode"] = "tool"
-    out = run_worker(OC.OpenAIWorker("gpt-6.1-sol", HISTORY[:2], None, True, "medium", creds, "chatgpt"))
+    out = run_worker(openai_worker("gpt-6.1-sol", HISTORY[:2], None, True, "medium", creds, "chatgpt"))
     check("requests with the ChatGPT sign-in: the access token", S["headers"][-1]["Authorization"] == "Bearer chatgpt-AT"
           and out["done"] is not None)
     c = creds.get("chatgpt")
     c.update(access_token="chatgpt-old", expires_at=time.time() - 10)
     creds.set("chatgpt", c)
-    out = run_worker(OC.OpenAIWorker("gpt-6.1-sol", HISTORY[:2], None, True, "medium", creds, "chatgpt"))
+    out = run_worker(openai_worker("gpt-6.1-sol", HISTORY[:2], None, True, "medium", creds, "chatgpt"))
     check("...an expired sign-in is renewed first (refresh token rotated)", out["done"] is not None
           and S["headers"][-1]["Authorization"] == "Bearer chatgpt-new" and creds.get("chatgpt")["refresh_token"] == "R2"
           and S["token"][-1]["grant_type"] == "refresh_token" and S["token"][-1]["client_id"] == "oaiapp_123")

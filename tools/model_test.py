@@ -35,6 +35,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from pixelcat.adapters.windows import installer, win32  # noqa: E402
 from pixelcat.llm.model_status import ModelStatus, model_on_disk, same_model  # noqa: E402
+from pixelcat.llm.qt_chat import QtNotifier  # noqa: E402
 from pixelcat.settings import Config  # noqa: E402
 
 results: list[tuple[str, bool, str]] = []
@@ -132,15 +133,25 @@ class Fake:
             threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
 
+NOTIFIERS: dict[int, QtNotifier] = {}
+
+
+def changed(st: ModelStatus):  # type: ignore[no-untyped-def]
+    """The status's ``changed`` signal (its QtNotifier)."""
+    return NOTIFIERS[id(st)].changed
+
+
 def status_for(fake: Fake | None, may: bool = False, finder=lambda: None, starter=lambda exe: None,
                port: int | None = None) -> tuple[ModelStatus, list[str]]:
     cfg = Config()
     cfg.model = "fakecat:7b"
     cfg.connect_timeout_s = 2
     cfg.ollama_url = f"http://127.0.0.1:{port or (fake.port if fake else 9)}"
-    st = ModelStatus(cfg, may_download=lambda: may, ollama_finder=finder, starter=starter)
+    notifier = QtNotifier()                        # (like the app: the status changes arrive as a Qt signal)
+    st = ModelStatus(cfg, may_download=lambda: may, ollama_finder=finder, starter=starter, notify=notifier.changed.emit)
+    NOTIFIERS[id(st)] = notifier
     seen: list[str] = []
-    st.changed.connect(lambda: seen.append(st.state) if not seen or seen[-1] != st.state else None)
+    changed(st).connect(lambda: seen.append(st.state) if not seen or seen[-1] != st.state else None)
     return st, seen
 
 
@@ -155,7 +166,7 @@ def part_status() -> None:
     fake.present = {"fakecat:7b"}
     st, seen = status_for(fake)
     chat = ChatWindow(SpriteLibrary("charcoal"), display=build_platform().display)
-    st.changed.connect(lambda: chat.set_model_banner(st.banner()), Qt.ConnectionType.QueuedConnection)
+    changed(st).connect(lambda: chat.set_model_banner(st.banner()), Qt.ConnectionType.QueuedConnection)
     st.ensure()
     pump(15, lambda: st.state == "loading" and not chat.model_bar.isHidden())   # (a cold first run is slow)
     shown = chat.model_bar.text() if not chat.model_bar.isHidden() else ""
@@ -182,7 +193,7 @@ def part_status() -> None:
     # missing, OK given -> download with progress -> load -> ready
     st, seen = status_for(fake, may=True)
     pct: list[str] = []
-    st.changed.connect(lambda: pct.append(st.banner() or "") if st.state == "downloading" else None,
+    changed(st).connect(lambda: pct.append(st.banner() or "") if st.state == "downloading" else None,
                        Qt.ConnectionType.DirectConnection)   # read at emit time, not when the GUI gets to it
     st.ensure()
     pump(20, lambda: st.state == "ready")

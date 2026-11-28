@@ -1,4 +1,4 @@
-"""anthropic_client: the client, the model list, and AnthropicWorker's request, stream, retries
+"""anthropic_client: the client, the model list, and AnthropicChat's request, stream, retries
 and error mapping.
 
 End-to-end tests run the real ``anthropic`` SDK against a fake Messages API on 127.0.0.1;
@@ -15,12 +15,13 @@ import anthropic
 import httpx2
 import pytest
 
+from fakes.chat import RecordingEvents
 from llm_providers.fakes import HISTORY, SSE, TOOLS, Json
 from pixelcat.llm import anthropic_client as AC
 from pixelcat.llm import ant_tool
 from pixelcat.llm.external import SEARCHING, MemoryCredentials
+from pixelcat.ports.llm import ChatRequest
 
-pytestmark = pytest.mark.qt
 
 INFO = {"adaptive": True, "effort": ["low", "medium", "high", "xhigh", "max"], "max_tokens": 128_000}
 ASK = HISTORY[:2]
@@ -99,9 +100,9 @@ def bodies(api) -> list[dict]:
 def run(record, model: str = "claude-opus-5-5", msgs: list | None = None, tools: list | None = None,
         think: bool = True, effort: str = "high", creds: Any = None, info: dict | None = INFO, web: bool = False,
         auth: str = "key"):
-    w = AC.AnthropicWorker(model, ASK if msgs is None else msgs, tools, think, effort,
-                           creds or MemoryCredentials({"anthropic_key": "sk-ant-secret-123"}), info, auth)
-    w.web = web
+    w = AC.AnthropicChat(ChatRequest(model, ASK if msgs is None else msgs, tools, think, effort,
+                                     creds or MemoryCredentials({"anthropic_key": "sk-ant-secret-123"}), auth,
+                                     info or {}, web=web), RecordingEvents())
     rec = record(w)
     w.run()
     return w, rec
@@ -481,7 +482,8 @@ def test_rate_limit_reset(fake_sdk, record, headers, minutes):
 
 
 def test_connection_error_after_cancel_is_quiet(fake_sdk, record, monkeypatch):
-    w = AC.AnthropicWorker("claude-opus-5-5", ASK, None, True, "high", MemoryCredentials({}), INFO)
+    w = AC.AnthropicChat(ChatRequest("claude-opus-5-5", ASK, None, True, "high", MemoryCredentials({}), "key", INFO),
+                         RecordingEvents())
     rec = record(w)
 
     def stream(**params: Any) -> Any:                # the user cancels; closing the stream drops the connection
@@ -514,7 +516,7 @@ def test_value_error_then_success(fake_sdk, record):
     assert rec.done == ("ok", []) and len(fake_sdk.calls) == 2
 
 
-def test_stream_events_become_signals(fake_sdk, record):
+def test_stream_events_are_reported(fake_sdk, record):
     events = [ev("content_block_start", content_block=SimpleNamespace(type="thinking")),
               delta("thinking_delta", thinking="abc"), delta("thinking_delta", thinking=""),
               ev("content_block_start", content_block=SimpleNamespace(type="thinking")),
@@ -529,8 +531,9 @@ def test_stream_events_become_signals(fake_sdk, record):
                           ("token", "Hi"), ("used", "anthropic", 12), ("done", "Hi", [])]
 
 
-def test_cancel_while_streaming_stops_without_signals(fake_sdk, record):
-    w = AC.AnthropicWorker("claude-opus-5-5", ASK, None, True, "high", MemoryCredentials({}), INFO)
+def test_cancel_while_streaming_reports_nothing(fake_sdk, record):
+    w = AC.AnthropicChat(ChatRequest("claude-opus-5-5", ASK, None, True, "high", MemoryCredentials({}), "key", INFO),
+                         RecordingEvents())
     rec = record(w)
     fake_sdk.script = [FakeStream([delta("text_delta", text="a"), delta("text_delta", text="b")],
                                   final({"type": "text", "text": "ab"}), on_event=lambda e: w.cancel())]

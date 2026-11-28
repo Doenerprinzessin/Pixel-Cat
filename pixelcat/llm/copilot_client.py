@@ -33,10 +33,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import Signal
-
 from .. import paths
-from .external import Credentials, ExternalWorker, media_type
+from ..ports.llm import ChatEvents, ChatRequest
+from .chat_job import ExternalChat
+from .external import Credentials, media_type
 
 log = logging.getLogger(__name__)
 
@@ -499,14 +499,14 @@ class CopilotChat:
         self.perms: list[asyncio.Future] = []        # web pages waiting for the user's OK
 
     # -- the session --------------------------------------------------------------------------
-    def _effort(self, w: "CopilotWorker") -> str | None:
+    def _effort(self, w: "CopilotJob") -> str | None:
         return pick_effort(w.think, w.effort, (w.info or {}).get("efforts") or [])
 
     @staticmethod
     def _model_name(model: str) -> str:
         return f"{BYOK['provider']['name']}/{model}" if BYOK is not None else model
 
-    async def _open(self, w: "CopilotWorker", client: Any) -> None:
+    async def _open(self, w: "CopilotJob", client: Any) -> None:
         from copilot.tools import Tool
 
         defs = []
@@ -653,7 +653,7 @@ class CopilotChat:
         _LOOP.submit(self.abort())
 
     # -- one request -----------------------------------------------------------------------------
-    async def step(self, w: "CopilotWorker", token: str) -> None:
+    async def step(self, w: "CopilotJob", token: str) -> None:
         """What the app has that the runtime hasn't (results, messages) goes in; then wait until
         the model wants tools (``done(text, calls)``) or has finished (``done(text, [])``)."""
         hist = w.history
@@ -704,7 +704,7 @@ class CopilotChat:
             fut.set_result(ToolResult(text_result_for_llm=_result_text(m), binary_results_for_llm=pics or None))
         self.order.clear()
 
-    async def _next(self, w: "CopilotWorker | None", timeout: float) -> tuple | None:
+    async def _next(self, w: "CopilotJob | None", timeout: float) -> tuple | None:
         """One event from the runtime (None: nothing within ``timeout``).  Usage is counted
         here, whoever is waiting."""
         assert self.queue is not None
@@ -720,15 +720,15 @@ class CopilotChat:
             if t == "assistant.usage" and w is not None:
                 tokens = int(d.input_tokens or 0) + int(d.output_tokens or 0)
                 if tokens:
-                    w.used.emit("copilot", tokens)
+                    w.events.used("copilot", tokens)
                 cu = d.copilot_usage
                 if cu is not None and cu.total_nano_aiu:
-                    w.credits.emit(float(cu.total_nano_aiu) / 1e9)
+                    w.events.credits(float(cu.total_nano_aiu) / 1e9)
             elif t == "session.idle":
                 self.turn = False
         return item
 
-    async def _wait(self, w: "CopilotWorker") -> None:  # noqa: C901 - one event switch
+    async def _wait(self, w: "CopilotJob") -> None:  # noqa: C901 - one event switch
         texts: list[str] = []
         deltas: list[str] = []
         thought = 0
@@ -742,7 +742,7 @@ class CopilotChat:
             if item is None:
                 if time.time() - quiet_since > IDLE_TIMEOUT:
                     await self.abort()
-                    w.failed.emit("timeout", "")
+                    w.events.failed("timeout", "")
                     return
                 continue
             quiet_since = time.time()
@@ -756,7 +756,7 @@ class CopilotChat:
 
                     def reply(ok: bool, f: asyncio.Future = fut) -> None:     # (from the app's thread)
                         loop.call_soon_threadsafe(lambda: f.done() or f.set_result(bool(ok)))
-                    w.permission.emit(url, reply)
+                    w.events.permission(url, reply)
             else:
                 ev = item[1]
                 if getattr(ev, "agent_id", None):
@@ -766,12 +766,12 @@ class CopilotChat:
                     piece = d.delta_content or ""
                     if piece:
                         deltas.append(piece)
-                        w.token.emit(piece)
+                        w.events.token(piece)
                 elif t == "assistant.reasoning_delta":
                     thought += len(d.delta_content or "") or 1
-                    w.thinking.emit(thought)
+                    w.events.thinking(thought)
                 elif t == "tool.execution_start" and getattr(d, "tool_name", "") == "web_fetch":
-                    w.status.emit("🌐 reading a web page…")
+                    w.events.status("🌐 reading a web page…")
                 elif t == "assistant.message":
                     text = d.content if d.content is not None else "".join(deltas)
                     if text.strip():
@@ -787,12 +787,12 @@ class CopilotChat:
                 elif t == "session.idle":
                     self.turn = False
                     self.expect_reply = True
-                    w.done.emit("\n\n".join(texts) or "".join(deltas), [])
+                    w.events.done("\n\n".join(texts) or "".join(deltas), [])
                     return
             if expected and all(c in calls for c in expected):
                 self.order = list(expected)
                 self.expect_reply = True
-                w.done.emit("\n\n".join(texts), [calls[c] for c in expected])
+                w.events.done("\n\n".join(texts), [calls[c] for c in expected])
                 return
 
 
@@ -809,43 +809,42 @@ def _refuse(request: Any, invocation: Any) -> Any:
     return PermissionDecisionReject(feedback="Only the app's own tools are available.")
 
 
-def _fail(w: "CopilotWorker", d: Any) -> None:
+def _fail(w: "CopilotJob", d: Any) -> None:
     st = int(d.status_code or 0)
     msg = str(d.message or "Copilot didn't answer.")
     kind = " ".join(str(x or "") for x in (d.error_type, d.error_code, d.provider_error_code)).lower()
     low = msg.lower()
     if st == 401 or "authentication" in kind:
-        w.failed.emit("auth", msg)
+        w.events.failed("auth", msg)
     elif st == 402 or any(x in kind or x in low for x in ("quota", "credit", "budget", "billing")):
         w.limit("copilot", None, msg)
     elif st == 429 or "rate" in kind or "rate limit" in low:
         w.limit("rate", None, msg)
     elif st == 403 or "policy" in low or "not enabled" in low:
-        w.failed.emit("denied", msg)
+        w.events.failed("denied", msg)
     elif st == 404 or ("model" in kind and "not" in low):
-        w.failed.emit("model_gone", msg)
+        w.events.failed("model_gone", msg)
     elif st >= 500 or "overload" in low:
-        w.failed.emit("busy", msg)
+        w.events.failed("busy", msg)
     elif any(x in low for x in ("fetch failed", "connect", "network", "getaddrinfo")):
-        w.failed.emit("ext_offline", msg)
+        w.events.failed("ext_offline", msg)
     else:
-        w.failed.emit("error", msg)
+        w.events.failed("error", msg)
 
 
 # ------------------------------------------------------------------ the request thread
-class CopilotWorker(ExternalWorker):
-    """Like the other external workers (same signals), plus ``credits``: AI credits a model call
-    used.  Instead of the trimmed context it gets the app's whole history: the runtime keeps
-    the conversation and only gets what is new (``CopilotChat.step``)."""
+class CopilotJob(ExternalChat):
+    """Like the other external chat jobs (same events), plus ``credits``: AI credits a model call
+    used, and ``permission``: Copilot's web_fetch wants a page (url, reply(ok)) - the app asks.
+    Instead of the trimmed context it gets the app's whole history (``req.history``): the runtime
+    keeps the conversation (``req.conversation``) and only gets what is new (``CopilotChat.step``).
+    The SDK's events are reported from the runtime's asyncio thread."""
 
-    credits = Signal(float)
-    permission = Signal(str, object)     # Copilot's web_fetch wants a page: (url, reply(ok)) - the app asks
-
-    def __init__(self, model: str, chat: CopilotChat, history: list[dict[str, Any]], system: str,
-                 tools: list[dict[str, Any]] | None, think: bool, effort: str, creds: Credentials,
-                 auth: str, info: dict[str, Any] | None = None) -> None:
-        super().__init__("copilot", model, history, tools, think, effort, creds)
-        self.chat, self.history, self.system, self.auth, self.info = chat, history, system, auth, info or {}
+    def __init__(self, req: ChatRequest, events: ChatEvents) -> None:
+        super().__init__("copilot", req, events)
+        self.messages = req.history          # (the whole history, as the app keeps it)
+        self.chat: CopilotChat = req.conversation  # type: ignore[assignment]
+        self.history, self.system, self.auth, self.info = req.history, req.system, req.auth, req.info or {}
 
     def cancel(self) -> None:
         super().cancel()
@@ -855,7 +854,7 @@ class CopilotWorker(ExternalWorker):
         try:
             token = token_of(self.creds, self.auth)
         except CopilotError as e:
-            self.failed.emit(e.kind, str(e))
+            self.events.failed(e.kind, str(e))
             return
         fut = _LOOP.submit(self.chat.step(self, token))
         while True:
@@ -869,5 +868,5 @@ class CopilotWorker(ExternalWorker):
                     err = _error_of(exc)
                     if err.kind == "error":
                         log.error("Copilot request failed", exc_info=exc)
-                    self.failed.emit(err.kind, str(err))
+                    self.events.failed(err.kind, str(err))
                 return

@@ -1,4 +1,4 @@
-"""ollama_client: the streaming ChatWorker against a fake Ollama on 127.0.0.1, text tool calls,
+"""ollama_client: the streaming OllamaChat against a fake Ollama on 127.0.0.1, text tool calls,
 hiding tool markup, preloading and the cat's error messages."""
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import logging
 
 import pytest
 
+from fakes.chat import RecordingEvents
 from llm_providers.fakes import Json, Lines, Raw
 from pixelcat.llm import ollama_client as OL
+from pixelcat.ports.llm import ChatRequest
 from pixelcat.settings import Config
 
 TOOLS = [{"type": "function", "function": {"name": "open_app", "parameters": {"type": "object"}}}]
@@ -41,14 +43,13 @@ def payloads(ollama) -> list[dict]:
 
 
 def run(record, cfg: Config, think=None, model=None, tools=TOOLS, msgs=MSGS):
-    w = OL.ChatWorker(cfg, msgs, tools, think, model)
+    w = OL.OllamaChat(ChatRequest(model or "", msgs, tools, think, cfg=cfg), RecordingEvents())
     rec = record(w)
     w.run()
     return w, rec
 
 
 # ------------------------------------------------------------------ the worker
-@pytest.mark.qt
 def test_stream_thinking_text_and_tool_calls(ollama, cfg, record):
     ollama.on("POST", "/api/chat", Lines([
         chunk(thinking="Hmm, "), chunk(thinking="ok."), chunk("Hello "), b"", chunk("cat!"),
@@ -65,7 +66,6 @@ def test_stream_thinking_text_and_tool_calls(ollama, cfg, record):
                                 {"name": "c", "arguments": {}}, {"name": "", "arguments": {}}])]
 
 
-@pytest.mark.qt
 def test_payload(ollama, cfg, record):
     ollama.on("POST", "/api/chat", Lines([chunk("x", done=True)]))
     run(record, cfg, model="qwen3.5:9b")
@@ -78,7 +78,6 @@ def test_payload(ollama, cfg, record):
                      MSGS[3]]}
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("think, sent, predict", [(None, None, None), (True, True, 900), (False, False, None)])
 def test_think_flag(ollama, cfg, record, think, sent, predict):
     ollama.on("POST", "/api/chat", Lines([chunk("x", done=True)]))
@@ -88,7 +87,6 @@ def test_think_flag(ollama, cfg, record, think, sent, predict):
     assert w.model == cfg.model
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("status, body, kind, detail", [
     (404, b'{"error":"model \\"x\\" not found, try pulling it first"}', "model_missing", None),
     (400, b'{"error":"registry: not found"}', "model_missing", None),
@@ -103,7 +101,6 @@ def test_http_errors(ollama, cfg, record, status, body, kind, detail):
     assert rec.events == [("failed", kind, detail or body.decode())]
 
 
-@pytest.mark.qt
 def test_a_model_that_cant_think_is_asked_again_without(ollama, cfg, record):
     ollama.on("POST", "/api/chat", Raw(400, b'{"error":"m does not support thinking"}'), Lines([chunk("ok", done=True)]))
     _w, rec = run(record, cfg, think=True)
@@ -111,7 +108,6 @@ def test_a_model_that_cant_think_is_asked_again_without(ollama, cfg, record):
     assert rec.done == ("ok", [])
 
 
-@pytest.mark.qt
 def test_thinking_that_used_up_the_answer_is_asked_again(ollama, cfg, record):
     ollama.on("POST", "/api/chat", Lines([chunk(thinking="long thoughts"), chunk(done=True)]),
               Lines([chunk("short", done=True)]))
@@ -120,7 +116,6 @@ def test_thinking_that_used_up_the_answer_is_asked_again(ollama, cfg, record):
     assert rec.events == [("thinking", 13), ("token", "short"), ("done", "short", [])]
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("err", ["EOF", "error parsing tool call"])
 def test_a_broken_tool_call_is_asked_again_once(ollama, cfg, record, err):
     ollama.on("POST", "/api/chat", Lines([{"error": err}]), Lines([chunk("fine", done=True)]))
@@ -128,15 +123,13 @@ def test_a_broken_tool_call_is_asked_again_once(ollama, cfg, record, err):
     assert len(payloads(ollama)) == 2 and rec.done == ("fine", [])
 
 
-@pytest.mark.qt
-def test_two_broken_answers_end_without_a_signal(ollama, cfg, record):
+def test_two_broken_answers_end_without_an_event(ollama, cfg, record):
     ollama.on("POST", "/api/chat", Lines([{"error": "EOF"}]))
     _w, rec = run(record, cfg)
     assert len(payloads(ollama)) == 2
     assert rec.events == []                      # current behaviour: neither done nor failed
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("lines, kind, detail", [
     ([chunk("partial"), {"error": "EOF"}], "server", "EOF"),
     ([{"error": "model does not support tools"}], "no_tools", "model does not support tools"),
@@ -148,7 +141,6 @@ def test_error_lines(ollama, cfg, record, lines, kind, detail):
     assert rec.failed == (kind, detail) and len(payloads(ollama)) == 1
 
 
-@pytest.mark.qt
 def test_full_context_is_logged(ollama, cfg, record, caplog):
     ollama.on("POST", "/api/chat", Lines([chunk("x", done=True, prompt_eval_count=4090)]))
     with caplog.at_level(logging.WARNING, logger=OL.__name__):
@@ -156,7 +148,6 @@ def test_full_context_is_logged(ollama, cfg, record, caplog):
     assert rec.done == ("x", []) and "filled the whole context" in caplog.text
 
 
-@pytest.mark.qt
 def test_offline(record, monkeypatch):
     def post(*a, **kw):
         raise OL.requests.exceptions.ConnectionError("refused")
@@ -165,7 +156,6 @@ def test_offline(record, monkeypatch):
     assert rec.events == [("failed", "offline", "http://localhost:11434/api/chat")]
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("exc, kind, detail", [
     (OL.requests.exceptions.ReadTimeout("slow"), "timeout", "120.0"),
     (RuntimeError("boom"), "error", "boom"),
@@ -178,26 +168,22 @@ def test_timeout_and_other_failures(record, monkeypatch, exc, kind, detail):
     assert rec.events == [("failed", kind, detail)]
 
 
-@pytest.mark.qt
 def test_bad_json_line_is_an_error(ollama, cfg, record):
     ollama.on("POST", "/api/chat", Lines([b"{not json"]))
     _w, rec = run(record, cfg)
     assert rec.failed[0] == "error"
 
 
-@pytest.mark.qt
 def test_cancel_mid_stream_still_reports_what_came(ollama, cfg, record):
     ollama.on("POST", "/api/chat", Lines([chunk("a"), chunk("b"), chunk("c", done=True)]))
-    w = OL.ChatWorker(cfg, MSGS, None)
+    w = OL.OllamaChat(ChatRequest("", MSGS, None, cfg=cfg), RecordingEvents(on={"token": lambda _t: w.cancel()}))
     rec = record(w)
-    w.token.connect(lambda _t: w.cancel())
     w.run()
     assert rec.events == [("token", "a"), ("done", "a", [])]       # current behaviour: done after a cancel
 
 
-@pytest.mark.qt
 def test_cancel_closes_the_response():
-    w = OL.ChatWorker(Config(), [], None)
+    w = OL.OllamaChat(ChatRequest("", [], None, cfg=Config()), RecordingEvents())
 
     class Resp:
         closed = False

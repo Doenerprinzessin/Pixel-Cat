@@ -1,19 +1,22 @@
-"""copilot_client.CopilotChat / CopilotWorker: one chat with the Copilot runtime, played by a
-scripted fake SDK session (no runtime, no GitHub).  The worker runs as a real QThread; its
-signals come from the SDK's asyncio thread and reach the test through Qt's event loop."""
+"""copilot_client.CopilotChat / CopilotJob: one chat with the Copilot runtime, played by a
+scripted fake SDK session (no runtime, no GitHub).  The job runs in its own thread (like the app's
+worker thread); its events come from the SDK's asyncio thread."""
 from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable
 
 import pytest
 
+from fakes.chat import RecordingEvents
 from llm_providers.fakes import PNG, Recorder
 from pixelcat.llm import copilot_client as CC
 from pixelcat.llm import webpage
 from pixelcat.llm.external import MemoryCredentials
+from pixelcat.ports.llm import ChatRequest
 
 pytestmark = pytest.mark.qt
 
@@ -124,33 +127,32 @@ def chat():
 
 @pytest.fixture
 def run_worker(qtbot):
-    started: list[CC.CopilotWorker] = []
+    started: list[threading.Thread] = []
 
     def run(chat: CC.CopilotChat, history: list, model: str = "fake-model", think: bool = True,
             effort: str = "medium", info: dict | None = INFO, web: bool = False, creds: Any = None,
             on_perm: Any = None, cancel_when: Callable[[Recorder], bool] | None = None) -> Recorder:
-        w = CC.CopilotWorker(model, chat, history, "You are Pixel, a test cat.", TOOLS, think, effort,
-                             creds or MemoryCredentials({"copilot_key": "github_pat_1"}), "key", info)
-        w.web = web
+        req = ChatRequest(model, [], TOOLS, think, effort, creds or MemoryCredentials({"copilot_key": "github_pat_1"}),
+                          "key", info or {}, web=web, history=history, system="You are Pixel, a test cat.",
+                          conversation=chat)
+        w = CC.CopilotJob(req, RecordingEvents(on={"permission": on_perm} if on_perm is not None else None))
         rec = Recorder(w)
-        if on_perm is not None:
-            w.permission.connect(on_perm)
-        started.append(w)
-        w.start()
+        th = threading.Thread(target=w.run, daemon=True)   # (like the app's worker thread)
+        started.append(th)
+        th.start()
         if cancel_when is not None:
             qtbot.waitUntil(lambda: cancel_when(rec), timeout=5000)
             w.cancel()
         else:
             qtbot.waitUntil(lambda: rec.done is not None or rec.failed is not None, timeout=5000)
-        assert w.wait(5000)
+        th.join(5)
+        assert not th.is_alive()
         qtbot.wait(20)
         rec.worker = w
         return rec
     yield run
-    for w in started:                    # (a QThread still running at exit aborts the interpreter)
-        if w.isRunning():
-            w.cancel()
-            w.wait(5000)
+    for th in started:
+        th.join(5)
 
 
 # ------------------------------------------------------------------ turns

@@ -22,8 +22,10 @@ from typing import Any
 
 import anthropic
 
-from .external import (ANTHROPIC, BASE_URLS, CLAUDE_MAX_OUT, SEARCHING, Credentials, ExternalWorker, is_too_long,
-                       media_type, too_long, tool_call_ids, wait_reset, with_sources)
+from ..ports.llm import ChatEvents, ChatRequest
+from .chat_job import ExternalChat
+from .external import (ANTHROPIC, BASE_URLS, CLAUDE_MAX_OUT, SEARCHING, Credentials, is_too_long, media_type,
+                       too_long, tool_call_ids, wait_reset, with_sources)
 
 log = logging.getLogger(__name__)
 
@@ -193,13 +195,11 @@ def tools_for_claude(tools: list[dict[str, Any]] | None, eager: bool = True) -> 
 
 
 # ------------------------------------------------------------------ the request
-class AnthropicWorker(ExternalWorker):
-    def __init__(self, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
-                 think: bool, effort: str, creds: Credentials, info: dict[str, Any] | None = None,
-                 auth: str = "key") -> None:
-        super().__init__("anthropic", model, messages, tools, think, effort, creds)
-        self.info = info or {}               # the model's capabilities (from the model list)
-        self.auth = auth
+class AnthropicChat(ExternalChat):
+    def __init__(self, req: ChatRequest, events: ChatEvents) -> None:
+        super().__init__("anthropic", req, events)
+        self.info = req.info or {}           # the model's capabilities (from the model list)
+        self.auth = req.auth
         self._cont: list[dict[str, Any]] = []   # a reply paused by the server (long web searches), continued
         self._pauses = 0
 
@@ -328,15 +328,15 @@ class AnthropicWorker(ExternalWorker):
                         if event.type == "content_block_delta":
                             d = event.delta
                             if d.type == "text_delta" and d.text:
-                                self.token.emit(d.text)
+                                self.events.token(d.text)
                             elif d.type == "thinking_delta":
                                 thought += len(d.thinking or "") or 1
-                                self.thinking.emit(thought)
+                                self.events.thinking(thought)
                         elif event.type == "content_block_start" and getattr(event.content_block, "type", "") == "thinking":
-                            self.thinking.emit(max(1, thought))
+                            self.events.thinking(max(1, thought))
                         elif event.type == "content_block_start" and \
                                 getattr(event.content_block, "type", "") == "server_tool_use":
-                            self.status.emit(SEARCHING)
+                            self.events.status(SEARCHING)
                     final = stream.get_final_message()
             except ValueError as exc:            # a tool call's JSON the SDK couldn't read: ask again
                 log.warning("Claude's tool call couldn't be read (%s) - asking again", exc)
@@ -344,23 +344,23 @@ class AnthropicWorker(ExternalWorker):
             except anthropic.BadRequestError as exc:
                 msg = _message(exc)
                 if is_too_long(msg):
-                    self.failed.emit("too_long", too_long(msg))
+                    self.events.failed("too_long", too_long(msg))
                     return
                 if "credit balance" in msg.lower():
                     self.limit("credits", None, msg)
                     return
                 if self._step_down(opts, msg):
                     continue
-                self.failed.emit("error", msg)
+                self.events.failed("error", msg)
                 return
             except anthropic.AuthenticationError as exc:
-                self.failed.emit("auth", _message(exc))
+                self.events.failed("auth", _message(exc))
                 return
             except anthropic.PermissionDeniedError as exc:
-                self.failed.emit("denied", _message(exc))
+                self.events.failed("denied", _message(exc))
                 return
             except anthropic.NotFoundError as exc:
-                self.failed.emit("model_gone", _message(exc))
+                self.events.failed("model_gone", _message(exc))
                 return
             except anthropic.RateLimitError as exc:
                 msg = _message(exc)
@@ -371,25 +371,25 @@ class AnthropicWorker(ExternalWorker):
                 self.limit("credits", None, _message(exc))
                 return
             except anthropic.InternalServerError as exc:
-                self.failed.emit("busy", _message(exc))
+                self.events.failed("busy", _message(exc))
                 return
             except anthropic.APITimeoutError:
-                self.failed.emit("timeout", "")
+                self.events.failed("timeout", "")
                 return
             except anthropic.APIConnectionError as exc:
                 if not self._cancel:
-                    self.failed.emit("ext_offline", str(exc))
+                    self.events.failed("ext_offline", str(exc))
                 return
             except anthropic.APIStatusError as exc:
-                self.failed.emit("error", f"HTTP {exc.status_code}: {_message(exc)}")
+                self.events.failed("error", f"HTTP {exc.status_code}: {_message(exc)}")
                 return
             except anthropic.AnthropicError as exc:      # no credentials found, and the like
-                self.failed.emit("auth", str(exc))
+                self.events.failed("auth", str(exc))
                 return
             except Exception as exc:  # noqa: BLE001
                 if not self._cancel:
                     log.exception("Claude request failed")
-                    self.failed.emit("error", str(exc))
+                    self.events.failed("error", str(exc))
                 return
             if getattr(final, "stop_reason", None) == "pause_turn" and self._pauses < 4:
                 self._pauses += 1                    # (a long search paused the reply: send it back to go on)
@@ -404,7 +404,7 @@ class AnthropicWorker(ExternalWorker):
         u = final.usage
         total = sum(int(getattr(u, k, 0) or 0) for k in
                     ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-        self.used.emit("anthropic", total)
+        self.events.used("anthropic", total)
         searches = int(getattr(getattr(u, "server_tool_use", None), "web_search_requests", 0) or 0)
         if searches:
             log.info("%s: %d web search(es)", self.model, searches)
@@ -424,7 +424,7 @@ class AnthropicWorker(ExternalWorker):
         stop = getattr(final, "stop_reason", None)
         if stop == "refusal":
             det = getattr(final, "stop_details", None)
-            self.failed.emit("refused", str(getattr(det, "category", "") or ""))
+            self.events.failed("refused", str(getattr(det, "category", "") or ""))
             return
         calls = []
         for b in keep:
@@ -433,10 +433,10 @@ class AnthropicWorker(ExternalWorker):
                     b["input"] = {}
                 calls.append({"id": b.get("id"), "name": b.get("name", ""), "arguments": b["input"]})
         if stop == "max_tokens" and calls:
-            self.failed.emit("truncated", "")
+            self.events.failed("truncated", "")
             return
         self.raw = keep
-        self.done.emit(text, calls)
+        self.events.done(text, calls)
 
 
 def _message(exc: Exception) -> str:
@@ -483,4 +483,4 @@ def signin_status(creds: Credentials) -> bool:
         return False
 
 
-__all__ = ["AnthropicWorker", "list_models", "signin_status", "to_claude", "client", "ANTHROPIC", "json"]
+__all__ = ["AnthropicChat", "list_models", "signin_status", "to_claude", "client", "ANTHROPIC", "json"]

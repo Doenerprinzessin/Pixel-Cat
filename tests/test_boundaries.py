@@ -47,18 +47,11 @@ QT_ALLOWED = {
     "sprites/library.py": "turns the plain sprite rasters into QPixmaps",
     "llm/agent.py": "compares screen pictures (QImage) for the desktop agent",
     "llm/watch.py": "the watches report back with Qt signals",
-    "llm/external.py": "the online chat clients run in QThreads",
-    "llm/model_status.py": "reports model status with Qt signals",
-    "llm/ollama_client.py": "the local chat client runs in a QThread",
-    "llm/copilot_client.py": "reports back with Qt signals",
+    "llm/qt_chat.py": "the Qt bridge: runs a chat job in a QThread and turns its events into signals",
 }
 # Core modules that don't import Qt themselves but load it through a module in QT_ALLOWED.
 QT_VIA = {
     "llm/tools.py": "uses llm/agent.py",
-    "llm/anthropic_client.py": "an llm/external.py worker",
-    "llm/openai_client.py": "an llm/external.py worker",
-    "llm/chatgpt_signin.py": "keeps its Credentials in llm/external.py",
-    "llm/github_signin.py": "keeps its Credentials in llm/external.py",
 }
 # Core files allowed to import a module whose name is only known at run time (path: reason).  None so far.
 DYNAMIC_IMPORTS_ALLOWED: dict[str, str] = {}

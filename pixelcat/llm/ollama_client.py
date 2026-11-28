@@ -1,4 +1,4 @@
-"""Streaming Ollama /api/chat client running in a QThread (the cat never freezes)."""
+"""Streaming Ollama /api/chat client, run on a worker thread (the cat never freezes)."""
 from __future__ import annotations
 
 import json
@@ -7,34 +7,31 @@ import re
 from typing import Any
 
 import requests
-from PySide6.QtCore import QThread, Signal
 
+from ..ports.llm import ChatEvents, ChatRequest
 from ..settings import Config
 
 log = logging.getLogger(__name__)
 
 
 
-class ChatWorker(QThread):
-    """Sends one chat request and streams tokens back via Qt signals.
-
-    Signals are delivered to the GUI thread through queued connections.
+class OllamaChat:
+    """Sends one chat request and streams tokens back through the events sink
+    (``token``, ``thinking``: characters of hidden reasoning so far, ``done``: full content and
+    native tool calls, ``failed``).
     ``failed(kind, detail)`` kinds: offline, model_missing, timeout, no_tools, server, error.
+    The request's ``cfg`` is the Config (url, options); ``model`` may be empty (the default model).
     """
 
-    token = Signal(str)
-    thinking = Signal(int)            # characters of hidden reasoning so far (for a progress hint)
-    done = Signal(str, list)          # full content, native tool calls
-    failed = Signal(str, str)
-
-    def __init__(self, cfg: Config, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
-                 think: bool | None = None, model: str | None = None) -> None:
-        super().__init__()
-        self.cfg = cfg
-        self.model = model or cfg.model   # the chat may use another model than the default
-        self.messages = messages
-        self.tools = tools
-        self.think = think            # decided per request by the app ("auto" mode)
+    def __init__(self, req: ChatRequest, events: ChatEvents) -> None:
+        self.events = events
+        self.cfg: Config = req.cfg
+        self.model = req.model or self.cfg.model   # the chat may use another model than the default
+        self.messages = req.messages
+        self.tools = req.tools
+        self.think = req.think        # decided per request by the app ("auto" mode)
+        self.raw: list[dict[str, Any]] | None = None
+        self.note = ""
         self._cancel = False
         self._resp: requests.Response | None = None
 
@@ -84,11 +81,11 @@ class ChatWorker(QThread):
                     if "does not support thinking" in low and think is not None:
                         return True
                     if resp.status_code == 404 or "not found" in low:
-                        self.failed.emit("model_missing", body)
+                        self.events.failed("model_missing", body)
                     elif "does not support tools" in low:
-                        self.failed.emit("no_tools", body)
+                        self.events.failed("no_tools", body)
                     else:
-                        self.failed.emit("server", f"HTTP {resp.status_code}: {body}")
+                        self.events.failed("server", f"HTTP {resp.status_code}: {body}")
                     return False
                 for line in resp.iter_lines(decode_unicode=True):
                     if self._cancel:
@@ -103,16 +100,16 @@ class ChatWorker(QThread):
                             # logged as "tool call parsing failed"): just ask once more
                             log.warning("the model's answer broke off (%s) - asking again", err)
                             return True
-                        self.failed.emit("no_tools" if "does not support tools" in err else "server", err)
+                        self.events.failed("no_tools" if "does not support tools" in err else "server", err)
                         return False
                     msg = data.get("message") or {}
                     if msg.get("thinking"):
                         thought += len(msg["thinking"])
-                        self.thinking.emit(thought)
+                        self.events.thinking(thought)
                     piece = msg.get("content") or ""
                     if piece:
                         content.append(piece)
-                        self.token.emit(piece)
+                        self.events.token(piece)
                     for tc in msg.get("tool_calls") or []:
                         fn = tc.get("function") or {}
                         args = fn.get("arguments") or {}
@@ -135,17 +132,17 @@ class ChatWorker(QThread):
                         break
         except requests.exceptions.ConnectionError:
             if not self._cancel:
-                self.failed.emit("offline", url)
+                self.events.failed("offline", url)
             return False
         except requests.exceptions.Timeout:
-            self.failed.emit("timeout", str(self.cfg.request_timeout_s))
+            self.events.failed("timeout", str(self.cfg.request_timeout_s))
             return False
         except Exception as exc:  # noqa: BLE001
             if not self._cancel:
                 log.exception("chat request failed")
-                self.failed.emit("error", str(exc))
+                self.events.failed("error", str(exc))
             return False
-        self.done.emit("".join(content), calls)
+        self.events.done("".join(content), calls)
         return False
 
 

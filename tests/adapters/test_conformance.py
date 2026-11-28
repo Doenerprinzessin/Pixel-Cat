@@ -1,4 +1,5 @@
-"""Every adapter implements every port: each method and property, with the port's parameter names and defaults."""
+"""Every adapter implements every port: each method and property, with the port's parameter names and defaults.
+The chat ports (``ports.llm``) too: the chat jobs, the Qt bridge's events sink and Copilot's conversation."""
 from __future__ import annotations
 
 import inspect
@@ -10,6 +11,7 @@ from pixelcat import ports
 from pixelcat.adapters import null
 from pixelcat.adapters.windows import escwatch, notifications
 from pixelcat.adapters.windows import platform as windows
+from pixelcat.llm import anthropic_client, copilot_client, ollama_client, openai_client, qt_chat
 
 IMPLEMENTATIONS = {
     ports.DisplayPort: (windows.WindowsDisplay, null.NullDisplay),
@@ -30,7 +32,14 @@ IMPLEMENTATIONS = {
     ports.SaveMarks: (windows.WindowsSaveMarks, null.NullSaveMarks),
     ports.InstallerPort: (windows.WindowsInstaller, null.NullInstaller),
 }
+CHAT_IMPLEMENTATIONS = {
+    ports.ChatEvents: (qt_chat._QtEvents,),
+    ports.ChatJob: (anthropic_client.AnthropicChat, openai_client.OpenAIChat, copilot_client.CopilotJob,
+                    ollama_client.OllamaChat),
+    ports.Conversation: (copilot_client.CopilotChat,),
+}
 CASES = [(port, impl) for port, impls in IMPLEMENTATIONS.items() for impl in impls]
+CHAT_CASES = [(port, impl) for port, impls in CHAT_IMPLEMENTATIONS.items() for impl in impls]
 
 
 def _members(cls: type) -> dict[str, object]:
@@ -44,10 +53,11 @@ def _params(fn: object) -> list[tuple[str, object, object]]:
 def test_every_port_has_implementations():
     exported = {getattr(ports, name) for name in ports.__all__}
     protocols = {obj for obj in exported if isinstance(obj, type) and getattr(obj, "_is_protocol", False)}
-    assert protocols == set(IMPLEMENTATIONS)
+    assert protocols == set(IMPLEMENTATIONS) | set(CHAT_IMPLEMENTATIONS)
 
 
-@pytest.mark.parametrize("port, impl", CASES, ids=[f"{p.__name__}-{i.__qualname__}" for p, i in CASES])
+@pytest.mark.parametrize("port, impl", CASES + CHAT_CASES,
+                         ids=[f"{p.__name__}-{i.__qualname__}" for p, i in CASES + CHAT_CASES])
 def test_implements_every_member(port, impl):  # type: ignore[no-untyped-def]
     for name, member in _members(port).items():
         got = inspect.getattr_static(impl, name, None)

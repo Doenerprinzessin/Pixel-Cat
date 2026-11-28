@@ -31,13 +31,14 @@ from .engine.states import STATES, S
 from .engine.surfaces import WINDOW_KINDS, SurfaceMap
 from .llm.agent import ToolOutput
 from .llm.model_status import ModelStatus
-from .llm.ollama_client import ChatWorker, friendly_error, parse_text_tool_calls, strip_tool_markup
+from .llm.ollama_client import OllamaChat, friendly_error, parse_text_tool_calls, strip_tool_markup
 from .llm.prompt import build_system_prompt
+from .llm.qt_chat import QtChatWorker, QtNotifier
 from .llm.tools import SCREEN_EYES, AppHooks, ToolBox, ToolError, ToolSpec
 from .llm.watch import Watch, WatchManager
 from .logsetup import RateLimitedLogger
 from .persistence import SavedState, save_state
-from .ports import Platform
+from .ports import ChatRequest, Platform
 from .settings import Config
 from .sprites.library import SpriteLibrary
 from .ui.ball import BallOverlay
@@ -219,10 +220,12 @@ class PixelCatApp(QObject):
 
         # chat / tools state
         # the AI: Ollama started and the model loaded in the background, status shown in the chat
+        self._status_notifier = QtNotifier()           # (the status changes in a background thread)
         self.model_status = ModelStatus(cfg, may_download=lambda: (self.saved.model_download_ok and
                                                                   self.model_status.model == cfg.model)
-                                        or self.model_status.model in self._download_ok)
-        self.model_status.changed.connect(self._on_model_status)
+                                        or self.model_status.model in self._download_ok,
+                                        notify=self._status_notifier.changed.emit)
+        self._status_notifier.changed.connect(self._on_model_status)
         self.watches = WatchManager(self.own_pid, platform=self.platform)  # wait_for watches in the background
         self.watches.fired.connect(self._on_watch_fired)
         self.watches.changed.connect(self._on_watches_changed)
@@ -238,8 +241,8 @@ class PixelCatApp(QObject):
                                              self._tool_clipboard, self.own_pid, watches=self.watches,
                                              task_request=self._task_request), platform=self.platform)
         self.history: list[dict[str, Any]] = []
-        self.worker: ChatWorker | None = None
-        self._live_workers: set[ChatWorker] = set()
+        self.worker: QtChatWorker | None = None
+        self._live_workers: set[QtChatWorker] = set()
         self.native_tools = True
         self._raw = ""
         self._pending_calls: list[dict[str, Any]] = []
@@ -2052,21 +2055,28 @@ class PixelCatApp(QObject):
         st = self.saved.ext_settings
         think, effort = self._ext_think_effort()
         tools = self.toolbox.schemas() if self.cfg.enable_tools else None
+        req = ChatRequest(mid, msgs, tools, think, effort, self.creds, auth)
+        job: Any
         if p == "anthropic":
-            from .llm.anthropic_client import AnthropicWorker
-            w: Any = AnthropicWorker(mid, msgs, tools, think, effort, self.creds, self._ext_info(p, mid), auth)
+            from .llm.anthropic_client import AnthropicChat
+            req.info = self._ext_info(p, mid)
+            job = AnthropicChat
         elif p == "copilot":
             if not self._credit_gate():
                 return None
-            from .llm.copilot_client import CopilotWorker
-            w = CopilotWorker(mid, self._copilot_chat(), self.history, str(msgs[0].get("content", "")) if msgs else "",
-                              tools, think, effort, self.creds, auth, self._ext_info(p, mid))
+            from .llm.copilot_client import CopilotJob
+            req.conversation, req.history = self._copilot_chat(), self.history
+            req.system = str(msgs[0].get("content", "")) if msgs else ""
+            req.info = self._ext_info(p, mid)
+            job = CopilotJob
+        else:
+            from .llm.openai_client import OpenAIChat
+            job = OpenAIChat
+        req.web = bool(st.get("web_search", True))
+        w = QtChatWorker(lambda events: job(req, events), provider=p, model=mid, local=False)
+        if p == "copilot":
             w.credits.connect(self._on_copilot_credits)
             w.permission.connect(self._copilot_permission)
-        else:
-            from .llm.openai_client import OpenAIWorker
-            w = OpenAIWorker(mid, msgs, tools, think, effort, self.creds, auth)
-        w.web = bool(st.get("web_search", True))
         w.used.connect(self._on_ext_used)
         w.status.connect(self._on_status)
         return w
@@ -3318,7 +3328,10 @@ class PixelCatApp(QObject):
                 self._end_task()
                 return
             tools = self.toolbox.schemas() if (self.cfg.enable_tools and self.native_tools) else None
-            worker = ChatWorker(self.cfg, msgs, tools, self._think_now(), model=self._effective_model())
+            think = self._think_now()
+            req = ChatRequest(self._effective_model(), msgs, tools, think, cfg=self.cfg)
+            worker = QtChatWorker(lambda events: OllamaChat(req, events), provider="ollama", model=req.model,
+                                  local=True)
         worker.token.connect(self._on_token)
         worker.thinking.connect(self._on_thinking)
         worker.done.connect(self._on_done)
@@ -3464,7 +3477,7 @@ class PixelCatApp(QObject):
         sender = self.sender()
         self.worker = None
         log.warning("chat failed: %s %s", kind, detail[:200])
-        if isinstance(sender, external.ExternalWorker):
+        if not sender.local:
             self.chat.end_cat()
             if kind == "too_long" and self._ctx_shrink(sender.provider, sender.model, detail):
                 self._request()                          # (the same request, shortened to fit)

@@ -33,8 +33,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from PySide6.QtCore import QThread, Signal
-
 from .. import paths, savecrypt
 
 if TYPE_CHECKING:
@@ -463,42 +461,6 @@ class CreditBudget:
 
     def reset_at(self, now: datetime | None = None) -> datetime:
         return next_reset(self.period, now or datetime.now())
-
-
-# ------------------------------------------------------------------ the request thread
-class ExternalWorker(QThread):
-    """Like ollama_client.ChatWorker (same signals, same messages in), for an external model.
-    ``failed`` kinds: auth, ext_offline, timeout, limit (detail: JSON with why/reset/url),
-    refused, truncated, model_gone, denied, busy, too_long, error.  ``used``: tokens this request
-    used.  ``status``: what the model is doing meanwhile ("searching the web").
-    ``raw``: the model's reply as the provider's own blocks (replayed unchanged next time).
-    ``web``: the provider's own web search may be used (Settings: Web search)."""
-
-    token = Signal(str)
-    thinking = Signal(int)
-    done = Signal(str, list)
-    failed = Signal(str, str)
-    used = Signal(str, int)
-    status = Signal(str)
-
-    def __init__(self, provider: str, model: str, messages: list[dict[str, Any]],
-                 tools: list[dict[str, Any]] | None, think: bool, effort: str, creds: Credentials) -> None:
-        super().__init__()
-        self.provider, self.model = provider, model
-        self.messages, self.tools = messages, tools
-        self.think, self.effort = think, effort
-        self.creds = creds
-        self.web = False
-        self.raw: list[dict[str, Any]] | None = None
-        self.note = ""                       # something to tell the user once (e.g. "this model always thinks")
-        self._cancel = False
-
-    def cancel(self) -> None:
-        self._cancel = True
-
-    def limit(self, why: str, reset: datetime | None = None, detail: str = "") -> None:
-        self.failed.emit("limit", json.dumps({"provider": self.provider, "why": why, "detail": detail[:300],
-                                              "reset": reset.timestamp() if reset else None}))
 
 
 SEARCHING = "🔎 searching the web…"

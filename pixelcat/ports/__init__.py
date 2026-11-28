@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from .desktop import (AccessibilityPort, AppsPort, CapturePort, ClipboardBackup, ClipboardPort, DisplayPort,
                       EscapeWatcher, InputPort, Keys, NotificationFeed, NotificationPort, ProcessPort, Rect,
                       SystemPort, WindowPort)
+from .llm import ChatEvents, ChatJob, ChatRequest, Conversation
 from .storage import AutostartPort, InstallerPort, KnownFolders, SaveMarks, SecretStore
 
 
@@ -36,7 +37,8 @@ class Platform:
 
 
 __all__ = [
-    "AccessibilityPort", "AppsPort", "AutostartPort", "CapturePort", "ClipboardBackup", "ClipboardPort", "DisplayPort",
-    "EscapeWatcher", "InputPort", "InstallerPort", "Keys", "KnownFolders", "NotificationFeed", "NotificationPort",
-    "Platform", "ProcessPort", "Rect", "SaveMarks", "SecretStore", "SystemPort", "WindowPort",
+    "AccessibilityPort", "AppsPort", "AutostartPort", "CapturePort", "ChatEvents", "ChatJob", "ChatRequest",
+    "ClipboardBackup", "ClipboardPort", "Conversation", "DisplayPort", "EscapeWatcher", "InputPort", "InstallerPort",
+    "Keys", "KnownFolders", "NotificationFeed", "NotificationPort", "Platform", "ProcessPort", "Rect", "SaveMarks",
+    "SecretStore", "SystemPort", "WindowPort",
 ]

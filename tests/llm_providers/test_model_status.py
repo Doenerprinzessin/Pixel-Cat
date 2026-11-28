@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
@@ -105,15 +106,17 @@ def ollama(fake_http):
 
 
 class Status:
-    """A ModelStatus with recorded states; ``started``: the Ollama starts asked for."""
+    """A ModelStatus with recorded states; ``started``: the Ollama starts asked for; ``on_change``: what
+    its ``notify()`` calls."""
 
     def __init__(self, url: str, may_download: bool = False, exe: Path | None = None, starter=None,
                  **cfg) -> None:
         self.started: list[Path] = []
-        self.st = MS.ModelStatus(Config(ollama_url=url, model=MODEL, keep_alive="3m", num_ctx=2048, **cfg),
-                                 lambda: may_download, lambda: exe, starter or self.started.append)
         self.seen: list[str] = []
-        self.st.changed.connect(lambda: self.seen.append(self.st.state))
+        self.on_change: list[Callable[[], None]] = [lambda: self.seen.append(self.st.state)]
+        self.st = MS.ModelStatus(Config(ollama_url=url, model=MODEL, keep_alive="3m", num_ctx=2048, **cfg),
+                                 lambda: may_download, lambda: exe, starter or self.started.append,
+                                 notify=lambda: [f() for f in self.on_change])
 
     def run(self) -> MS.ModelStatus:
         self.st._run()
@@ -121,11 +124,10 @@ class Status:
 
 
 @pytest.fixture
-def status(qapp):
+def status():
     return Status
 
 
-@pytest.mark.qt
 def test_ready_after_loading(ollama, status):
     s = status(ollama.url)
     st = s.run()
@@ -134,7 +136,6 @@ def test_ready_after_loading(ollama, status):
                                                       "options": {"num_ctx": 2048}}
 
 
-@pytest.mark.qt
 def test_already_loaded_is_ready_at_once(ollama, status):
     ollama.on("GET", "/api/ps", Json(200, {"models": [{"name": MODEL}]}))
     s = status(ollama.url)
@@ -144,7 +145,6 @@ def test_already_loaded_is_ready_at_once(ollama, status):
     assert s.seen == ["checking", "ready", "ready"]             # (no 'checking' once ready)
 
 
-@pytest.mark.qt
 def test_external_models_need_nothing(ollama, status):
     s = status(ollama.url)
     s.st.override = "anthropic:claude-opus-5-5"
@@ -152,7 +152,6 @@ def test_external_models_need_nothing(ollama, status):
     assert s.seen == ["ready"] and ollama.requests == [] and s.st.model == "anthropic:claude-opus-5-5"
 
 
-@pytest.mark.qt
 def test_online_only_pc(ollama, status):
     s = status(ollama.url, ai_mode="online")
     s.run()
@@ -164,7 +163,6 @@ def test_online_only_pc(ollama, status):
     assert s.st.state == "ready"
 
 
-@pytest.mark.qt
 def test_no_ollama_installed(ollama, status):
     ollama.on("GET", "/api/version", Raw(500, b""))
     s = status(ollama.url)
@@ -173,7 +171,6 @@ def test_no_ollama_installed(ollama, status):
     assert "isn't installed" in s.st.banner() and s.st.short() == "AI not ready"
 
 
-@pytest.mark.qt
 def test_remote_ollama_offline(status, monkeypatch):
     def unreachable(*a, **kw):
         raise MS.requests.ConnectionError("no route")
@@ -184,7 +181,6 @@ def test_remote_ollama_offline(status, monkeypatch):
     assert s.st.banner() == "I can't reach Ollama at http://10.255.255.1:9 - is it running?"
 
 
-@pytest.mark.qt
 def test_ollama_is_started_when_installed(ollama, status, tmp_path):
     ollama.on("GET", "/api/version", Raw(500, b""))
 
@@ -197,7 +193,6 @@ def test_ollama_is_started_when_installed(ollama, status, tmp_path):
     assert s.seen == ["checking", "starting_ollama", "loading", "ready"]
 
 
-@pytest.mark.qt
 def test_ollama_that_doesnt_come_up_is_offline_when_stopped(ollama, status, tmp_path):
     ollama.on("GET", "/api/version", Raw(500, b""))
     s = status(ollama.url, exe=tmp_path / "ollama.exe", starter=lambda exe: s.st.stop())
@@ -205,7 +200,6 @@ def test_ollama_that_doesnt_come_up_is_offline_when_stopped(ollama, status, tmp_
     assert s.seen == ["checking", "starting_ollama", "offline"]
 
 
-@pytest.mark.qt
 def test_missing_model_without_permission(ollama, status):
     ollama.on("GET", "/api/tags", Json(200, {"models": [{"name": "other:1b"}]}))
     s = status(ollama.url)
@@ -214,7 +208,6 @@ def test_missing_model_without_permission(ollama, status):
     assert "/getmodel" in s.st.banner()
 
 
-@pytest.mark.qt
 def test_download_then_load(ollama, status):
     ollama.on("GET", "/api/tags", Json(500, {}))
     ollama.on("POST", "/api/pull", Lines([
@@ -225,7 +218,7 @@ def test_download_then_load(ollama, status):
         {"status": "success"}]))
     s = status(ollama.url, may_download=True)
     states: list[tuple] = []
-    s.st.changed.connect(lambda: states.append((s.st.state, s.st.done_bytes, s.st.total_bytes, s.st.banner())))
+    s.on_change.append(lambda: states.append((s.st.state, s.st.done_bytes, s.st.total_bytes, s.st.banner())))
     st = s.run()
     assert ollama.sent("/api/pull")[0].json() == {"model": MODEL, "stream": True}
     assert states[1] == ("downloading", 0, 0, f"⬇ Downloading the AI model ({MODEL})…")
@@ -235,7 +228,6 @@ def test_download_then_load(ollama, status):
     assert [x[0] for x in states][-2:] == ["loading", "ready"] and st.ready()
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("pull, error", [
     (Raw(500, b"no space"), "download failed: no space"),
     (Lines([{"status": "pulling"}, {"error": "manifest unknown"}]), "download failed: manifest unknown"),
@@ -251,7 +243,6 @@ def test_download_failures(ollama, status, pull, error):
     assert s.st.banner() == f"The model couldn't start: {error[:160]}"
 
 
-@pytest.mark.qt
 def test_load_failure(ollama, status):
     ollama.on("POST", "/api/generate", Raw(500, b"model requires more system memory"))
     s = status(ollama.url)
@@ -259,7 +250,6 @@ def test_load_failure(ollama, status):
     assert (s.st.state, s.st.error) == ("error", "model requires more system memory")
 
 
-@pytest.mark.qt
 def test_unexpected_failure_is_shown(ollama, status, monkeypatch):
     def boom(*a, **kw):
         raise RuntimeError("kaputt")
@@ -283,7 +273,6 @@ def test_ensure_runs_in_the_background_once(ollama, status, qtbot):
     assert len(ollama.requests) > n
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("state, banner, short", [
     ("unknown", None, ""),
     ("checking", "⏳ Model is starting up, please wait…", "AI starting"),
@@ -298,14 +287,12 @@ def test_banner_and_short(status, state, banner, short):
     assert (st.banner(), st.short()) == (banner, short)
 
 
-@pytest.mark.qt
 def test_short_while_downloading(status):
     st = status("http://localhost:1").st
     st.state, st.done_bytes, st.total_bytes = "downloading", 1, 4
     assert st.short() == "downloading the AI model 25%"
 
 
-@pytest.mark.qt
 def test_error_banner_is_clipped(status):
     st = status("http://localhost:1").st
     st.state, st.error = "error", "e" * 300

@@ -19,8 +19,10 @@ from typing import Any
 import requests
 
 from . import chatgpt_signin
-from .external import (BASE_URLS, SEARCHING, Credentials, ExternalWorker, is_too_long, media_type, too_long,
-                       tool_call_ids, wait_reset, with_sources)
+from ..ports.llm import ChatEvents, ChatRequest
+from .chat_job import ExternalChat
+from .external import (BASE_URLS, SEARCHING, Credentials, is_too_long, media_type, too_long, tool_call_ids,
+                       wait_reset, with_sources)
 
 log = logging.getLogger(__name__)
 
@@ -144,11 +146,10 @@ def tools_for_responses(tools: list[dict[str, Any]] | None) -> list[dict[str, An
 
 
 # ------------------------------------------------------------------ the request
-class OpenAIWorker(ExternalWorker):
-    def __init__(self, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
-                 think: bool, effort: str, creds: Credentials, auth: str = "key") -> None:
-        super().__init__("openai", model, messages, tools, think, effort, creds)
-        self.auth = auth
+class OpenAIChat(ExternalChat):
+    def __init__(self, req: ChatRequest, events: ChatEvents) -> None:
+        super().__init__("openai", req, events)
+        self.auth = req.auth
         self._resp: requests.Response | None = None
 
     def cancel(self) -> None:
@@ -207,7 +208,7 @@ class OpenAIWorker(ExternalWorker):
             try:
                 hdr = headers(self.creds, self.auth)
             except OpenAIError as e:
-                self.failed.emit(e.kind, str(e))
+                self.events.failed(e.kind, str(e))
                 return
             try:
                 with requests.post(_base() + "/responses", json=self._body(opts), headers=hdr, stream=True,
@@ -220,7 +221,7 @@ class OpenAIWorker(ExternalWorker):
                             try:
                                 headers(self.creds, self.auth, force=True)
                             except OpenAIError as e:
-                                self.failed.emit(e.kind, str(e))
+                                self.events.failed(e.kind, str(e))
                                 return
                             continue
                         if self._http_error(resp, data, opts):
@@ -232,17 +233,17 @@ class OpenAIWorker(ExternalWorker):
                     return
             except requests.exceptions.ConnectionError as e:
                 if not self._cancel:
-                    self.failed.emit("ext_offline", str(e))
+                    self.events.failed("ext_offline", str(e))
                 return
             except requests.exceptions.Timeout:
-                self.failed.emit("timeout", "")
+                self.events.failed("timeout", "")
                 return
             except Exception as exc:  # noqa: BLE001
                 if not self._cancel:
                     log.exception("OpenAI request failed")
-                    self.failed.emit("error", str(exc))
+                    self.events.failed("error", str(exc))
                 return
-        self.failed.emit("error", "OpenAI kept refusing the request.")
+        self.events.failed("error", "OpenAI kept refusing the request.")
 
     def _http_error(self, resp: requests.Response, data: dict[str, Any], opts: dict[str, Any]) -> bool:
         """Report an error answer (True: changed something - ask again)."""
@@ -251,7 +252,7 @@ class OpenAIWorker(ExternalWorker):
         msg = _err_text(data) or f"HTTP {resp.status_code}"
         st = resp.status_code
         if code == "context_length_exceeded" or is_too_long(msg):
-            self.failed.emit("too_long", too_long(msg))
+            self.events.failed("too_long", too_long(msg))
         elif code == "subscription_sharing_usage_limit_exceeded":
             self.limit("plan", None, msg)
         elif code == "insufficient_quota":
@@ -264,17 +265,17 @@ class OpenAIWorker(ExternalWorker):
             if self._step_down(opts, param, msg):
                 log.info("%s refused %s - trying again with %s", self.model, param or "a setting", opts)
                 return True
-            self.failed.emit("error", msg)
+            self.events.failed("error", msg)
         elif code == "subscription_sharing_user_not_eligible" or st == 403:
-            self.failed.emit("denied", msg)
+            self.events.failed("denied", msg)
         elif st == 401:
-            self.failed.emit("auth", msg)
+            self.events.failed("auth", msg)
         elif st == 404 or code == "model_not_found":
-            self.failed.emit("model_gone", msg)
+            self.events.failed("model_gone", msg)
         elif st >= 500:
-            self.failed.emit("busy", msg)
+            self.events.failed("busy", msg)
         else:
-            self.failed.emit("error", msg)
+            self.events.failed("error", msg)
         return False
 
     def _read(self, resp: requests.Response, opts: dict[str, Any]) -> str:  # noqa: C901 - one event switch
@@ -298,14 +299,14 @@ class OpenAIWorker(ExternalWorker):
                 piece = str(ev.get("delta") or "")
                 if piece:
                     text.append(piece)
-                    self.token.emit(piece)
+                    self.events.token(piece)
             elif kind in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
                 thought += len(str(ev.get("delta") or "")) or 1
-                self.thinking.emit(thought)
+                self.events.thinking(thought)
             elif kind == "response.output_item.added" and (ev.get("item") or {}).get("type") == "reasoning":
-                self.thinking.emit(max(1, thought))
+                self.events.thinking(max(1, thought))
             elif kind == "response.output_item.added" and (ev.get("item") or {}).get("type") == "web_search_call":
-                self.status.emit(SEARCHING)
+                self.events.status(SEARCHING)
             elif kind == "response.output_item.done":
                 item = ev.get("item") or {}
                 if item.get("type") == "function_call":
@@ -321,25 +322,25 @@ class OpenAIWorker(ExternalWorker):
                 if not text:
                     text = [_output_text(r)]
                 self.raw = None
-                self.done.emit(with_sources("".join(text), _sources(r)), calls)
+                self.events.done(with_sources("".join(text), _sources(r)), calls)
                 return "done"
             elif kind == "response.incomplete":
                 r = ev.get("response") or {}
                 self._usage(r)
                 why = str((r.get("incomplete_details") or {}).get("reason") or "")
                 if why == "content_filter":
-                    self.failed.emit("refused", why)
+                    self.events.failed("refused", why)
                 elif calls:
-                    self.failed.emit("truncated", why)
+                    self.events.failed("truncated", why)
                 else:
-                    self.done.emit("".join(text) or _output_text(r), [])
+                    self.events.done("".join(text) or _output_text(r), [])
                 return "done"
             elif kind in ("response.failed", "error"):
                 err = (ev.get("response") or {}).get("error") if kind == "response.failed" else ev
                 err = err if isinstance(err, dict) else {}
                 code, msg = str(err.get("code") or ""), str(err.get("message") or "the answer failed")
                 if code == "context_length_exceeded" or is_too_long(msg):
-                    self.failed.emit("too_long", too_long(msg))
+                    self.events.failed("too_long", too_long(msg))
                 elif code == "subscription_sharing_usage_limit_exceeded":
                     self.limit("plan", None, msg)
                 elif code in ("insufficient_quota",):
@@ -350,17 +351,17 @@ class OpenAIWorker(ExternalWorker):
                         and self._step_down(opts, str(err.get("param") or ""), msg):
                     return "retry"
                 else:
-                    self.failed.emit("busy" if "unavailable" in code or "overloaded" in code else "error", msg)
+                    self.events.failed("busy" if "unavailable" in code or "overloaded" in code else "error", msg)
                 return "done"
         if not self._cancel:
-            self.failed.emit("error", "The answer broke off before it was complete.")
+            self.events.failed("error", "The answer broke off before it was complete.")
         return "done"
 
     def _usage(self, r: dict[str, Any]) -> None:
         u = r.get("usage") or {}
         total = int(u.get("total_tokens") or (int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0)))
         if total:
-            self.used.emit("openai", total)
+            self.events.used("openai", total)
 
 
 def _output_text(r: dict[str, Any]) -> str:

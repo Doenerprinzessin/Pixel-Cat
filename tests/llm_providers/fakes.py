@@ -1,4 +1,4 @@
-"""Fakes for the AI provider tests: a scripted HTTP server on 127.0.0.1 and a signal recorder.
+"""Fakes for the AI provider tests: a scripted HTTP server on 127.0.0.1 and a recorder of what a chat job reports.
 
 ``FakeHTTP`` plays the providers' APIs (JSON, server-sent events, NDJSON) and records every
 request.  Routes are ``(method, path)``; each holds a list of responses - one is used per
@@ -10,8 +10,10 @@ import json
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import parse_qs, urlparse
+
+from fakes.chat import RecordingEvents
 
 
 # ------------------------------------------------------------------ responses
@@ -158,25 +160,14 @@ class FakeHTTP:
         self.server.server_close()
 
 
-# ------------------------------------------------------------------ worker signals
+# ------------------------------------------------------------------ what a chat job reports
 class Recorder:
-    """Connects to every signal a worker has; ``events``: (signal, *args) in emit order."""
+    """What a chat job reported to its ``events`` (a fakes.chat.RecordingEvents): ``events``: (event, *args)
+    in call order."""
 
-    SIGNALS = ("token", "thinking", "status", "used", "credits", "permission", "done", "failed")
-
-    def __init__(self, worker: Any) -> None:
-        self.events: list[tuple] = []
-        self._lock = threading.Lock()
-        for name in self.SIGNALS:
-            sig = getattr(worker, name, None)
-            if sig is not None:
-                sig.connect(self._slot(name))
-
-    def _slot(self, name: str) -> Callable[..., None]:
-        def slot(*args: Any) -> None:
-            with self._lock:
-                self.events.append((name, *args))
-        return slot
+    def __init__(self, job: Any) -> None:
+        assert isinstance(job.events, RecordingEvents), "build the job with a RecordingEvents"
+        self.events: list[tuple] = job.events.events
 
     def of(self, name: str) -> list[tuple]:
         return [e[1:] for e in self.events if e[0] == name]

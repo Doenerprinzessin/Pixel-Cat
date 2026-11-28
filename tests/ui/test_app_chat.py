@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from fakes.chat import FakeJob
 from pixelcat import app as app_mod
 from pixelcat.app import PixelCatApp
 from pixelcat.ui.chat import GREETING
@@ -44,12 +45,12 @@ def test_a_message_goes_to_the_model_and_the_answer_streams_back(chat_pet, worke
     assert w.messages[0]["role"] == "system" and w.messages[-1] == {"role": "user", "content": "hello there"}
     assert w.tools and any(t["function"]["name"] == "get_time" for t in w.tools)
     assert pet._task_active and pet.chat.send_btn.text() == "STOP"
-    w.thinking.emit(50)
+    w.events.thinking(50)
     assert pet.chat.msgs[-1].text == "💭 thinking… (10 words)"
-    w.token.emit("Mrr")
-    w.token.emit("ow!")
+    w.events.token("Mrr")
+    w.events.token("ow!")
     assert pet.chat.msgs[-1].text == "Mrrow!"
-    w.done.emit("Mrrow! Hi.", [])
+    w.events.done("Mrrow! Hi.", [])
     assert pet.chat.msgs[-1].text == "Mrrow! Hi." and not pet._task_active and pet.worker is None
     assert pet.history[-1] == {"role": "assistant", "content": "Mrrow! Hi."}
     assert pet.chat.send_btn.text() == "SEND"
@@ -60,27 +61,27 @@ def test_signals_from_an_old_worker_are_ignored(chat_pet, workers) -> None:  # t
     old = workers[-1]
     chat_pet._cancel_chat()
     assert old.cancelled and chat_pet.chat.msgs[-1].text == "(stopped)"
-    old.token.emit("late")
-    old.done.emit("late", [])
+    old.events.token("late")
+    old.events.done("late", [])
     assert all("late" not in m.text for m in chat_pet.chat.msgs)
 
 
 def test_a_tool_call_runs_and_the_model_gets_the_result(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     pet = chat_pet
     _say(pet, "what time is it?")
-    workers[-1].done.emit("", [{"name": "get_time", "arguments": {}, "id": "c1"}])
+    workers[-1].events.done("", [{"name": "get_time", "arguments": {}, "id": "c1"}])
     assert len(workers) == 2                                     # the result went back to the model
     assert pet.history[-2]["tool_calls"] == [{"function": {"name": "get_time", "arguments": {}}, "id": "c1"}]
     assert pet.history[-1]["role"] == "tool" and pet.history[-1]["content"].startswith("It is ")
     assert any(m.role == "info" and m.text.startswith("It is ") for m in pet.chat.msgs)
     assert workers[-1].think is False                            # (routine steps don't think)
-    workers[-1].done.emit("It's teatime.", [])
+    workers[-1].events.done("It's teatime.", [])
     assert not pet._task_active and pet._tool_round == 1
 
 
 def test_tool_calls_written_as_text_are_understood(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "time?")
-    workers[-1].done.emit('<tool_call>{"name": "get_time", "arguments": {}}</tool_call>', [])
+    workers[-1].events.done('<tool_call>{"name": "get_time", "arguments": {}}</tool_call>', [])
     assert len(workers) == 2 and chat_pet.history[-1]["content"].startswith("It is ")
 
 
@@ -89,7 +90,7 @@ def test_tool_calls_written_as_text_are_understood(chat_pet, workers) -> None:  
 def test_an_action_asks_first(chat_pet, workers, app_env, answer: str, copied: bool, approved: list) -> None:  # type: ignore[no-untyped-def,type-arg]
     pet = chat_pet
     _say(pet, "copy meow")
-    workers[-1].done.emit("", [{"name": "copy_to_clipboard", "arguments": {"text": "meow"}}])
+    workers[-1].events.done("", [{"name": "copy_to_clipboard", "arguments": {"text": "meow"}}])
     assert pet.chat._confirm_cb is not None and pet.chat.always_btn.isVisibleTo(pet.chat)
     assert "May I?" in pet.chat.confirm_label.text()
     {"yes": pet.chat.yes_btn, "always": pet.chat.always_btn, "no": pet.chat.no_btn}[answer].click()
@@ -104,14 +105,14 @@ def test_auto_mode_does_it_without_asking(chat_pet, workers, app_env) -> None:  
     pet = chat_pet
     pet.set_auto_mode(True)
     _say(pet, "copy purr")
-    workers[-1].done.emit("", [{"name": "copy_to_clipboard", "arguments": {"text": "purr"}}])
+    workers[-1].events.done("", [{"name": "copy_to_clipboard", "arguments": {"text": "purr"}}])
     assert pet.chat._confirm_cb is None and app_env.clipboard.text() == "purr"
     assert pet._auto_actions == 1 and pet.chat.msgs[-2].text.endswith("(auto)")
 
 
 def test_an_unknown_tool_is_reported_to_the_model(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "hack")
-    workers[-1].done.emit("", [{"name": "format_disk", "arguments": {}}])
+    workers[-1].events.done("", [{"name": "format_disk", "arguments": {}}])
     assert chat_pet.history[-1]["content"].startswith("error: ") and len(workers) == 2
     assert any("I can't do that" in m.text for m in chat_pet.chat.msgs)
 
@@ -119,28 +120,28 @@ def test_an_unknown_tool_is_reported_to_the_model(chat_pet, workers) -> None:  #
 def test_repeating_the_same_call_stops_the_task(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "loop")
     for _ in range(3):
-        workers[-1].done.emit("", [{"name": "get_time", "arguments": {}}])
+        workers[-1].events.done("", [{"name": "get_time", "arguments": {}}])
     assert not chat_pet._task_active
     assert "I keep doing the same thing (get time)" in chat_pet.chat.msgs[-1].text
 
 
 def test_a_failed_request_shows_an_error(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "hi")
-    workers[-1].failed.emit("offline", "connection refused")
+    workers[-1].events.failed("offline", "connection refused")
     assert chat_pet.chat.msgs[-1].role == "error" and not chat_pet._task_active
 
 
 def test_a_model_without_tools_is_asked_again_with_text_tools(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "hi")
-    workers[-1].failed.emit("no_tools", "")
+    workers[-1].events.failed("no_tools", "")
     assert not chat_pet.native_tools and len(workers) == 2 and workers[-1].tools is None
 
 
 def test_a_promise_to_wait_later_is_questioned(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "tell me when the build is done")
-    workers[-1].done.emit("Sure, I'll let you know when it's done!", [])
+    workers[-1].events.done("Sure, I'll let you know when it's done!", [])
     assert len(workers) == 2 and chat_pet.history[-1]["_tool"] and "wait_for" in chat_pet.history[-1]["content"]
-    workers[-1].done.emit("Sorry, I can't wait for that.", [])
+    workers[-1].events.done("Sorry, I can't wait for that.", [])
     assert not chat_pet._task_active
 
 
@@ -168,25 +169,47 @@ def test_external_workers_are_built_per_provider(chat_pet, monkeypatch) -> None:
 
     made: list[tuple] = []
 
-    class Fake:
+    class Fake(FakeJob):
         def __init__(self, *a):  # type: ignore[no-untyped-def]
+            super().__init__(*a)
             made.append((type(self).__name__, a))
-            from PySide6.QtCore import QObject, Signal
 
-            class S(QObject):
-                sig = Signal(object)
-            self._s = S()
-            self.used = self.status = self._s.sig
-
-    monkeypatch.setattr(anthropic_client, "AnthropicWorker", type("AnthropicWorker", (Fake,), {}))
-    monkeypatch.setattr(openai_client, "OpenAIWorker", type("OpenAIWorker", (Fake,), {}))
+    monkeypatch.setattr(anthropic_client, "AnthropicChat", type("AnthropicChat", (Fake,), {}))
+    monkeypatch.setattr(openai_client, "OpenAIChat", type("OpenAIChat", (Fake,), {}))
     chat_pet.creds.set("anthropic_key", "k")
     chat_pet.creds.set("openai_key", "k")
     chat_pet._begin_task()
     w1 = chat_pet._ext_worker("anthropic", "m1", [{"role": "system", "content": "s"}])
     w2 = chat_pet._ext_worker("openai", "m2", [])
-    assert [m[0] for m in made] == ["AnthropicWorker", "OpenAIWorker"]
-    assert made[0][1][0] == "m1" and made[0][1][-1] == "key" and w1.web is True and w2.web is True
+    assert [m[0] for m in made] == ["AnthropicChat", "OpenAIChat"]
+    req = made[0][1][0]
+    assert req.model == "m1" and req.auth == "key" and w1.job.web is True and w2.job.web is True
+    assert (w1.provider, w1.model, w1.local, w2.provider, w2.model, w2.local) == \
+        ("anthropic", "m1", False, "openai", "m2", False)
+
+
+def test_a_copilot_request_reports_credits_and_pages(chat_pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from pixelcat.llm import copilot_client
+
+    made: list[FakeJob] = []
+
+    def make(req, events):  # type: ignore[no-untyped-def]
+        made.append(FakeJob(req, events))
+        return made[-1]
+
+    monkeypatch.setattr(copilot_client, "CopilotJob", make)
+    chat_pet.creds.set("copilot_key", "k")
+    chat_pet._begin_task()
+    w = chat_pet._ext_worker("copilot", "m3", [{"role": "system", "content": "be a cat"}])
+    req = made[0].req
+    assert req.conversation is chat_pet._copilot and req.history is chat_pet.history and req.system == "be a cat"
+    assert req.auth == "key" and req.web is True and (w.provider, w.model, w.local) == ("copilot", "m3", False)
+    made[0].events.credits(0.5)
+    assert chat_pet._credit_budget().used() == 0.5
+    chat_pet.saved.auto_approved_tools.append("read_web_page")
+    answers: list[bool] = []
+    made[0].events.permission("https://cats.example/", answers.append)
+    assert answers == [True] and "Copilot reads https://cats.example/" in chat_pet.chat.msgs[-1].text
 
 
 # ---------------------------------------------------------------- chat commands
@@ -220,7 +243,7 @@ def test_auto_and_permission_commands(chat_pet) -> None:  # type: ignore[no-unty
 
 def test_new_chat_and_history_commands(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "remember this")
-    workers[-1].done.emit("ok", [])
+    workers[-1].events.done("ok", [])
     _say(chat_pet, "/new")
     assert chat_pet.history == [] and [m.text for m in chat_pet.chat.msgs] == [GREETING]
     _say(chat_pet, "/history")
@@ -325,7 +348,7 @@ def test_scrub_and_rect_gap() -> None:
 def test_a_chat_is_saved_and_can_be_reopened(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     pet = chat_pet
     _say(pet, "plan a trip to Paris")
-    workers[-1].done.emit("Pack a beret.", [])
+    workers[-1].events.done("Pack a beret.", [])
     cid = pet._chat_id
     assert cid and [i.title for i in pet.chats.index()] == ["plan a trip to Paris"]
     pet.new_chat()
@@ -347,7 +370,7 @@ def test_deleting_saved_chats(chat_pet, workers) -> None:  # type: ignore[no-unt
     pet = chat_pet
     for q in ("one", "two"):
         _say(pet, q)
-        workers[-1].done.emit("ok", [])
+        workers[-1].events.done("ok", [])
         pet.new_chat()
     ids = [i.id for i in pet.chats.index()]
     pet._delete_saved_chat(ids[0])
@@ -399,5 +422,5 @@ def test_a_fired_watch_wakes_the_chat(chat_pet, workers, monkeypatch) -> None:  
     assert chat_pet.chat.msgs[-2].role == "event" and "🔔 The kettle is done" in chat_pet.chat.msgs[-2].text
     assert chat_pet._task_active and chat_pet._task_wake and workers
     assert "You were waiting for: the kettle" in chat_pet.history[-1]["content"]
-    workers[-1].done.emit("Your tea is ready!", [])
+    workers[-1].events.done("Your tea is ready!", [])
     assert not chat_pet._task_active

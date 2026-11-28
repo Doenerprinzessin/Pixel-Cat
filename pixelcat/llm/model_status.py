@@ -24,7 +24,6 @@ from typing import Callable
 from urllib.parse import urlparse
 
 import requests
-from PySide6.QtCore import QObject, Signal
 
 from ..settings import Config
 
@@ -85,14 +84,15 @@ ONLINE_ONLY = ("This PC uses an online AI (a local one would slow it down). Conn
                "right-click me → Settings → AI model → External AI models.")
 
 
-class ModelStatus(QObject):
-    changed = Signal()
+class ModelStatus:
+    """``notify()`` is called (from any thread) whenever the state changes; the app passes a Qt
+    signal's ``emit``, so the change arrives on the GUI thread."""
 
     def __init__(self, cfg: Config, may_download: Callable[[], bool],
                  ollama_finder: Callable[[], Path | None] = find_ollama_app,
-                 starter: Callable[[Path], None] = start_ollama) -> None:
-        super().__init__()
+                 starter: Callable[[Path], None] = start_ollama, *, notify: Callable[[], None]) -> None:
         self.cfg = cfg
+        self.notify = notify
         self.may_download = may_download
         self.find_ollama = ollama_finder
         self.start_ollama = starter
@@ -166,7 +166,7 @@ class ModelStatus(QObject):
             log.info("model %s: %s%s", self.model, state, f" ({error})" if error else "")
         self.state, self.error = state, error
         self.checked_at = time.monotonic()
-        self.changed.emit()
+        self.notify()
 
     def _base(self) -> str:
         return self.cfg.ollama_url.rstrip("/")
@@ -264,10 +264,10 @@ class ModelStatus(QObject):
                     self.total_bytes, self.done_bytes = sum(totals.values()), sum(done.values())
                     if time.monotonic() - last > 0.5:
                         last = time.monotonic()
-                        self.changed.emit()
+                        self.notify()
                 if d.get("status") == "success":
                     log.info("model %s downloaded", self.model)
                     self.done_bytes = self.total_bytes
-                    self.changed.emit()
+                    self.notify()
                     return
         self._set("error", "the download stopped before it was complete - it continues next time")

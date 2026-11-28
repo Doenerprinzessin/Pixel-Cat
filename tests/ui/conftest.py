@@ -199,15 +199,17 @@ def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path, fake_pl
     monkeypatch.setattr(webbrowser, "open", lambda url, *a, **k: env.opened_urls.append(url))
     monkeypatch.setattr(QGuiApplication, "clipboard", staticmethod(lambda: env.clipboard))   # not the real one
     monkeypatch.setenv("OLLAMA_MODELS", str(tmp_path / "ollama-models"))     # no model is downloaded
-    from pixelcat.llm import anthropic_client, copilot_client, openai_client
+    from pixelcat.llm import anthropic_client, copilot_client, openai_client, qt_chat
 
     def no_request(*a: Any, **k: Any) -> None:
         raise AssertionError("a test reached a real model request - use the `workers` fixture or a fake")
 
-    monkeypatch.setattr(app_mod, "ChatWorker", no_request)
-    for mod, name in ((anthropic_client, "AnthropicWorker"), (openai_client, "OpenAIWorker"),
-                      (copilot_client, "CopilotWorker")):
+    monkeypatch.setattr(app_mod, "OllamaChat", no_request)
+    for mod, name in ((anthropic_client, "AnthropicChat"), (openai_client, "OpenAIChat"),
+                      (copilot_client, "CopilotJob")):
         monkeypatch.setattr(mod, name, no_request)
+    # (no chat job runs in a thread here: start() runs the (fake) job at once; the test reports through its events)
+    monkeypatch.setattr(qt_chat.QtChatWorker, "start", lambda self, *a: self.run())
     return env
 
 
@@ -280,35 +282,18 @@ def sync_background():  # type: ignore[no-untyped-def]
 
 @pytest.fixture
 def workers(monkeypatch: pytest.MonkeyPatch, app_env: AppEnv) -> list[Any]:
-    """Local-model requests go to fake workers the test drives (tokens, done, failed)."""
-    from PySide6.QtCore import QObject, Signal
+    """Local-model requests go to fake chat jobs the test drives through their events
+    (``workers[-1].events.done("hi", [])``)."""
+    from fakes.chat import FakeJob
 
     import pixelcat.app as app_mod
 
     made: list[Any] = []
 
-    class FakeWorker(QObject):
-        token = Signal(str)
-        thinking = Signal(int)
-        done = Signal(str, list)
-        failed = Signal(str, str)
-        finished = Signal()
+    def make(req: Any, events: Any) -> FakeJob:
+        job = FakeJob(req, events)
+        made.append(job)
+        return job
 
-        def __init__(self, cfg: Any, messages: list[dict[str, Any]], tools: Any, think: Any,
-                     model: str | None = None) -> None:
-            super().__init__()
-            self.messages, self.tools, self.think, self.model = messages, tools, think, model
-            self.started = self.cancelled = False
-            made.append(self)
-
-        def start(self) -> None:
-            self.started = True
-
-        def cancel(self) -> None:
-            self.cancelled = True
-
-        def wait(self, ms: int = 0) -> bool:
-            return True
-
-    monkeypatch.setattr(app_mod, "ChatWorker", FakeWorker)
+    monkeypatch.setattr(app_mod, "OllamaChat", make)
     return made

@@ -1,4 +1,4 @@
-"""openai_client: Responses API input, tools, headers, the model list, and OpenAIWorker's
+"""openai_client: Responses API input, tools, headers, the model list, and OpenAIChat's
 streamed events, retries and error mapping - against a fake API on 127.0.0.1."""
 from __future__ import annotations
 
@@ -9,10 +9,12 @@ from typing import Any
 import pytest
 import requests
 
+from fakes.chat import RecordingEvents
 from llm_providers.fakes import HISTORY, JPEG, PNG, SSE, TOOLS, Json, Raw
 from pixelcat.llm import chatgpt_signin
 from pixelcat.llm import openai_client as OC
 from pixelcat.llm.external import SEARCHING, MemoryCredentials
+from pixelcat.ports.llm import ChatRequest
 
 ASK = HISTORY[:2]
 
@@ -141,9 +143,9 @@ def api_error(status: int, message: str, code: str = "", param: str = "", header
 
 def run(record, model: str = "gpt-6.1", msgs: list | None = None, tools: list | None = None, think: bool = True,
         effort: str = "high", auth: str = "key", web: bool = False, creds: Any = None):
-    w = OC.OpenAIWorker(model, ASK if msgs is None else msgs, tools, think, effort,
-                        creds or MemoryCredentials({"openai_key": "sk-oa-1"}), auth)
-    w.web = web
+    w = OC.OpenAIChat(ChatRequest(model, ASK if msgs is None else msgs, tools, think, effort,
+                                  creds or MemoryCredentials({"openai_key": "sk-oa-1"}), auth, web=web),
+                      RecordingEvents())
     rec = record(w)
     w.run()
     return w, rec
@@ -154,7 +156,6 @@ def bodies(api) -> list[dict]:
 
 
 # ------------------------------------------------------------------ the worker
-@pytest.mark.qt
 def test_text_reasoning_tool_call_and_usage(api, record):
     api.on("POST", "/oa/responses", oa(REASONING, *text("Hi ", "from GPT"),
                                        call("call_9", "open_app", '{"name": "Paint"}'),
@@ -169,7 +170,6 @@ def test_text_reasoning_tool_call_and_usage(api, record):
     assert w.raw is None
 
 
-@pytest.mark.qt
 def test_request_body_and_headers(api, record):
     api.on("POST", "/oa/responses", oa(*text("x")))
     run(record, tools=TOOLS)
@@ -181,7 +181,6 @@ def test_request_body_and_headers(api, record):
                     "reasoning": {"effort": "high"}}
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("think, effort, sent", [
     (True, "max", "xhigh"), (True, "xhigh", "xhigh"), (True, "high", "high"), (True, "medium", "medium"),
     (True, "low", "low"), (True, "auto", "medium"), (False, "max", "none"),
@@ -192,7 +191,6 @@ def test_reasoning_effort(api, record, think, effort, sent):
     assert bodies(api)[0]["reasoning"] == {"effort": sent}
 
 
-@pytest.mark.qt
 def test_reasoning_summaries_count_as_thinking(api, record):
     api.on("POST", "/oa/responses", oa({"type": "response.reasoning_summary_text.delta", "delta": "abcd"},
                                        {"type": "response.reasoning_text.delta", "delta": ""},
@@ -201,7 +199,6 @@ def test_reasoning_summaries_count_as_thinking(api, record):
     assert rec.of("thinking") == [(4,), (5,)]
 
 
-@pytest.mark.qt
 def test_web_search(api, record):
     output = [{"type": "message", "content": [{"type": "output_text", "text": "Cats rule.", "annotations": [
         {"type": "url_citation", "url": "https://daily.example.com/x", "title": "Cat Daily"},
@@ -217,7 +214,6 @@ def test_web_search(api, record):
                            "**Sources:** [Cat - Wiki](https://wiki.example.org/Cat)")
 
 
-@pytest.mark.qt
 def test_completed_without_deltas_uses_the_output_text(api, record):
     output = [{"type": "reasoning"}, {"type": "message", "content": [{"type": "output_text", "text": "A"},
                                                                      {"type": "refusal", "refusal": "no"},
@@ -227,14 +223,12 @@ def test_completed_without_deltas_uses_the_output_text(api, record):
     assert rec.events == [("used", "openai", 3), ("done", "AB", [])]
 
 
-@pytest.mark.qt
 def test_no_usage_no_used_signal(api, record):
     api.on("POST", "/oa/responses", oa(*text("x"), usage={"total_tokens": 0}))
     _w, rec = run(record)
     assert rec.kinds == ["token", "done"]
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("reason, with_call, expected", [
     ("content_filter", False, ("failed", "refused", "content_filter")),
     ("max_output_tokens", True, ("failed", "truncated", "max_output_tokens")),
@@ -250,7 +244,6 @@ def test_incomplete_answers(api, record, reason, with_call, expected):
     assert ("used", "openai", 340) in rec.events
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("event, expected", [
     ({"type": "response.failed", "response": {"error": {"code": "context_length_exceeded", "message": "too big"}}},
      "too_long"),
@@ -273,7 +266,6 @@ def test_failed_events(api, record, event, expected):
         assert rec.failed[1] == "the answer failed"
 
 
-@pytest.mark.qt
 def test_failed_event_with_a_refused_effort_is_asked_again(api, record):
     api.on("POST", "/oa/responses",
            SSE([{"type": "error", "code": "unsupported_parameter", "param": "reasoning.effort", "message": "no"}]),
@@ -283,7 +275,6 @@ def test_failed_event_with_a_refused_effort_is_asked_again(api, record):
     assert rec.done == ("ok", [])
 
 
-@pytest.mark.qt
 def test_stream_that_breaks_off(api, record):
     api.on("POST", "/oa/responses", Raw(200, b"event: x\n\ndata: {broken\n\ndata: {\"type\": \"response.output_text"
                                              b".delta\", \"delta\": \"Hi\"}\n\ndata: [DONE]\n\ndata: {}\n\n",
@@ -292,7 +283,6 @@ def test_stream_that_breaks_off(api, record):
     assert rec.events == [("token", "Hi"), ("failed", "error", "The answer broke off before it was complete.")]
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("response, expected", [
     (api_error(400, "Your input exceeds the context window of this model.", "context_length_exceeded", "input"),
      "too_long"),
@@ -317,7 +307,6 @@ def test_http_errors_are_mapped(api, record, response, expected):
     assert len(api.sent("/oa/responses")) == 1
 
 
-@pytest.mark.qt
 def test_http_error_detail(api, record):
     api.on("POST", "/oa/responses", Raw(502, b"<html>Bad gateway</html>"))
     _w, rec = run(record)
@@ -327,7 +316,6 @@ def test_http_error_detail(api, record):
     assert rec.failed == ("busy", "HTTP 500")
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("headers, seconds", [
     ({"x-ratelimit-reset-tokens": "6m0s", "x-ratelimit-reset-requests": "1.5s", "retry-after": "20"}, 360),
     ({"x-ratelimit-reset-requests": "1h2m"}, 3720),
@@ -345,7 +333,6 @@ def test_rate_limit_reset(api, record, headers, seconds):
         assert abs(reset - (time.time() + seconds)) < 3
 
 
-@pytest.mark.qt
 def test_effort_steps_down_and_is_remembered(api, record):
     refuse = api_error(400, "Unsupported value: 'reasoning.effort'", "unsupported_value", "reasoning.effort")
     api.on("POST", "/oa/responses", refuse, refuse, oa(*text("ok")))
@@ -357,7 +344,6 @@ def test_effort_steps_down_and_is_remembered(api, record):
     assert bodies(api)[3].get("reasoning") is None
 
 
-@pytest.mark.qt
 def test_effort_with_nothing_left_is_an_error(api, record):
     api.on("POST", "/oa/responses", api_error(400, "reasoning is not supported", "unsupported_parameter",
                                               "reasoning.effort"))
@@ -366,7 +352,6 @@ def test_effort_with_nothing_left_is_an_error(api, record):
     assert rec.failed == ("error", "reasoning is not supported")
 
 
-@pytest.mark.qt
 def test_web_search_refused_is_asked_again_without_it(api, record):
     api.on("POST", "/oa/responses",
            api_error(400, "Tool 'web_search' is not supported with this model.", "invalid_value", "tools"),
@@ -376,7 +361,6 @@ def test_web_search_refused_is_asked_again_without_it(api, record):
     assert "without web search" in w.note and rec.done == ("ok", [])
 
 
-@pytest.mark.qt
 def test_chatgpt_sign_in_is_renewed_once_on_401(api, record, chatgpt):
     api.on("POST", "/oa/responses", Json(401, {"detail": "expired"}), oa(*text("ok")))
     _w, rec = run(record, auth="chatgpt")
@@ -388,7 +372,6 @@ def test_chatgpt_sign_in_is_renewed_once_on_401(api, record, chatgpt):
     assert rec.failed == ("auth", "expired")
 
 
-@pytest.mark.qt
 def test_chatgpt_renewal_failure(api, record, monkeypatch):
     def token(creds, force=False):
         if force:
@@ -400,7 +383,6 @@ def test_chatgpt_renewal_failure(api, record, monkeypatch):
     assert rec.failed == ("auth", "The ChatGPT sign-in ran out")
 
 
-@pytest.mark.qt
 def test_missing_key_fails_before_any_request(api, record):
     _w, rec = run(record, creds=MemoryCredentials({}))
     assert rec.events == [("failed", "auth", "No OpenAI API key saved.")] and api.requests == []
@@ -414,13 +396,11 @@ def offline(monkeypatch):
     monkeypatch.setattr(OC.requests, "get", unreachable)
 
 
-@pytest.mark.qt
 def test_offline(record, offline):
     _w, rec = run(record)
     assert rec.events == [("failed", "ext_offline", "Failed to establish a new connection")]
 
 
-@pytest.mark.qt
 @pytest.mark.parametrize("exc, kind", [(requests.exceptions.ReadTimeout("slow"), "timeout"),
                                        (RuntimeError("boom"), "error")])
 def test_timeout_and_other_failures(record, monkeypatch, exc, kind):
@@ -431,18 +411,18 @@ def test_timeout_and_other_failures(record, monkeypatch, exc, kind):
     assert rec.failed[0] == kind
 
 
-@pytest.mark.qt
 def test_cancelled_before_start_sends_nothing(api, record):
-    w = OC.OpenAIWorker("gpt-6.1", ASK, None, True, "high", MemoryCredentials({"openai_key": "k"}))
+    w = OC.OpenAIChat(ChatRequest("gpt-6.1", ASK, None, True, "high", MemoryCredentials({"openai_key": "k"}), "key"),
+                      RecordingEvents())
     rec = record(w)
     w.cancel()
     w.run()
     assert rec.events == [] and api.requests == []
 
 
-@pytest.mark.qt
 def test_cancel_closes_the_response(record):
-    w = OC.OpenAIWorker("gpt-6.1", ASK, None, True, "high", MemoryCredentials({"openai_key": "k"}))
+    w = OC.OpenAIChat(ChatRequest("gpt-6.1", ASK, None, True, "high", MemoryCredentials({"openai_key": "k"}), "key"),
+                      RecordingEvents())
 
     class Resp:
         closed = False

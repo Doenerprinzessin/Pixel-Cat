@@ -7,7 +7,10 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from fakes.chat import RecordingEvents
 from pixelcat.llm import external as X
+from pixelcat.llm.chat_job import ExternalChat
+from pixelcat.ports.llm import ChatRequest
 
 T0 = datetime(2026, 11, 19, 15, 0)          # a Thursday
 
@@ -397,9 +400,8 @@ def test_wait_reset():
     assert at is not None and 590 < (at - datetime.now()).total_seconds() <= 600
 
 
-@pytest.mark.qt
-def test_worker_limit_signal(record, creds):
-    w = X.ExternalWorker("openai", "m", [], None, True, "high", creds)
+def test_chat_job_limit_event(record, creds):
+    w = ExternalChat("openai", ChatRequest("m", [], None, True, "high", creds), RecordingEvents())
     rec = record(w)
     w.limit("rate", datetime.fromtimestamp(1_800_000_000), "x" * 400)
     w.limit("credits")
