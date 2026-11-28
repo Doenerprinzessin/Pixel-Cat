@@ -14,6 +14,7 @@ from PySide6.QtCore import QObject, QTimer
 
 from ..chats import new_id
 from ..domain import monitor_at
+from ..domain.secrets import SecretStoreUnavailable
 from ..llm import models
 from ..ui.chat import GREETING, ChatWindow
 
@@ -72,6 +73,7 @@ class ChatUI(QObject):
         self._save = save
         self._show_model_banner = show_model_banner
         self._selftest = selftest
+        self._told_locked = False
         self.chat: ChatWindow | None = None
         self.chat_id: str | None = None                  # the open chat's id there (None: not saved yet)
         self.chat_created = 0.0
@@ -163,6 +165,10 @@ class ChatUI(QObject):
                 "chat_effort": self.chat_state.chat_effort}
         try:
             self.chats.save(data)
+        except SecretStoreUnavailable as e:
+            log.warning("the chat isn't saved to the chat history: %s", e)
+            self._tell_locked()
+            return
         except Exception:  # noqa: BLE001 - the chat keeps working without its history
             log.exception("couldn't save the chat to the chat history")
             return
@@ -170,10 +176,20 @@ class ChatUI(QObject):
 
     def history_items(self) -> list[Any]:
         try:
-            return [dc_replace(i, model=models.label(i.model) if i.model else "") for i in self.chats.index()]
+            items = [dc_replace(i, model=models.label(i.model) if i.model else "") for i in self.chats.index()]
         except Exception:  # noqa: BLE001
             log.exception("couldn't read the chat history")
             return []
+        self._tell_locked()
+        return items
+
+    def _tell_locked(self) -> None:
+        """Once per run, in the chat: the saved chats can't be opened (the secret store can't be used now)."""
+        if self._told_locked or self.chat is None or not getattr(self.chats, "locked", False):
+            return
+        self._told_locked = True
+        self.chat.add("error", "The saved chats can't be opened right now (the Keychain didn't let Pixel Cat in), "
+                               "so chats aren't saved until you restart Pixel Cat. Quit it, allow access, start it again.")
 
     def toggle_history(self) -> None:
         """The chat's clock button (Ctrl+H, /history): the saved chats, or back to the chat."""

@@ -1,17 +1,20 @@
 """The cat's saved state, protected so the Cat Pass can't be changed by editing a file.
 
-Files in %APPDATA%/PixelCat:
-* ``save.dat`` - the state, encrypted by Windows for this account (see savecrypt).  An edited
-  file, or one copied from another account/PC, can't be read.
+Files in the PixelCat data folder (paths.data_dir):
+* ``save.dat`` - the state, encrypted by the platform's secret store for this account (see
+  savecrypt).  An edited file, or one copied from another account/PC, can't be read.
 * ``save.bak`` - the same, written right after it: if ``save.dat`` is damaged or was changed,
   the cat loads this one instead (nothing is lost).
 * ``state.json`` - the old plain-text save.  Converted once, then deleted; a folder that has
-  been converted remembers it (registry, current user), so a new state.json is ignored.
+  been converted remembers it (the platform's save marks), so a new state.json is ignored.
+If the secret store can't be used right now (SecretStoreUnavailable: e.g. a locked keychain),
+the files are left as they are and nothing is saved for the rest of the run (``last_load`` =
+"locked"), so a working save is never overwritten by a new cat.
 Every load also checks that the XP adds up: a game gives at most MAX_XP_PER_PLAY, so the XP
 can't be more than the games played could give.
 
 Export/import (``.pixelcat`` files): the progress (Cat Pass XP, cosmetics, records, look) in a
-signed file that loads on any PC - the way to move it to a new PC or Windows account.  Chat
+signed file that loads on any PC - the way to move it to a new PC or user account.  Chat
 permissions and auto mode are never part of it.
 """
 from __future__ import annotations
@@ -28,6 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import paths, savecrypt
+from .domain.secrets import SecretStoreUnavailable
 
 if TYPE_CHECKING:
     from .ports import SaveMarks, SecretStore
@@ -35,8 +39,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 SAVE_NAME, BACKUP_NAME, LEGACY_NAME = "save.dat", "save.bak", "state.json"
-_MAGIC_WIN = b"PXCAT1W\n"                # save.dat: Windows data protection
-_MAGIC_SIGNED = b"PXCAT1S\n"             # save.dat fallback (Windows couldn't protect it): signed
+_MAGIC_WIN = b"PXCAT1W\n"                # save.dat: protected by the platform's secret store
+_MAGIC_SIGNED = b"PXCAT1S\n"             # save.dat fallback (the platform couldn't protect it): signed
 EXPORT_EXT = ".pixelcat"
 _EXPORT_TAG = "PXCAT-EXPORT-1:"
 MAX_XP_PER_PLAY = 200                    # every game gives less (the most today: ~100)
@@ -47,6 +51,7 @@ PROGRESS_FIELDS = ("xp", "skin", "hat", "best_round", "game_best", "game_plays",
                    "pets", "feeds", "plays", "ui_style", "ui_accent", "ui_size", "ui_font")
 
 last_load = "fresh"                       # how the last load_state went (the app tells the user if needed)
+_locked: set[Path] = set()               # folders whose save couldn't be opened this run: never written
 
 
 class SaveError(Exception):
@@ -185,6 +190,8 @@ def _encode(st: SavedState, secrets: SecretStore) -> bytes:
     plain = json.dumps(asdict(st), separators=(",", ":")).encode("utf-8")
     try:
         return _MAGIC_WIN + secrets.protect(plain)
+    except SecretStoreUnavailable:
+        raise                                   # (try again later rather than save it less protected)
     except (OSError, AttributeError):
         log.exception("Windows couldn't protect the save - signing it instead")
         return _MAGIC_SIGNED + savecrypt.seal(plain)
@@ -199,7 +206,8 @@ def _write(path: Path, data: bytes) -> None:
 def load_state(folder: Path | None = None, *, secrets: SecretStore, marks: SaveMarks) -> SavedState:
     """The saved state: save.dat, else its backup, else the old state.json (converted once),
     else a new cat.  ``last_load`` says which: "save", "backup", "converted", "fresh", or
-    "unreadable" (files there but none could be read - they are kept aside)."""
+    "unreadable" (files there but none could be read - they are kept aside), or "locked" (the
+    secret store couldn't be used: the files stay as they are and save_state won't write this run)."""
     global last_load
     d = folder or paths.data_dir()
     bad: list[Path] = []
@@ -209,6 +217,12 @@ def load_state(folder: Path | None = None, *, secrets: SecretStore, marks: SaveM
             continue
         try:
             st = _decode(path.read_bytes(), secrets)
+        except SecretStoreUnavailable as e:
+            log.warning("%s can't be opened right now (%s) - not saving this run, the files stay as they are",
+                        name, e)
+            _locked.add(d.resolve())
+            last_load = "locked"
+            return SavedState()
         except (OSError, savecrypt.Unreadable) as e:
             log.warning("%s can't be read: %s", name, e)
             bad.append(path)
@@ -252,15 +266,22 @@ def load_state(folder: Path | None = None, *, secrets: SecretStore, marks: SaveM
 
 def save_state(st: SavedState, folder: Path | None = None, touch: bool = True, *, secrets: SecretStore,
                marks: SaveMarks) -> None:
-    """save.dat, then the same into save.bak (each written atomically: tmp file + replace)."""
+    """save.dat, then the same into save.bak (each written atomically: tmp file + replace).  Nothing is
+    written to a folder whose save couldn't be opened this run (``last_load`` "locked")."""
     if touch:
         st.last_seen = time.time()
     d = folder or paths.data_dir()
+    if d.resolve() in _locked:
+        log.debug("not saving: the save couldn't be opened this run")
+        return
     try:
         d.mkdir(parents=True, exist_ok=True)
         data = _encode(st, secrets)
         _write(d / SAVE_NAME, data)
         _write(d / BACKUP_NAME, data)
+    except SecretStoreUnavailable as e:
+        log.warning("not saved this time: the secret store can't be used right now (%s)", e)
+        return
     except OSError:
         log.exception("could not save state")
         return

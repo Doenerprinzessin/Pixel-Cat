@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from pixelcat import paths, persistence, progress, savecrypt
+from pixelcat.domain.secrets import SecretStoreUnavailable
 from pixelcat.persistence import SavedState
 
 DATA = Path(__file__).parent / "data"
@@ -204,6 +205,37 @@ def test_save_is_signed_when_windows_cannot_protect_it(env, folder: Path, error:
     assert b"ginger" not in raw
     dpapi.protect_error = None
     assert env.load(folder).xp == 900 and persistence.last_load == "save"
+
+
+# ---------------------------------------------------------------- the secret store can't be used right now
+def test_a_locked_secret_store_keeps_the_save_and_writes_nothing_this_run(env, folder: Path,  # type: ignore[no-untyped-def]
+                                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(persistence, "_locked", set())
+    _, dpapi = env
+    env.save(played(), folder)
+    before = {n: (folder / n).read_bytes() for n in files(folder)}
+    dpapi.unprotect_error = SecretStoreUnavailable("the keychain is locked")
+    st = env.load(folder)
+    assert st.xp == 0 and persistence.last_load == "locked"
+    assert {n: (folder / n).read_bytes() for n in files(folder)} == before     # nothing renamed or changed
+    dpapi.unprotect_error = None
+    env.save(SavedState(), folder)                                           # (a new cat must not overwrite it)
+    assert {n: (folder / n).read_bytes() for n in files(folder)} == before
+    other = folder.parent / "other"
+    env.save(played(450), other)                                             # (only that folder is locked)
+    assert env.load(other).xp == 450
+
+
+def test_a_locked_secret_store_never_makes_the_save_weaker(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
+    _, dpapi = env
+    env.save(played(), folder)
+    before = (folder / "save.dat").read_bytes()
+    dpapi.protect_error = SecretStoreUnavailable("the keychain is locked")
+    env.save(played(450), folder)
+    assert (folder / "save.dat").read_bytes() == before                     # not signed instead: just not saved
+    dpapi.protect_error = None
+    env.save(played(450), folder)                                            # (the next save works again)
+    assert env.load(folder).xp == 450 and persistence.last_load == "save"
 
 
 def test_signed_save_loads_on_another_account(env, folder: Path) -> None:  # type: ignore[no-untyped-def]

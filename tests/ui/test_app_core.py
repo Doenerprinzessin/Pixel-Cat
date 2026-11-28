@@ -138,6 +138,20 @@ def test_the_note_about_an_unreadable_save_goes_with_the_app(make_app, monkeypat
     assert (3000, pet, pet.progress_io.tell_unreadable_save) in later
 
 
+def test_the_note_about_a_locked_save_goes_with_the_app(make_app, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from PySide6.QtCore import QTimer
+
+    from pixelcat import persistence
+
+    later: list[tuple] = []
+    monkeypatch.setattr(QTimer, "singleShot", lambda *a: later.append(a))
+    monkeypatch.setattr(persistence, "last_load", "locked")
+    pet = make_app()
+    pet.start()
+    assert (3000, pet, pet.progress_io.tell_locked_save) in later
+    assert all(a[-1] != pet.progress_io.tell_unreadable_save for a in later)
+
+
 def test_a_saved_place_off_every_screen_is_ignored(make_app) -> None:  # type: ignore[no-untyped-def]
     pet = make_app(SavedState(autostart_asked=True, pos_x=-9000, pos_y=200))
     pet.start()

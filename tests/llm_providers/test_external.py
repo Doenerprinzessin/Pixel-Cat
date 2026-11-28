@@ -186,6 +186,24 @@ def test_missing_keys_file_reads_as_empty(tmp_path, fake_crypt):
     assert not (tmp_path / "keys.dat").exists()
 
 
+def test_keys_file_with_a_locked_secret_store_is_never_overwritten(tmp_path, fake_crypt, monkeypatch):
+    from pixelcat.domain.secrets import SecretStoreUnavailable
+
+    X.Credentials(tmp_path, secrets=fake_crypt).set("anthropic_key", "sk-ant-1")
+    before = (tmp_path / "keys.dat").read_bytes()
+
+    def locked(blob):
+        raise SecretStoreUnavailable("the keychain is locked")
+    with monkeypatch.context() as m:
+        m.setattr(fake_crypt, "unprotect", locked)
+        c = X.Credentials(tmp_path, secrets=fake_crypt)
+        assert c.get("anthropic_key") is None and c.locked
+    with pytest.raises(SecretStoreUnavailable, match="nothing was saved"):
+        c.set("openai_key", "sk-2")                    # (even if the secret store works again later in the run)
+    assert (tmp_path / "keys.dat").read_bytes() == before
+    assert X.Credentials(tmp_path, secrets=fake_crypt).get("anthropic_key") == "sk-ant-1"
+
+
 def test_memory_credentials_are_never_written(fake_crypt):
     from pixelcat import paths
 

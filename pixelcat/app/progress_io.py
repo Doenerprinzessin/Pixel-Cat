@@ -1,5 +1,5 @@
 """Your progress: export it to a signed file and import one (Menu -> Settings -> Your progress), and the
-message when the save couldn't be read."""
+messages when the save couldn't be read or opened."""
 from __future__ import annotations
 
 import html
@@ -126,3 +126,12 @@ class ProgressIO:
             "The cat couldn't read its save: it was changed by hand, or it's from another Windows account or PC.",
             "If you exported your progress, load it with Menu &gt; Settings &gt; Your progress &gt; Import progress.",
             "The old file is kept in the PixelCat folder, just in case."]), "OK")
+
+    def tell_locked_save(self) -> None:
+        """The save couldn't be opened because the secret store (the Keychain) can't be used right now."""
+        self.popups.popup("Not saving this time", paras([
+            "The cat couldn't open the Keychain, so its save wasn't loaded - your progress is still there, "
+            "and the cat won't overwrite it.",
+            "Until you restart Pixel Cat nothing is saved: not the progress, the saved chats or new API keys.",
+            "To fix it: quit Pixel Cat, unlock the Keychain or allow Pixel Cat to use it when asked, then start "
+            "the cat again."]), "OK")

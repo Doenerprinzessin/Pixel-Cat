@@ -363,6 +363,29 @@ def test_deleting_saved_chats(chat_pet, workers) -> None:  # type: ignore[no-unt
     assert "can't be opened any more" in pet.chat_ui.chat.msgs[-1].text
 
 
+def test_saved_chats_with_a_locked_secret_store(chat_pet, workers, fake_platform) -> None:  # type: ignore[no-untyped-def]
+    from pixelcat.domain.secrets import SecretStoreUnavailable
+
+    pet = chat_pet
+    _say(pet, "one")
+    workers[-1].events.done("ok", [])
+    pet.session.new_chat()
+    folder = pet.chat_ui.chats.folder()
+    before = {p.name: p.read_bytes() for p in folder.iterdir()}
+
+    def locked(blob):  # type: ignore[no-untyped-def]
+        raise SecretStoreUnavailable("the keychain is locked")
+    fake_platform.secrets.answers("unprotect", locked)
+    pet.chat_ui.toggle_history()
+    pet.chat_ui.toggle_history()
+    notes = [m.text for m in pet.chat_ui.chat.msgs if "Keychain" in m.text]
+    assert len(notes) == 1 and "restart Pixel Cat" in notes[0]
+    _say(pet, "two")
+    workers[-1].events.done("ok", [])
+    pet.session.new_chat()
+    assert {p.name: p.read_bytes() for p in folder.iterdir()} == before
+
+
 def test_the_chat_layout_is_remembered(chat_pet, app_env) -> None:  # type: ignore[no-untyped-def]
     chat_pet.chat_ui.chat.set_fullscreen(True)
     assert chat_pet.saved.chat_full is True and chat_pet.saved.chat_size == [175.0, 225.0]

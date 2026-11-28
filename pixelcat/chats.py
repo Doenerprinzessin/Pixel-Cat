@@ -1,11 +1,13 @@
 """Saved chats (the chat's clock button, /history).
 
-Every conversation is kept in ``%APPDATA%\\PixelCat\\chats`` - the newest ``KEEP``, older ones
-are deleted - encrypted for this Windows account (DPAPI, like the save), so another account or
-PC can't read them.  A chat holds what the chat window showed and what the AI remembers (its
+Every conversation is kept in the PixelCat data folder's ``chats`` - the newest ``KEEP``, older
+ones are deleted - encrypted for this user account by the platform's secret store (like the
+save), so another account or PC can't read them.  A chat holds what the chat window showed and what the AI remembers (its
 history - without screenshots, and without a model's own replay blocks, which only count
 within a running task), plus the chat's own model and effort.  An index (encrypted too)
 keeps titles, dates and some text to search, so the list opens without opening every chat.
+If the secret store can't be used right now (SecretStoreUnavailable), the store is ``locked``:
+nothing is written for the rest of the run, so the saved chats and their index stay as they are.
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import paths, savecrypt
+from .domain.secrets import SecretStoreUnavailable
 
 if TYPE_CHECKING:
     from .ports import SecretStore
@@ -78,6 +81,7 @@ class ChatStore:
     def __init__(self, folder: Path | None = None, *, secrets: SecretStore) -> None:
         self._folder = folder
         self.secrets = secrets
+        self.locked = False             # the secret store couldn't open a chat this run: nothing is written
 
     # ------------------------------------------------------------------ files
     def folder(self) -> Path:
@@ -91,9 +95,16 @@ class ChatStore:
         return self.folder() / f"{cid}.chat"
 
     def _read(self, path: Path) -> Any:
-        return json.loads(self.secrets.unprotect(path.read_bytes()).decode("utf-8"))
+        try:
+            plain = self.secrets.unprotect(path.read_bytes())
+        except SecretStoreUnavailable:
+            self.locked = True
+            raise
+        return json.loads(plain.decode("utf-8"))
 
     def _write(self, path: Path, data: Any) -> None:
+        if self.locked:
+            raise SecretStoreUnavailable("the saved chats couldn't be opened this run - not writing them")
         blob = self.secrets.protect(json.dumps(data, ensure_ascii=False, separators=(",", ":"),
                                                default=str).encode("utf-8"))
         tmp = path.with_name(path.name + ".tmp")
@@ -115,6 +126,9 @@ class ChatStore:
         if path.is_file():
             try:
                 items = [ChatInfo(**d) for d in self._read(path)]
+            except SecretStoreUnavailable as exc:
+                log.warning("the saved chats can't be opened right now: %s", exc)
+                return []
             except Exception as exc:  # noqa: BLE001 - damaged: built again from the chats
                 log.warning("chat index unreadable (%s) - rebuilding it", exc)
         if items is None:

@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from .. import paths, savecrypt
+from ..domain.secrets import SecretStoreUnavailable
 from ..ports.llm import ProviderInfo
 
 if TYPE_CHECKING:
@@ -235,7 +236,9 @@ def fmt_reset(at: datetime, now: datetime | None = None) -> str:
 
 # ------------------------------------------------------------------ keys and sign-ins
 class Credentials:
-    """API keys and sign-in tokens, encrypted for this Windows account (keys.dat)."""
+    """API keys and sign-in tokens, encrypted for this user account by the platform's secret store (keys.dat).
+    If the secret store can't be used right now (SecretStoreUnavailable) keys.dat is left as it is: ``locked``,
+    and ``set`` raises instead of writing for the rest of the run."""
 
     MAGIC = b"PXCATK1\n"
 
@@ -244,6 +247,7 @@ class Credentials:
         self.secrets = secrets
         self._data: dict[str, Any] | None = None
         self._lock = threading.RLock()
+        self.locked = False
 
     def _path(self) -> Path:
         return (self.folder or paths.data_dir()) / "keys.dat"
@@ -258,6 +262,9 @@ class Credentials:
                     self._data = data if isinstance(data, dict) else {}
             except FileNotFoundError:
                 pass
+            except SecretStoreUnavailable as e:
+                self.locked = True
+                log.warning("keys.dat can't be opened right now (%s) - not using or changing it this run", e)
             except (OSError, ValueError, savecrypt.Unreadable):
                 log.warning("keys.dat can't be read (another account?) - external models need signing in again")
         return self._data
@@ -269,6 +276,9 @@ class Credentials:
     def set(self, name: str, value: Any) -> None:
         with self._lock:
             data = self._load()
+            if self.locked:
+                raise SecretStoreUnavailable("The saved keys couldn't be opened this run, so nothing was saved - "
+                                             "quit Pixel Cat, allow it to use the Keychain and start it again.")
             if value is None:
                 data.pop(name, None)
             else:

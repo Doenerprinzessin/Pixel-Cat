@@ -1,4 +1,4 @@
-"""chats: saved chats (encrypted per Windows account), their index, 100 at most."""
+"""chats: saved chats (encrypted per user account), their index, 100 at most."""
 from __future__ import annotations
 
 import itertools
@@ -9,6 +9,7 @@ import pytest
 
 from pixelcat import chats, paths
 from pixelcat.chats import ChatStore
+from pixelcat.domain.secrets import SecretStoreUnavailable
 
 
 @pytest.fixture
@@ -196,6 +197,37 @@ def test_delete_and_delete_all(store: ChatStore) -> None:
     store.delete("not-an-id")
     assert store.delete_all() == 2
     assert store.index() == [] and list(store.folder().glob("*.chat")) == []
+
+
+# ---------------------------------------------------------------- the secret store can't be used right now
+def files(store: ChatStore) -> dict[str, bytes]:
+    return {p.name: p.read_bytes() for p in store.folder().iterdir()}
+
+
+@pytest.mark.parametrize("first", ["index", "load"])
+def test_a_locked_secret_store_writes_nothing_this_run(store: ChatStore, dpapi, first: str) -> None:  # type: ignore[no-untyped-def]
+    for n in (1, 2):
+        store.save(chat(n))
+    before = files(store)
+    dpapi.unprotect_error = SecretStoreUnavailable("the keychain is locked")
+    if first == "index":
+        assert store.index() == []
+    else:
+        assert store.load(cid(1)) is None
+    assert store.locked
+    dpapi.unprotect_error = None                       # (even if it works again later in the run)
+    with pytest.raises(SecretStoreUnavailable):
+        store.save(chat(3))
+    assert files(store) == before
+    assert [i.id for i in ChatStore(store.folder(), secrets=dpapi).index()] == [cid(2), cid(1)]
+
+
+def test_a_missing_index_with_a_locked_secret_store_isnt_rebuilt(store: ChatStore, dpapi) -> None:  # type: ignore[no-untyped-def]
+    store.save(chat(1))
+    (store.folder() / "index.dat").unlink()
+    dpapi.unprotect_error = SecretStoreUnavailable("the keychain is locked")
+    assert store.index() == [] and store.locked
+    assert not (store.folder() / "index.dat").exists()
 
 
 def test_default_folder_is_in_the_data_dir(dpapi) -> None:  # type: ignore[no-untyped-def]

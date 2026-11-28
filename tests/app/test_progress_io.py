@@ -132,3 +132,10 @@ def test_cancelled_dialogs_and_the_unreadable_save_message(tmp_path: Path) -> No
     assert pops.shown == []
     io.tell_unreadable_save()
     assert pops.shown[-1].title == "A fresh start" and "Import progress" in pops.shown[-1].text
+
+
+def test_the_locked_save_message(tmp_path: Path) -> None:
+    io, calls, pops = make(SavedState(xp=5), tmp_path, answer="")
+    io.tell_locked_save()
+    assert pops.shown[-1].title == "Not saving this time"
+    assert "won't overwrite it" in pops.shown[-1].text and "quit Pixel Cat" in pops.shown[-1].text
