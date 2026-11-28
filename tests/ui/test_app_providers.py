@@ -427,12 +427,30 @@ def test_signing_out_of_anthropic(bg, monkeypatch) -> None:  # type: ignore[no-u
 def test_signing_out_of_chatgpt(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from pixelcat.adapters.llm import chatgpt_signin
 
-    monkeypatch.setattr(chatgpt_signin, "sign_out", lambda creds: False)
+    revoked: list = []  # type: ignore[type-arg]
+    monkeypatch.setattr(chatgpt_signin, "revoke", lambda tokens: (revoked.append(tokens), False)[1])
     bg.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r"})
     bg.accounts.ext_p("openai")["auth"] = "chatgpt"
     bg._on_menu("ext:out:openai")
-    assert bg.accounts.ext_p("openai")["auth"] == ""
+    assert bg.accounts.ext_p("openai")["auth"] == "" and bg.creds.get("chatgpt") is None
+    assert revoked == [{"access_token": "a", "refresh_token": "r"}]
     assert [p.title for p in bg.popups.open] == ["Signed out", "ChatGPT"]          # (OpenAI couldn't confirm it)
+
+
+def test_signing_out_of_chatgpt_with_a_locked_secret_store_keeps_the_sign_in(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from pixelcat.adapters.llm import chatgpt_signin
+
+    revoked: list = []  # type: ignore[type-arg]
+    monkeypatch.setattr(chatgpt_signin, "revoke", lambda tokens: (revoked.append(tokens), True)[1])
+    bg.creds.set("chatgpt", {"access_token": "a", "refresh_token": "r"})
+    bg.accounts.ext_p("openai")["auth"] = "chatgpt"
+    _locked_keys(bg, monkeypatch)
+    bg._on_menu("ext:out:openai")
+    assert bg.accounts.ext_p("openai")["auth"] == "chatgpt" and bg.creds.get("chatgpt")["refresh_token"] == "r"
+    assert revoked == []                                                              # (still signed in: not revoked)
+    assert [p.title for p in bg.popups.open] == ["ChatGPT"]
+    assert "Keychain can&#x27;t be used right now" in bg.popups.open[-1].text.text()
+    assert "Signed out" not in bg.popups.open[-1].text.text()
 
 
 def test_signing_out_of_github_and_removing_the_token(bg) -> None:  # type: ignore[no-untyped-def]

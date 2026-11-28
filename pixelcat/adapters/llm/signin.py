@@ -48,6 +48,16 @@ class ChatGPTSignIn:
 
         return chatgpt_signin.sign_out(creds)
 
+    def forget(self, creds: Any) -> Any:
+        from . import chatgpt_signin
+
+        return chatgpt_signin.forget(creds)
+
+    def revoke(self, tokens: Any) -> bool:
+        from . import chatgpt_signin
+
+        return chatgpt_signin.revoke(tokens)
+
 
 class GitHubSignIn:
     """GitHub: a code entered on GitHub's page (``pixelcat.adapters.llm.github_signin``)."""

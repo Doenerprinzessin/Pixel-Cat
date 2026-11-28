@@ -226,16 +226,42 @@ def test_a_locked_secret_store_keeps_the_save_and_writes_nothing_this_run(env, f
     assert env.load(other).xp == 450
 
 
-def test_a_locked_secret_store_never_makes_the_save_weaker(env, folder: Path) -> None:  # type: ignore[no-untyped-def]
+def test_a_locked_secret_store_never_makes_the_save_weaker(env, folder: Path,  # type: ignore[no-untyped-def]
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(persistence, "_locked", set())
     _, dpapi = env
     env.save(played(), folder)
     before = (folder / "save.dat").read_bytes()
     dpapi.protect_error = SecretStoreUnavailable("the keychain is locked")
     env.save(played(450), folder)
     assert (folder / "save.dat").read_bytes() == before                     # not signed instead: just not saved
+    assert persistence.is_locked(folder)
+    monkeypatch.setattr(persistence, "_locked", set())                       # (a restart)
     dpapi.protect_error = None
-    env.save(played(450), folder)                                            # (the next save works again)
+    env.save(played(450), folder)
     assert env.load(folder).xp == 450 and persistence.last_load == "save"
+
+
+def test_a_first_save_the_secret_store_refuses_stops_asking_for_the_run(env, folder: Path,  # type: ignore[no-untyped-def]
+                                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(persistence, "_locked", set())
+    _, dpapi = env
+    asked: list[bytes] = []
+    protect = dpapi.protect
+
+    def counted(data: bytes) -> bytes:
+        asked.append(data)
+        return protect(data)
+    monkeypatch.setattr(dpapi, "protect", counted)
+    assert env.load(folder).xp == 0 and persistence.last_load == "fresh" and not persistence.is_locked(folder)
+    dpapi.protect_error = SecretStoreUnavailable("the user denied the keychain")
+    env.save(played(), folder)
+    assert persistence.is_locked(folder) and files(folder) == []
+    dpapi.protect_error = None
+    env.save(played(), folder)
+    env.save(played(), folder)
+    assert len(asked) == 1 and files(folder) == []                       # asked once, not after every "Deny"
+    assert not persistence.is_locked(folder.parent / "other")
 
 
 def test_signed_save_loads_on_another_account(env, folder: Path) -> None:  # type: ignore[no-untyped-def]

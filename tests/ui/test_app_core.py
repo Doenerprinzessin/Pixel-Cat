@@ -152,6 +152,36 @@ def test_the_note_about_a_locked_save_goes_with_the_app(make_app, monkeypatch) -
     assert all(a[-1] != pet.progress_io.tell_unreadable_save for a in later)
 
 
+def test_a_save_the_secret_store_refuses_is_told_once_and_not_tried_again(make_app, monkeypatch,  # type: ignore[no-untyped-def]
+                                                                          tmp_path) -> None:
+    from PySide6.QtCore import QTimer
+
+    import pixelcat.app.controller as app_mod
+    from pixelcat import paths, persistence
+    from pixelcat.domain import SecretStoreUnavailable
+
+    monkeypatch.setattr(persistence, "_locked", set())
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path / "PixelCat")
+    monkeypatch.setattr(app_mod, "save_state", persistence.save_state)
+    later: list[tuple] = []
+    pet = make_app()
+    monkeypatch.setattr(QTimer, "singleShot", lambda *a: later.append(a))
+    asked: list[bytes] = []
+
+    def refuse(data: bytes) -> bytes:
+        asked.append(data)
+        raise SecretStoreUnavailable("the user denied the keychain")
+    pet.platform.secrets.answers("protect", refuse)
+    told: list[bool] = []
+    monkeypatch.setattr(pet.progress_io, "tell_locked_save", lambda saving=False: told.append(saving))
+    for _ in range(3):
+        pet.save()
+    notes = [a for a in later if a[:2] == (0, pet)]
+    assert len(asked) == 1 and len(notes) == 1
+    notes[0][-1]()
+    assert told == [True]
+
+
 def test_a_saved_place_off_every_screen_is_ignored(make_app) -> None:  # type: ignore[no-untyped-def]
     pet = make_app(SavedState(autostart_asked=True, pos_x=-9000, pos_y=200))
     pet.start()

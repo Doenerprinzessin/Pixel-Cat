@@ -296,7 +296,10 @@ class PixelCatApp(QObject):
         st.watches = self.watches.to_list()
         if self.brain.mode == "ground":
             st.pos_x, st.pos_y = int(self.brain.x), int(self.brain.y)
+        locked = persistence.is_locked()
         save_state(st, secrets=self.platform.secrets, marks=self.platform.save_marks)
+        if not locked and persistence.is_locked() and not self._quitting and not self.selftest:
+            QTimer.singleShot(0, self, lambda: self.progress_io.tell_locked_save(saving=True))   # (once: no retry)
         self.chat_ui.store_chat()
 
     def quit(self) -> None:

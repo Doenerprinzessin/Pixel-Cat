@@ -416,10 +416,14 @@ class ProviderSettings(QObject):
             if prov.signin_kind == "device" and not self._keys_changed(
                     prov.brand, lambda: signin.sign_out(self.accounts.creds)):   # (quick: it forgets the token)
                 return
+            tokens: list[Any] = []
+            if prov.signin_kind == "browser" and not self._keys_changed(
+                    prov.brand, lambda: tokens.append(signin.forget(self.accounts.creds))):   # (then revoked)
+                return
             s["auth"] = ""
             msg = prov.signed_out
             if prov.signin_kind == "browser":
-                self.popups.in_background(lambda: signin.sign_out(self.accounts.creds), lambda ok: None if ok is True else self.popups.popup(
+                self.popups.in_background(lambda: signin.revoke(tokens[0]), lambda ok: None if ok is True else self.popups.popup(
                     "Signed out", paras(["OpenAI couldn't confirm the sign-out. To be sure, disconnect Pixel Cat "
                                                "in ChatGPT's settings (Connected apps)."]), "OK"))
             elif prov.signin_kind != "device":

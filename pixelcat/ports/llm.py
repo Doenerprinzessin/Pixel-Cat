@@ -163,6 +163,15 @@ class BrowserSignIn(Protocol):
         """Sign out (blocking); True: the provider confirmed it."""
         ...
 
+    def forget(self, creds: Any) -> Any:
+        """Forget the sign-in on this PC (quick); returns what :meth:`revoke` needs.  Raises
+        SecretStoreUnavailable, with nothing forgotten, if the secret store can't be used right now."""
+        ...
+
+    def revoke(self, tokens: Any) -> bool:
+        """Revoke what :meth:`forget` returned at the provider (blocking); True: the provider confirmed it."""
+        ...
+
 
 class DeviceSignIn(Protocol):
     """Signing in with a code the user enters on the provider's page (GitHub)."""

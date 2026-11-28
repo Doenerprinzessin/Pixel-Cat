@@ -318,7 +318,19 @@ def sign_out(creds: Credentials) -> bool:
     """Revoke the sign-in at OpenAI and forget the tokens (the issued client id and the host
     id stay for next time).  False: OpenAI couldn't confirm it (the user should disconnect
     Pixel Cat in ChatGPT's settings)."""
+    return revoke(forget(creds))
+
+
+def forget(creds: Credentials) -> dict[str, Any]:
+    """Forget the tokens on this PC (quick; the issued client id and the host id stay for next time) and return
+    them for :func:`revoke`.  Raises SecretStoreUnavailable, with nothing forgotten, if the store can't be used."""
     c = dict(creds.get("chatgpt") or {})
+    creds.set("chatgpt", {"client_id": c["client_id"], "validated": True} if registered(c) else None)
+    return c
+
+
+def revoke(c: dict[str, Any]) -> bool:
+    """Revoke the tokens :func:`forget` returned at OpenAI (blocking); False: OpenAI couldn't confirm it."""
     ok = True
     if c.get("refresh_token"):
         ok = False
@@ -336,5 +348,4 @@ def sign_out(creds: Credentials) -> bool:
                     break
             except (requests.RequestException, ValueError, KeyError):
                 continue
-    creds.set("chatgpt", {"client_id": c["client_id"], "validated": True} if registered(c) else None)
     return ok

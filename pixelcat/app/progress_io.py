@@ -129,8 +129,17 @@ class ProgressIO:
             "If you exported your progress, load it with Menu &gt; Settings &gt; Your progress &gt; Import progress.",
             "The old file is kept in the PixelCat folder, just in case."]), "OK")
 
-    def tell_locked_save(self) -> None:
-        """The save couldn't be opened because the secret store (the Keychain) can't be used right now."""
+    def tell_locked_save(self, saving: bool = False) -> None:
+        """The save couldn't be opened (or, ``saving``, protected) because the secret store (the Keychain) can't
+        be used right now."""
+        if saving:
+            self.popups.popup("Not saving this time", paras([
+                "The cat couldn't use the Keychain, so your progress wasn't saved.",
+                "Until you restart Pixel Cat it doesn't try again (so you aren't asked over and over): your "
+                "progress isn't saved this time.",
+                "To fix it: quit Pixel Cat, unlock the Keychain or allow Pixel Cat to use it when asked, then start "
+                "the cat again."]), "OK")
+            return
         self.popups.popup("Not saving this time", paras([
             "The cat couldn't open the Keychain, so its save wasn't loaded - your progress is still there, "
             "and the cat won't overwrite it.",

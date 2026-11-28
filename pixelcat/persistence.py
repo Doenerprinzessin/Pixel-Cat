@@ -9,7 +9,9 @@ Files in the PixelCat data folder (paths.data_dir):
   been converted remembers it (the platform's save marks), so a new state.json is ignored.
 If the secret store can't be used right now (SecretStoreUnavailable: e.g. a locked keychain),
 the files are left as they are and nothing is saved for the rest of the run (``last_load`` =
-"locked"), so a working save is never overwritten by a new cat.
+"locked"), so a working save is never overwritten by a new cat.  A save that can't be protected
+(a first run with the keychain locked, or "Deny") stops saving for the run too (``is_locked``):
+the secret store isn't asked again and again.
 Every load also checks that the XP adds up: a game gives at most MAX_XP_PER_PLAY, so the XP
 can't be more than the games played could give.
 
@@ -267,7 +269,7 @@ def load_state(folder: Path | None = None, *, secrets: SecretStore, marks: SaveM
 def save_state(st: SavedState, folder: Path | None = None, touch: bool = True, *, secrets: SecretStore,
                marks: SaveMarks) -> None:
     """save.dat, then the same into save.bak (each written atomically: tmp file + replace).  Nothing is
-    written to a folder whose save couldn't be opened this run (``last_load`` "locked")."""
+    written to a folder whose save couldn't be opened or protected this run (:func:`is_locked`)."""
     if touch:
         st.last_seen = time.time()
     d = folder or paths.data_dir()
@@ -280,13 +282,19 @@ def save_state(st: SavedState, folder: Path | None = None, touch: bool = True, *
         _write(d / SAVE_NAME, data)
         _write(d / BACKUP_NAME, data)
     except SecretStoreUnavailable as e:
-        log.warning("not saved this time: the secret store can't be used right now (%s)", e)
+        log.warning("not saved: the secret store can't be used right now (%s) - not saving this run", e)
+        _locked.add(d.resolve())
         return
     except OSError:
         log.exception("could not save state")
         return
     if not _converted(d, marks):
         _mark_converted(d, marks)
+
+
+def is_locked(folder: Path | None = None) -> bool:
+    """True if nothing is saved to the folder this run (its save couldn't be opened or protected)."""
+    return bool(_locked) and (folder or paths.data_dir()).resolve() in _locked
 
 
 # ------------------------------------------------------------------ export / import

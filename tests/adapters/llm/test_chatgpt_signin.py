@@ -17,6 +17,7 @@ import requests
 
 from adapters.llm.fakes import Json
 from pixelcat.adapters.llm import chatgpt_signin as CS
+from pixelcat.domain.secrets import SecretStoreUnavailable
 from pixelcat.llm.external import MemoryCredentials
 
 FULL_SCOPE = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
@@ -441,6 +442,18 @@ def test_sign_out_retries_server_trouble(auth, no_sleep):
     auth.revoke_status = 502
     assert CS.sign_out(signed()) is False
     assert len(auth.http.sent("/auth/revoke")) == 3 and no_sleep == [0, 1, 3]
+
+
+def test_sign_out_forgets_first_and_revokes_nothing_if_the_store_cant_be_used(auth, no_sleep):
+    c = signed(validated=True)
+    before = c.get("chatgpt")
+
+    def locked(name, value):  # type: ignore[no-untyped-def]
+        raise SecretStoreUnavailable(-25308, "the Keychain can't be used right now")
+    c.set = locked  # type: ignore[method-assign]
+    with pytest.raises(SecretStoreUnavailable):
+        CS.sign_out(c)
+    assert auth.http.requests == [] and c.get("chatgpt") == before
 
 
 def test_sign_out_without_tokens(auth, no_sleep):

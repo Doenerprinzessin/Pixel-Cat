@@ -139,3 +139,6 @@ def test_the_locked_save_message(tmp_path: Path) -> None:
     io.tell_locked_save()
     assert pops.shown[-1].title == "Not saving this time"
     assert "won't overwrite it" in pops.shown[-1].text and "quit Pixel Cat" in pops.shown[-1].text
+    io.tell_locked_save(saving=True)
+    assert pops.shown[-1].title == "Not saving this time" and "wasn't saved" in pops.shown[-1].text
+    assert "won't overwrite it" not in pops.shown[-1].text and "quit Pixel Cat" in pops.shown[-1].text
