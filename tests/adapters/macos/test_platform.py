@@ -75,7 +75,8 @@ def test_no_installer_yet(plat):  # type: ignore[no-untyped-def]
 def test_the_passthrough_flag_and_key_names(plat):  # type: ignore[no-untyped-def]
     plat.input.set_passthrough_until(1e12)
     assert plat.input.passthrough_active()
-    assert plat.input.parse_combo("Cmd + Shift + S") == ["cmd", "shift", "s"]
+    assert plat.input.parse_combo("Cmd + Shift + S") == [55, 56, 1]     # (the layout can't be read here: US)
     with pytest.raises(ValueError):
         plat.input.parse_combo(" ")
-    assert plat.input.pinch(0, 0, 10, 90) == "failed"
+    with pytest.raises(OSError, match="Accessibility"):     # (PermissionNeeded: nothing is granted here)
+        plat.input.pinch(0, 0, 10, 90)
