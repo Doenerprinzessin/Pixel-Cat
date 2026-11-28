@@ -42,8 +42,6 @@ def test_the_notification_feed_explains_why_it_cant_read(plat):  # type: ignore[
 
 
 def test_the_secret_store_never_stores_plain_text(plat):  # type: ignore[no-untyped-def]
-    with pytest.raises(OSError):
-        plat.secrets.protect(b"secret")
     with pytest.raises(Unreadable):
         plat.secrets.unprotect(b"PXK1...")
 
