@@ -222,9 +222,14 @@ def test_there_is_no_stop_key():
 
 
 # ------------------------------------------------------------------ live (read-only)
-@pytest.mark.macos
-def test_live_volume_settings_parse():
-    level, muted = system.MacSystem().get_volume()
+@pytest.mark.macos_live
+def test_live_volume_settings_parse():  # runs osascript: only with PIXELCAT_MACOS_LIVE=1
+    try:
+        level, muted = system.MacSystem().get_volume()
+    except OSError as exc:
+        if str(exc) != system.NO_VOLUME:
+            raise
+        pytest.skip("this sound output has no volume ('missing value': HDMI, digital or a headless runner)")
     assert 0 <= level <= 100 and isinstance(muted, bool)
 
 

@@ -156,7 +156,7 @@ def test_failures_are_answers_not_exceptions(monkeypatch: pytest.MonkeyPatch) ->
 def test_the_real_pasteboard_reads_without_touching_it() -> None:
     cb = clipboard.MacClipboard()
     before = cb.sequence()
-    assert isinstance(before, int) and before > 0
+    assert isinstance(before, int) and before >= 0    # (0: never written, e.g. a fresh CI runner)
     assert all(isinstance(cb.has(k), bool) for k in ("files", "rtf", "html"))
     assert cb.sequence() == before
 
