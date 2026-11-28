@@ -10,6 +10,8 @@ The layout (ports and adapters):
   worker threads).
 * ``pixelcat/bootstrap.py``: the composition root, the only one that picks an adapter.
 * the core: everything else under ``pixelcat/``.  It gets its ports passed in and never imports an adapter.
+* ``pixelcat/app``: ``controller.py`` gets the whole ``Platform`` and wires the parts; every other module in there
+  is a part that gets single ports and never imports the controller.
 
 Static checks read every import with ``ast``: the lazy ones inside functions, relative ones, the ones under
 ``if TYPE_CHECKING:`` (kept apart: they never run) and dynamic ones (``importlib.import_module("...")``,
@@ -331,6 +333,65 @@ def test_llm_adapter_dynamic_imports_name_their_module(path):
 def test_the_llm_port_imports_only_stdlib():
     bad = sorted(name for name in _scan(PKG / "ports" / "llm.py").imports if not _stdlib(name))
     assert not bad, f"pixelcat/ports/llm.py imports {bad}"
+
+
+# ---- the app: the controller wires the parts, the parts don't know it ----------------------------------------------
+
+APP = [p for p in CORE if _covered(_rel(p), {"app"})]
+APP_PARTS = [p for p in APP if _rel(p) not in ("app/controller.py", "app/__init__.py")]
+# The app's plain-Python modules: no Qt, not even through another module.
+APP_QT_FREE = {"app/__init__.py", "app/context.py", "app/geometry.py", "app/state.py", "app/accounts.py"}
+
+
+def _platform_imports(scan: _Scan) -> set[str]:
+    return {name for name in scan.imports if name == "pixelcat.ports.Platform"}
+
+
+def _controller_imports(scan: _Scan) -> set[str]:
+    return {name for name in scan.imports if _is(name, "pixelcat.app.controller") or name == "pixelcat.app.PixelCatApp"}
+
+
+def test_the_app_has_parts():
+    assert len(APP_PARTS) > 5 and (PKG / "app" / "controller.py") in APP
+
+
+@pytest.mark.parametrize("path", APP_PARTS, ids=_rel)
+def test_only_the_controller_takes_the_whole_platform(path):
+    bad = sorted(_platform_imports(_scan(path)))
+    assert not bad, (f"pixelcat/{_rel(path)} imports {bad}; only app/controller.py gets the whole Platform, "
+                     "a part gets the single ports it uses (windows, display, secrets ...)")
+
+
+@pytest.mark.parametrize("path", APP_PARTS, ids=_rel)
+def test_the_parts_do_not_import_the_controller(path):
+    bad = sorted(_controller_imports(_scan(path)))
+    assert not bad, (f"pixelcat/{_rel(path)} imports {bad}; the controller wires the parts, a part gets what it needs "
+                     "passed in (late-bound callables for the controller's own methods)")
+
+
+def test_the_apps_plain_modules_stay_qt_free():
+    qt_free = {_rel(p) for p in CORE_QT_FREE} - set(QT_VIA)
+    assert APP_QT_FREE <= qt_free, f"{sorted(APP_QT_FREE - qt_free)} must stay out of QT_ALLOWED and QT_VIA"
+
+
+def test_the_app_checks_see_the_platform_and_the_controller(tmp_path):
+    pkg = tmp_path / "pixelcat" / "app"
+    pkg.mkdir(parents=True)
+    src = pkg / "part.py"
+    src.write_text(textwrap.dedent("""
+        from typing import TYPE_CHECKING
+        from ..ports import DisplayPort
+        from . import context
+        if TYPE_CHECKING:
+            from ..ports import Platform
+        def f():
+            from .controller import PixelCatApp
+            from . import PixelCatApp
+    """), encoding="utf-8")
+    scan = _scan(src, tmp_path)
+    assert _platform_imports(scan) == {"pixelcat.ports.Platform"}
+    assert _controller_imports(scan) == {"pixelcat.app.controller", "pixelcat.app.controller.PixelCatApp",
+                                         "pixelcat.app.PixelCatApp"}
 
 
 def test_import_scanner_sees_relative_lazy_typing_and_dynamic_imports(tmp_path):
