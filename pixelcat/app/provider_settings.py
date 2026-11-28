@@ -45,7 +45,7 @@ class ProviderSettings(QObject):
     ``ext_disconnect(p, only_key)``: a key removed or signed out (the chat's model and the default go back if
     they were that provider's)."""
 
-    def __init__(self, accounts: Accounts, providers: Mapping[str, ModelProvider], creds: external.Credentials,
+    def __init__(self, accounts: Accounts, providers: Mapping[str, ModelProvider],
                  saved: SavedState, cfg: Config, popups: Popups, menu: PixelMenu, overlay: CatOverlay,
                  chat_state: ChatState, *,
                  parent: QObject | None = None, save: Callable[[], None], ui_unit: Callable[[Monitor], int],
@@ -58,7 +58,6 @@ class ProviderSettings(QObject):
         super().__init__(parent)
         self.accounts = accounts
         self.providers = providers
-        self.creds = creds
         self.saved = saved
         self.cfg = cfg
         self.popups = popups
@@ -113,7 +112,7 @@ class ProviderSettings(QObject):
         b = self.accounts.budget(p)
         fmt = external.fmt_tokens
         if auth == "chatgpt":
-            email = (self.creds.get("chatgpt") or {}).get("email", "")
+            email = (self.accounts.creds.get("chatgpt") or {}).get("email", "")
             state = "Signed in with ChatGPT" + (f" ({email})" if email else "")
         else:
             state = {"key": prov.key_state, "signin": prov.signed_in}.get(auth, "Not connected")
@@ -336,7 +335,7 @@ class ProviderSettings(QObject):
                 if isinstance(q, dict):
                     self.accounts.ext_p(cp)["quota"] = q
                 self._apply_credit_limit(v, dlg)
-            self.popups.in_background(lambda: prov.quota(self.creds, auth, start=True), got)
+            self.popups.in_background(lambda: prov.quota(self.accounts.creds, auth, start=True), got)
             return
         self._apply_credit_limit(v, dlg)
 
@@ -367,7 +366,7 @@ class ProviderSettings(QObject):
         prov = self.providers[p]
 
         def work() -> list[dict[str, Any]]:
-            return prov.list_models(self.creds, auth)
+            return prov.list_models(self.accounts.creds, auth)
 
         def got(res: Any) -> None:
             if isinstance(res, Exception):
@@ -398,7 +397,7 @@ class ProviderSettings(QObject):
         auth = self.accounts.auth(p)
         s = self.accounts.ext_p(p)
         if only_key or auth == "key":
-            self.creds.set(f"{p}_key", None)
+            self.accounts.creds.set(f"{p}_key", None)
             if s.get("auth") == "key":
                 s["auth"] = ""
             msg = prov.key_removed
@@ -407,13 +406,13 @@ class ProviderSettings(QObject):
             s["auth"] = ""
             msg = prov.signed_out
             if prov.signin_kind == "browser":
-                self.popups.in_background(lambda: signin.sign_out(self.creds), lambda ok: None if ok is True else self.popups.popup(
+                self.popups.in_background(lambda: signin.sign_out(self.accounts.creds), lambda ok: None if ok is True else self.popups.popup(
                     "Signed out", paras(["OpenAI couldn't confirm the sign-out. To be sure, disconnect Pixel Cat "
                                                "in ChatGPT's settings (Connected apps)."]), "OK"))
             elif prov.signin_kind == "device":
-                signin.sign_out(self.creds)              # (quick: it forgets the token)
+                signin.sign_out(self.accounts.creds)              # (quick: it forgets the token)
             else:
-                self.popups.in_background(lambda: signin.sign_out(self.creds), lambda _r: None)
+                self.popups.in_background(lambda: signin.sign_out(self.accounts.creds), lambda _r: None)
         else:
             return
         if prov.credits:
@@ -447,7 +446,7 @@ class ProviderSettings(QObject):
         from ..ui.dialogs import KeyDialog
 
         prov = self.providers[p].info
-        dlg = KeyDialog(prov.key_title, prov.key_text, f"{prov.key_hint}...", bool(self.creds.get(f"{p}_key")),
+        dlg = KeyDialog(prov.key_title, prov.key_text, f"{prov.key_hint}...", bool(self.accounts.creds.get(f"{p}_key")),
                         noun=prov.key_noun)
         dlg.link.connect(lambda: QDesktopServices.openUrl(QUrl(prov.key_url)))
         dlg.submitted.connect(lambda key, d=dlg: self._check_key(p, key, d))
@@ -473,7 +472,7 @@ class ProviderSettings(QObject):
                 except RuntimeError:
                     pass                                 # (the dialog was closed meanwhile)
                 return
-            self.creds.set(f"{p}_key", key)
+            self.accounts.creds.set(f"{p}_key", key)
             self.accounts.ext_p(p)["auth"] = "key"
             self.accounts.set_models(p, res)
             log.info("%s connected with an API key (%d models)", p, len(res))
@@ -603,12 +602,12 @@ class ProviderSettings(QObject):
 
         def again() -> None:                         # (from the sign-in thread)
             self.popups.later.ran.emit(self._browser_again, None)
-        self.popups.in_background(lambda: signin.sign_in(self.creds, cancel=ev, again=again),
+        self.popups.in_background(lambda: signin.sign_in(self.accounts.creds, cancel=ev, again=again),
                             lambda res, pp=pop, e=ev: self._browser_done(p, res, pp, e))
 
     def _browser_restart(self, p: str) -> None:
         """START OVER: a fresh registration, with OpenAI's account/workspace picker."""
-        self.providers[p].signin().start_over(self.creds)
+        self.providers[p].signin().start_over(self.accounts.creds)
         log.info("ChatGPT sign-in: starting over")
         QTimer.singleShot(700, self, lambda: self._browser_start(p))   # (the old attempt lets go of its port first)
 
@@ -727,7 +726,7 @@ class ProviderSettings(QObject):
                     pass                                 # (the dialog was closed meanwhile)
                 return
             login, ms = res
-            self.creds.set(f"{p}_key", key)
+            self.accounts.creds.set(f"{p}_key", key)
             s = self.accounts.ext_p(p)
             s["auth"], s["login"] = "key", login
             self._drop_copilot_chat()
@@ -761,7 +760,7 @@ class ProviderSettings(QObject):
 
         def show_code(code: str, uri: str) -> None:      # (from the sign-in thread)
             self.popups.later.ran.emit(self._device_code, (code, uri, ev))
-        self.popups.in_background(lambda: signin.sign_in(self.creds, show_code, ev),
+        self.popups.in_background(lambda: signin.sign_in(self.accounts.creds, show_code, ev),
                             lambda res, e=ev: self._device_done(p, res, e))
 
     def _device_code(self, value: Any) -> None:

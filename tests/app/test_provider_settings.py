@@ -66,7 +66,7 @@ def make(providers: dict[str, FakeProvider], creds: dict[str, Any] | None = None
     def nope(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("not expected here")
     ps = ProviderSettings(
-        acc, providers, acc.creds, saved, cfg, FakePopups(), SimpleNamespace(), SimpleNamespace(), ChatState(),  # type: ignore[arg-type]
+        acc, providers, saved, cfg, FakePopups(), SimpleNamespace(), SimpleNamespace(), ChatState(),  # type: ignore[arg-type]
         save=lambda: saves.append("save"), ui_unit=nope, cat_monitor=nope, menu_items=nope, open_menu_at=nope,
         advice=nope, credit_budget=lambda: external.CreditBudget(acc.ext_p(acc.credit_p),
                                                                  saved.ext_usage.setdefault("copilot_credits", {})),

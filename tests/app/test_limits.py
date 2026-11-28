@@ -51,7 +51,7 @@ def make() -> tuple[Limits, SimpleNamespace]:
                                 request=lambda: f.calls.append("request"), end_task=lambda: f.calls.append("end"))
     chat_ui = SimpleNamespace(chat=f.chat, open_chat=lambda: f.calls.append("open_chat"))
     model_choice = SimpleNamespace(effective_model=lambda: "acme:m1", open_model_menu=lambda: f.calls.append("menu"))
-    limits = Limits(accounts, providers, {}, saved, f.popups, SimpleNamespace(), SimpleNamespace(),  # type: ignore[arg-type]
+    limits = Limits(accounts, providers, saved, f.popups, SimpleNamespace(), SimpleNamespace(),  # type: ignore[arg-type]
                     f.session, chat_ui, model_choice, SimpleNamespace(), SimpleNamespace(),  # type: ignore[arg-type]
                     save=lambda: setattr(f, "saves", f.saves + 1))
     return limits, f

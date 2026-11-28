@@ -443,7 +443,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     pet.save = lambda: None
     from pixelcat.ui import dialogs
     dialogs.KeyDialog.show_near = lambda self, *a: None   # (never shown: no focus taken from the user)
-    pet.creds = pet.accounts.creds = pet.provider_settings.creds = X.MemoryCredentials({"copilot_key": "github_pat_fake"})
+    pet.accounts.creds = X.MemoryCredentials({"copilot_key": "github_pat_fake"})
     pet.accounts.ext_p("copilot").update(auth="key", login="octocat", limit=0)
     pet.accounts.set_models("copilot", MODELS)
     pet.limits.copilot_quota(force=True)

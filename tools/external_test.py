@@ -833,7 +833,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     saved = persistence.SavedState(autostart_asked=True)
     pet = PixelCatApp(app, cfg, saved, selftest=1, platform=build_platform(), providers=build_providers())
     pet.save = lambda: None
-    pet.creds = pet.accounts.creds = pet.provider_settings.creds = creds
+    pet.accounts.creds = creds
     pet.creds.set("anthropic_key", "sk-ant-secret-123")
     # the key dialog: a bad key, then a good one ----------------------------------------------------
     pet.creds.set("anthropic_key", None)

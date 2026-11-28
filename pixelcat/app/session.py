@@ -34,7 +34,6 @@ if TYPE_CHECKING:
     from ..engine.ballgame import BallGame
     from ..engine.brain import Brain
     from ..llm.agent import DesktopAgent
-    from ..llm.external import Credentials
     from ..llm.model_status import ModelStatus
     from ..llm.tools import ToolBox
     from ..llm.watch import Watch, WatchManager
@@ -86,7 +85,7 @@ class AgentSession(QObject):
     ``show_model_banner()``, ``local_command(text)``."""
 
     def __init__(self, chat_state: ChatState, cfg: Config, saved: SavedState, providers: Mapping[str, ModelProvider],
-                 accounts: Accounts, creds: Credentials, provider_settings: ProviderSettings, watches: WatchManager,
+                 accounts: Accounts, provider_settings: ProviderSettings, watches: WatchManager,
                  brain: Brain, game: BallGame, minigames: Minigames, overlay: CatOverlay, tray: Tray,
                  notifications: NotificationPort, display: DisplayPort, folders: KnownFolders,
                  model_status: ModelStatus, *,
@@ -101,7 +100,6 @@ class AgentSession(QObject):
         self.saved = saved
         self.providers = providers
         self.accounts = accounts
-        self.creds = creds
         self.provider_settings = provider_settings
         self.watches = watches
         self.brain = brain
@@ -210,7 +208,7 @@ class AgentSession(QObject):
         st = self.saved.ext_settings
         think, effort = self.model_choice.ext_think_effort()
         tools = self.toolbox.schemas() if self.cfg.enable_tools else None
-        req = ChatRequest(mid, msgs, tools, think, effort, self.creds, auth, info=self.accounts.info(p, mid))
+        req = ChatRequest(mid, msgs, tools, think, effort, self.accounts.creds, auth, info=self.accounts.info(p, mid))
         if prov.credits and not self._credit_gate():
             return None
         if prov.keeps_chat:

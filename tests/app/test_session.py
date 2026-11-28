@@ -39,7 +39,7 @@ def made(qapp):  # type: ignore[no-untyped-def]
     accounts = SimpleNamespace(local=SimpleNamespace(info=SimpleNamespace(key="ollama"), new_chat=new_chat))
     x = SimpleNamespace()
     session = AgentSession(
-        f.chat_state, Config(), SavedState(), {}, accounts, x, x, x, x, x, x, x, x, x, x, x, x,  # type: ignore[arg-type]
+        f.chat_state, Config(), SavedState(), {}, accounts, x, x, x, x, x, x, x, x, x, x, x,  # type: ignore[arg-type]
         chat_ui=lambda: SimpleNamespace(chat=f.chat),  # type: ignore[arg-type, return-value]
         model_choice=lambda: SimpleNamespace(effective_model=lambda: "qwen3.5:9b"),  # type: ignore[arg-type, return-value]
         save=lambda: setattr(f, "saves", f.saves + 1), sync_tray=lambda: None, ext_gate=lambda p: True,

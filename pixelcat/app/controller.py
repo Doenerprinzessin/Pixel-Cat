@@ -112,8 +112,8 @@ class PixelCatApp(QObject):
         self.model_menu.title = "MODEL FOR THIS CHAT"
         self.model_menu.triggered.connect(lambda key: self.model_choice.on_model_menu(key))
         self.chat_state = ChatState()                    # the open chat: its messages, its own model and effort
-        self.creds = external.Credentials(secrets=platform.secrets)  # API keys and sign-ins (keys.dat, encrypted)
-        self.accounts = Accounts(providers, saved, self.creds, save=lambda: self.save())   # the providers' accounts
+        creds = external.Credentials(secrets=platform.secrets)  # API keys and sign-ins (keys.dat, encrypted)
+        self.accounts = Accounts(providers, saved, creds, save=lambda: self.save())   # the providers' accounts
         self.popups = Popups(self.sprites, self.platform.windows, anchor=lambda: self._popup_anchor(),
                              hidden=lambda: self.world_state.hidden_fullscreen)   # popups next to the cat, background work
         self.progress_io = ProgressIO(saved, self.popups, platform.folders, self.menu, self.game,   # export / import
@@ -121,7 +121,7 @@ class PixelCatApp(QObject):
                                       show_progress=lambda: self._show_progress(),
                                       menu_items=lambda: self.menus.menu_items())
         self.provider_settings = ProviderSettings(   # the providers' menus, key and limit dialogs, sign-ins
-            self.accounts, providers, self.creds, saved, cfg, self.popups, self.menu, self.overlay, self.chat_state,
+            self.accounts, providers, saved, cfg, self.popups, self.menu, self.overlay, self.chat_state,
             parent=self,
             save=lambda: self.save(), ui_unit=lambda mon: self.world.ui_unit(mon),
             cat_monitor=lambda: self.world.cat_monitor(),
@@ -157,7 +157,7 @@ class PixelCatApp(QObject):
                                         notify=self._status_notifier.changed.emit)
         self.watches = WatchManager(self.own_pid, platform=self.platform)  # wait_for watches in the background
         self.session = AgentSession(   # the AI's turns: requests, tool rounds, tasks, watches and timers waking it up
-            self.chat_state, cfg, saved, providers, self.accounts, self.creds, self.provider_settings, self.watches,
+            self.chat_state, cfg, saved, providers, self.accounts, self.provider_settings, self.watches,
             self.brain, self.game, self.minigames, self.overlay, self.tray, self.platform.notifications,
             self.platform.display, self.platform.folders, self.model_status, parent=self, chat_ui=lambda: self.chat_ui,
             model_choice=lambda: self.model_choice, save=lambda: self.save(), sync_tray=lambda: self.world.sync_tray(),
@@ -200,7 +200,7 @@ class PixelCatApp(QObject):
             show_model_banner=lambda: self.limits.show_model_banner(), selftest=lambda: self.selftest)
         self._status_notifier.changed.connect(self.chat_ui.on_model_status)   # (made above; from any thread)
         self.limits = Limits(   # the token and credit limits at request time, the limit popups, the model banner
-            self.accounts, providers, self.creds, saved, self.popups, self.menu, self.model_status, self.session,
+            self.accounts, providers, saved, self.popups, self.menu, self.model_status, self.session,
             self.chat_ui, self.model_choice, self.provider_settings, self.menus, save=lambda: self.save())
         self.commands = ChatCommands(   # the chat's own commands (/new, /model, /force ...), never sent to the model
             self.chat_state, cfg, saved, self.brain, self.watches, self.model_status, self.session, self.chat_ui,
@@ -229,6 +229,11 @@ class PixelCatApp(QObject):
         for sig in (QGuiApplication.instance().screenAdded, QGuiApplication.instance().screenRemoved,
                     QGuiApplication.instance().primaryScreenChanged):
             sig.connect(lambda *_: QTimer.singleShot(600, self.world.refresh_monitors))
+
+    @property
+    def creds(self) -> external.Credentials:
+        """The API keys and sign-ins: the accounts' own (the parts read them there; swap them there)."""
+        return self.accounts.creds
 
     def _timer(self, ms: int, fn) -> QTimer:  # type: ignore[no-untyped-def]
         tm = QTimer(self)

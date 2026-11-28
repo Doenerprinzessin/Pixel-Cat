@@ -360,6 +360,14 @@ def test_removing_a_key_goes_back_to_the_default_model(bg, app_env) -> None:  # 
     assert bg.popups.open[-1].text.text().endswith("The Anthropic API key is removed.</p>")
 
 
+def test_the_credentials_swapped_on_the_accounts_are_the_ones_every_part_uses(bg) -> None:  # type: ignore[no-untyped-def]
+    creds = external.MemoryCredentials({"anthropic_key": "k"})
+    bg.accounts.creds = creds
+    assert bg.creds is creds and bg.accounts.auth("anthropic") == "key"
+    bg._on_menu("ext:out:anthropic")
+    assert creds.get("anthropic_key") is None
+
+
 def test_signing_out_of_anthropic(bg, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from pixelcat.adapters.llm import ant_tool
 

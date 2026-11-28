@@ -39,13 +39,12 @@ class Limits:
     Copilot request used (``on_copilot_credits``) and the plan's allowance (``copilot_quota``, at most every
     2 minutes unless forced).  The controller answers ``save()``; asked at call time."""
 
-    def __init__(self, accounts: Accounts, providers: Mapping[str, ModelProvider], creds: external.Credentials,
+    def __init__(self, accounts: Accounts, providers: Mapping[str, ModelProvider],
                  saved: SavedState, popups: Popups, menu: PixelMenu, model_status: ModelStatus,
                  session: AgentSession, chat_ui: ChatUI, model_choice: ModelChoice,
                  provider_settings: ProviderSettings, menus: Menus, *, save: Callable[[], None]) -> None:
         self.accounts = accounts
         self.providers = providers
-        self.creds = creds
         self.saved = saved
         self.popups = popups
         self.menu = menu
@@ -121,7 +120,7 @@ class Limits:
                 self._save()
                 if self.menu.isVisible():
                     self.menu.refresh(self.menus.menu_items())
-        self.popups.in_background(lambda: prov.quota(self.creds, auth, start=force), got)
+        self.popups.in_background(lambda: prov.quota(self.accounts.creds, auth, start=force), got)
 
     def ext_gate(self, p: str) -> bool:
         """The token limit before a request: fine / suggest switching or raising / all used."""
