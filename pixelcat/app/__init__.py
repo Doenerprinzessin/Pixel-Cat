@@ -1,7 +1,7 @@
 """The application: ``PixelCatApp`` (in ``controller.py``) and the parts it is made of.
 
-``PixelCatApp`` is loaded on first use, so the plain-Python modules in here (``context``, ``geometry``) can be
-imported without Qt."""
+``PixelCatApp`` is loaded on first use, so the plain-Python modules in here (``accounts``, ``context``, ``geometry``,
+``state``) can be imported without Qt."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any

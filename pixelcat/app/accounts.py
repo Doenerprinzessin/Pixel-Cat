@@ -14,7 +14,8 @@ if TYPE_CHECKING:
 
 class Accounts:
     """The providers (by key, in the settings' order), their settings in ``saved.ext_settings`` and the keys and
-    sign-ins (``creds``).  ``save()`` is the app's: asked at call time."""
+    sign-ins (``creds``: the only reference - the other parts read it here, so swapping it here reaches them all).
+    ``save()`` is the app's: asked at call time."""
 
     def __init__(self, providers: Mapping[str, ModelProvider], saved: SavedState, creds: external.Credentials, *,
                  save: Callable[[], None]) -> None:

@@ -1,5 +1,7 @@
-"""Application controller: owns the timers and wires brain, overlay, menu, chat,
-tray, desktop queries, persistence and the LLM tool layer together."""
+"""The app's composition root and controller: ``PixelCatApp`` gets the whole ``Platform`` and the model providers
+(from ``pixelcat.bootstrap``), makes the engine, the windows and the parts of this package, hands each part the
+single ports and objects it uses (and late-bound callbacks into the others), and owns the timers, start-up,
+saving, quitting, the self-test, the autostart question and the menu's dispatcher (``_on_menu``)."""
 from __future__ import annotations
 
 import logging
@@ -57,6 +59,8 @@ log = logging.getLogger("pixelcat.app")   # (the name it had as pixelcat/app.py;
 
 
 class PixelCatApp(QObject):
+    """The desktop pet: wires the parts together and runs them (see the module docstring)."""
+
     def __init__(self, qapp: QApplication, cfg: Config, saved: SavedState, selftest: float = 0.0, *,
                  platform: Platform, providers: Mapping[str, ModelProvider]) -> None:
         super().__init__()
@@ -148,7 +152,6 @@ class PixelCatApp(QObject):
             reward_picture=lambda kind, key, u, hat_scale: self.menus.reward_picture(kind, key, u, hat_scale))
         self.game.on_end = self.minigames.game_ended
 
-        # chat / tools state
         # the AI: Ollama started and the model loaded in the background, status shown in the chat
         self._status_notifier = QtNotifier()           # (the status changes in a background thread)
         self.model_status = ModelStatus(cfg, may_download=lambda: (self.saved.model_download_ok and
@@ -450,7 +453,7 @@ class PixelCatApp(QObject):
         except Exception:  # noqa: BLE001
             log.exception("menu action %s failed", key)
 
-    # ================================================================ where the cat is
+    # ================================================================ where popups show
     def _popup_anchor(self) -> tuple[Any, tuple[int, int, int, int], int, int]:
         """Where a popup shows: next to the cat, on the cat's monitor."""
         mon = self.world.cat_monitor()
