@@ -136,17 +136,46 @@ def test_a_denied_add_is_unavailable(kc: FakeKeychain) -> None:
     assert kc.items == {}
 
 
-def test_other_keychain_errors_are_oserrors(kc: FakeKeychain) -> None:
-    kc.add_status = -34018                                             # errSecMissingEntitlement
-    with pytest.raises(OSError) as e:
+@pytest.mark.parametrize("status", [-34018, -26276, -25292, -25295, -36, -50])
+def test_any_other_keychain_error_is_unavailable_too(kc: FakeKeychain, status: int) -> None:
+    kc.add_status = status                                             # e.g. errSecMissingEntitlement
+    with pytest.raises(SecretStoreUnavailable) as e:
         keychain.MacSecretStore().protect(b"x")
-    assert type(e.value) is OSError and e.value.errno == -34018
+    assert e.value.errno == status and f"OSStatus {status}" in str(e.value)
     kc.add_status = None
     blob = keychain.MacSecretStore().protect(b"x")
+    kc.read_status = status                                            # e.g. errSecInternalComponent
+    for call in (lambda s: s.unprotect(blob), lambda s: s.protect(b"y")):
+        with pytest.raises(SecretStoreUnavailable) as e:
+            call(keychain.MacSecretStore())
+        assert e.value.errno == status
+
+
+def test_a_duplicate_that_cant_be_read_back_is_unavailable(kc: FakeKeychain) -> None:
+    kc.add_status = keychain.DUPLICATE                                 # says it exists, but no item to read
+    with pytest.raises(SecretStoreUnavailable) as e:
+        keychain.MacSecretStore().protect(b"x")
+    assert e.value.errno == keychain.DUPLICATE
+    assert kc.items == {}
+
+
+def test_a_keychain_error_keeps_the_save_as_it_is(kc: FakeKeychain, tmp_path: Any,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    from pixelcat import persistence
+    from pixelcat.adapters.null import NullSaveMarks
+
+    monkeypatch.setattr(persistence, "_locked", set())
+    tmp_path = tmp_path / "data"
+    store, marks = keychain.MacSecretStore(), NullSaveMarks()
+    persistence.save_state(persistence.SavedState(), tmp_path, secrets=store, marks=marks)
+    saved = (tmp_path / persistence.SAVE_NAME).read_bytes()
     kc.read_status = -26276                                            # errSecInternalComponent
-    with pytest.raises(OSError) as e:
-        keychain.MacSecretStore().unprotect(blob)
-    assert type(e.value) is OSError
+    store = keychain.MacSecretStore()
+    persistence.load_state(tmp_path, secrets=store, marks=marks)
+    assert persistence.last_load == "locked"
+    assert sorted(f.name for f in tmp_path.iterdir()) == sorted([persistence.SAVE_NAME, persistence.BACKUP_NAME])
+    persistence.save_state(persistence.SavedState(), tmp_path, secrets=store, marks=marks)
+    assert (tmp_path / persistence.SAVE_NAME).read_bytes() == saved   # not re-saved less protected
 
 
 def test_another_cat_adding_the_key_first_is_fine(kc: FakeKeychain) -> None:
@@ -159,11 +188,12 @@ def test_another_cat_adding_the_key_first_is_fine(kc: FakeKeychain) -> None:
 
 def test_a_strange_item_is_never_overwritten(kc: FakeKeychain) -> None:
     kc.items[("PixelCat-tests-never", "data-key-v1")] = {"data": b"short"}
-    with pytest.raises(OSError):
+    with pytest.raises(SecretStoreUnavailable, match="isn't a Pixel Cat data key"):
         keychain.MacSecretStore().protect(b"x")
-    with pytest.raises(Unreadable):
+    with pytest.raises(SecretStoreUnavailable):                       # the save is kept, not moved aside
         keychain.MacSecretStore().unprotect(b"PXK1" + keychain.key_id(b"short") + os.urandom(60))
     assert kc.items[("PixelCat-tests-never", "data-key-v1")] == {"data": b"short"}
+    assert kc.module.called("SecItemAdd") == []
 
 
 def test_the_service_follows_the_instance(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -7,8 +7,10 @@
   an unbundled Python lacks the entitlement for it, ``errSecMissingEntitlement``.)
 * The key id (``SHA256(key)[:8]``) tells data made with another key (another Mac user's, or a key that was
   deleted and made anew) from changed data; both are ``Unreadable``.
-* A locked keychain or denied access raises ``SecretStoreUnavailable`` (the data is fine: keep it, don't
-  overwrite it); any other Keychain error ``OSError``.  Nothing is ever stored unprotected.
+* Any failure to read or make the key item (a locked keychain, denied access, any other Keychain error, an
+  item there that isn't a Pixel Cat key) raises ``SecretStoreUnavailable``: the data may be fine, so keep it and
+  don't overwrite it.  ``Unreadable`` is only for the data itself (changed, another key) and for a missing key
+  item when reading.  Nothing is ever stored unprotected.
 """
 from __future__ import annotations
 
@@ -36,7 +38,7 @@ _MIN_BLOB = len(MAGIC) + ID_LEN + 16 + 32
 OK = 0
 NOT_FOUND = -25300                        # errSecItemNotFound
 DUPLICATE = -25299                        # errSecDuplicateItem
-# the store can't be used right now, but the data may be fine
+# why the store can't be used right now (any other status says its OSStatus); the data may be fine
 UNAVAILABLE = {
     -25308: "user interaction is not allowed (the keychain is locked)",   # errSecInteractionNotAllowed
     -25315: "user interaction is required but not allowed",               # errSecInteractionRequired
@@ -63,10 +65,9 @@ def _keys(key: bytes) -> tuple[bytes, bytes]:
             hmac.new(key, b"pixelcat mac", hashlib.sha256).digest())
 
 
-def _error(status: int, doing: str) -> OSError:
-    if status in UNAVAILABLE:
-        return SecretStoreUnavailable(status, f"the Keychain can't be used right now ({doing}): {UNAVAILABLE[status]}")
-    return OSError(status, f"the Keychain failed ({doing}): OSStatus {status}")
+def _error(status: int, doing: str) -> SecretStoreUnavailable:
+    why = UNAVAILABLE.get(status, f"OSStatus {status}")
+    return SecretStoreUnavailable(status, f"the Keychain can't be used right now ({doing}): {why}")
 
 
 def _sec() -> Any:
@@ -127,17 +128,15 @@ class MacSecretStore:
                 elif status == DUPLICATE:             # another cat made it just now
                     key = _read(svc)
                     if key is None:
-                        raise OSError(DUPLICATE, "the Keychain says the data key exists but can't find it")
+                        raise SecretStoreUnavailable(DUPLICATE, "the Keychain says the data key exists but "
+                                                                "can't find it")
                 else:
                     raise _error(status, "storing the data key")
             if key is None:
                 raise Unreadable("there is no Pixel Cat key in the Keychain: it was deleted, or this was made "
                                  "for another Mac user")
-            if len(key) != KEY_LEN:
-                msg = f"the Keychain item {svc!r} / {ACCOUNT!r} isn't a Pixel Cat data key"
-                if create:
-                    raise OSError(msg)
-                raise Unreadable(msg)
+            if len(key) != KEY_LEN:                  # never overwritten: someone else's item, or damaged
+                raise SecretStoreUnavailable(f"the Keychain item {svc!r} / {ACCOUNT!r} isn't a Pixel Cat data key")
             self._cache[svc] = key
             return key
 
