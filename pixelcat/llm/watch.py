@@ -29,7 +29,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
-from ..domain import app_matches, badge_count, find_windows, friendly
+from ..domain import PermissionNeeded, app_matches, badge_count, find_windows, friendly
 from ..ports import AccessibilityPort, Platform
 
 log = logging.getLogger(__name__)
@@ -83,8 +83,10 @@ class Watch:
         return f"{self.label} (until {day}{when:%H:%M})"
 
 
-def _window_text(a11y: AccessibilityPort, hwnd: int, timeout: float = 8.0) -> str | None:
-    """All readable text of a window (names, values, document) - None if it can't be read."""
+def _window_text(a11y: AccessibilityPort, hwnd: int, timeout: float = 8.0, strict: bool = False) -> str | None:
+    """All readable text of a window (names, values, document) - None if it can't be read.  ``strict`` (a tool
+    the user is waiting for, never the background): the system's "not allowed yet" (:class:`PermissionNeeded`,
+    macOS) is raised, so its message reaches the user."""
     box: list[object] = []
 
     def work() -> None:
@@ -98,6 +100,8 @@ def _window_text(a11y: AccessibilityPort, hwnd: int, timeout: float = 8.0) -> st
     th = threading.Thread(target=work, daemon=True)
     th.start()
     th.join(timeout)
+    if strict and box and isinstance(box[0], PermissionNeeded):
+        raise box[0]
     if th.is_alive() or not box or isinstance(box[0], Exception):
         return None
     return str(box[0])
@@ -114,12 +118,14 @@ class Checker:
         self.own_pid = own_pid
         self._win = platform.windows
         self._a11y = platform.accessibility
+        self._aliases = platform.profile.window_alias_map()     # (None: the Windows names)
+        self._notification = platform.profile.notification      # "Windows notification"
         self.feed = platform.notifications.open_feed()
 
     # ------------------------------------------------------------------ helpers
     def _windows(self, query: str, title_text: str = "") -> list[Any]:
         wins = self._win.app_windows(self.own_pid)
-        hits = find_windows(query, wins) if query.strip() else wins
+        hits = find_windows(query, wins, self._aliases) if query.strip() else wins
         if title_text.strip():
             hits = [w for w in hits if title_text.lower() in w.title.lower()]
         return hits
@@ -133,7 +139,7 @@ class Checker:
                 w.state["last"] = self.feed.last_id()
                 w.state["badges"] = {k: v for k, v in self.feed.badges().items() if w.app and self._app_ok(k, w)}
             except Exception as exc:  # noqa: BLE001
-                raise WatchError("I can't read Windows notifications on this PC - watch the app's window "
+                raise WatchError(f"I can't read {self._notification}s on this PC - watch the app's window "
                                  "instead (event window_text)") from exc
         elif w.kind == "window_closed":
             wins = self._windows(w.app, w.text)
@@ -149,7 +155,7 @@ class Checker:
                 if w.gone:
                     return f"No window matches '{w.app}' right now, so '{w.text}' isn't shown anywhere."
                 raise WatchError(f"no open window matches '{w.app}' - open it first, or use window_opened")
-            found, win, line = self._scan_text(w, wins)
+            found, win, line = self._scan_text(w, wins, strict=True)
             if found and not w.gone:
                 return f"{win.label()} already shows: \"{line}\""
             if found is False and w.gone:
@@ -232,12 +238,13 @@ class Checker:
         w.state["hwnds"] = list(known | {x.hwnd for x in wins})[-50:]
         return f"A new window opened: {new[0].label()}." if new else ""
 
-    def _scan_text(self, w: Watch, wins: list[Any]) -> tuple[bool | None, Any, str]:
-        """(True: shown / False: read, not shown / None: couldn't read), the window, the line."""
+    def _scan_text(self, w: Watch, wins: list[Any], strict: bool = False) -> tuple[bool | None, Any, str]:
+        """(True: shown / False: read, not shown / None: couldn't read), the window, the line.  ``strict``: see
+        :func:`_window_text` (the start of a watch; the background checks stay quiet)."""
         want = _norm(w.text)
         read_any = False
         for x in sorted(wins, key=lambda v: v.minimized)[:3]:
-            text = _window_text(self._a11y, x.hwnd)
+            text = _window_text(self._a11y, x.hwnd, strict=strict)
             if not text or not text.strip():
                 continue
             read_any = True

@@ -28,25 +28,35 @@ import logging
 import re as _re
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from typing import Iterator
 
 from .. import imaging
-from ..domain import AppWindow, Element, ElementKinds, Snapshot, find_windows, monitor_at
+from ..domain import AppWindow, Element, ElementKinds, PermissionNeeded, Snapshot, find_windows, monitor_at
 from ..ports import Keys, Platform
 from ..settings import Config
 
 log = logging.getLogger(__name__)
 
+# (process names in lower case: Windows exes, then macOS executables - those have no ".exe", so they never match
+# on Windows)
 CODE_EDITORS = {"code.exe", "code - insiders.exe", "cursor.exe", "devenv.exe", "notepad++.exe", "sublime_text.exe",
-                "idea64.exe", "pycharm64.exe", "webstorm64.exe", "rider64.exe", "clion64.exe", "atom.exe"}
-PLAIN_TEXT_APPS = CODE_EDITORS | {"notepad.exe", "notepad2.exe", "notepad3.exe", "notepads.exe", "wordpad.exe"}
+                "idea64.exe", "pycharm64.exe", "webstorm64.exe", "rider64.exe", "clion64.exe", "atom.exe",
+                "code", "code - insiders", "cursor", "windsurf", "zed", "xcode", "sublime_text", "bbedit", "nova",
+                "idea", "pycharm", "webstorm", "rider", "clion"}
+PLAIN_TEXT_APPS = CODE_EDITORS | {"notepad.exe", "notepad2.exe", "notepad3.exe", "notepads.exe", "wordpad.exe",
+                                  "textedit", "coteditor"}
 RICH_HTML_APPS = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe", "teams.exe",
                   "ms-teams.exe", "slack.exe", "discord.exe", "outlook.exe", "olk.exe", "winword.exe", "onenote.exe",
-                  "powerpnt.exe", "excel.exe", "thunderbird.exe", "whatsapp.exe"}
+                  "powerpnt.exe", "excel.exe", "thunderbird.exe", "whatsapp.exe",
+                  "google chrome", "safari", "firefox", "microsoft edge", "brave browser", "opera", "vivaldi", "arc",
+                  "msteams", "microsoft teams", "slack", "discord", "microsoft outlook", "microsoft word",
+                  "microsoft onenote", "microsoft powerpoint", "microsoft excel", "mail", "thunderbird", "whatsapp"}
 COMMAND_LINES = {"windowsterminal.exe", "cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe", "openconsole.exe",
-                 "wsl.exe", "bash.exe", "mintty.exe", "regedit.exe", "powershell_ise.exe", "mmc.exe"}
+                 "wsl.exe", "bash.exe", "mintty.exe", "regedit.exe", "powershell_ise.exe", "mmc.exe",
+                 "terminal", "iterm2", "ghostty", "warp", "stable", "alacritty", "kitty", "wezterm-gui", "tabby",
+                 "hyper", "script editor", "spotlight"}      # ("stable": Warp's executable)
 
 
 class AgentError(Exception):
@@ -148,6 +158,7 @@ class DesktopAgent:
         self._a11y = platform.accessibility
         self._cap = platform.capture
         self._procs = platform.processes
+        self._profile = platform.profile     # the platform's shortcuts (ctrl+v / cmd+v ...) and app names
         self.cancel = threading.Event()
         self.overlay_hwnd = 0
         self.last_hwnd = 0
@@ -155,12 +166,23 @@ class DesktopAgent:
         self.shot: Shot | None = None
         self._seen: Seen | None = None
         self._quick = False              # inside capture.excluding(): grab the screen directly
+        self._no_pictures = False        # the last fingerprint failed: the system doesn't allow screen pictures yet
         self._uia_busy: dict[int, threading.Thread] = {}
 
     # ================================================================ helpers
+    def _keys_of(self, combo: str) -> Keys:
+        """A combo the profile names ("ctrl+v", on a Mac "cmd+v"), with its key names as the ports know them."""
+        aliases = self._profile.key_alias_map()     # (empty on Windows: the combo as it is)
+        return self._input.parse_combo("+".join(aliases.get(k, k) for k in combo.split("+")) if aliases else combo)
+
+    def _shortcut(self, key: str) -> Keys:
+        """The platform's shortcut with ``key``: ctrl+``key`` (Windows), cmd+``key`` (Mac)."""
+        return self._keys_of(f"{self._profile.primary}+{key}")
+
     def _uia_snapshot(self, hwnd: int, kinds: ElementKinds = "interactive", limit: int = 80,
-                      timeout: float = 4.0) -> Snapshot | None:
-        """UI Automation snapshot, given up after ``timeout`` s (some apps build huge trees)."""
+                      timeout: float = 4.0, strict: bool = False) -> Snapshot | None:
+        """UI Automation snapshot, given up after ``timeout`` s (some apps build huge trees).  ``strict`` (reading
+        on the user's request): the system's "not allowed yet" (:class:`PermissionNeeded`, macOS) is raised."""
         busy = self._uia_busy.get(hwnd)
         if busy is not None and busy.is_alive():
             return None   # the last request for this window is still running
@@ -180,6 +202,8 @@ class DesktopAgent:
             log.info("UI Automation too slow for %s - continuing without an element list", self.describe_hwnd(hwnd))
             return None
         res = box[0] if box else None
+        if strict and isinstance(res, PermissionNeeded):
+            raise res
         return res if isinstance(res, Snapshot) else None
 
     def _window_image(self, hwnd: int):  # type: ignore[no-untyped-def]
@@ -207,9 +231,16 @@ class DesktopAgent:
         self._seen = Seen(hwnd, rect, how, img.copy(), time.monotonic())
 
     def _fingerprint(self, hwnd: int) -> bytes | None:
-        """Small grayscale picture of the window, to notice whether anything changed."""
+        """Small grayscale picture of the window, to notice whether anything changed (None: no picture).  Nobody
+        asked for this picture, so it never asks the user for a permission: a capture with ``quiet()`` (macOS)
+        raises PermissionNeeded at once instead (noted in ``_no_pictures``); Windows' capture has no ``quiet``."""
+        quiet = getattr(self._cap, "quiet", None)
         try:
-            img, _r = self._window_image(hwnd)
+            with quiet() if quiet is not None else nullcontext():
+                img, _r = self._window_image(hwnd)
+        except PermissionNeeded:
+            self._no_pictures = True
+            return None
         except Exception:  # noqa: BLE001
             return None
         if img is None:
@@ -261,7 +292,11 @@ class DesktopAgent:
     def wait_until_drawn(self, hwnd: int, max_s: float = 15.0) -> float:
         """Wait until a starting app's window stops changing (splash screens, loading)."""
         t0 = time.time()
+        self._no_pictures = False
         last = self._fingerprint(hwnd)
+        if last is None and self._no_pictures:     # nothing to compare (macOS without Screen Recording): a short wait
+            _wait(min(2.0, max_s), self.cancel)
+            return time.time() - t0
         calm = 0
         while time.time() - t0 < max_s and not self.cancel.is_set():
             time.sleep(0.5)
@@ -292,7 +327,7 @@ class DesktopAgent:
         worked with last, else the app the user was using before opening the chat."""
         wins = self.windows()
         if target and str(target).strip():
-            hits = find_windows(str(target), wins)
+            hits = find_windows(str(target), wins, self._profile.window_alias_map())
             if not hits:
                 raise AgentError(f"no open window matches '{target}' (open windows: "
                                  + ", ".join(w.label() for w in wins[:8]) + ")")
@@ -431,7 +466,7 @@ class DesktopAgent:
         target = self._win.active_popup(hwnd)
         if self._win.is_hung(target):
             raise AgentError(f"{self.describe_hwnd(target)} is not responding right now")
-        snap = self._uia_snapshot(target, "readable", limit=self.cfg.read_max_elements, timeout=6.0)
+        snap = self._uia_snapshot(target, "readable", limit=self.cfg.read_max_elements, timeout=6.0, strict=True)
         if snap is None:
             raise AgentError(f"{self.describe_hwnd(target)} doesn't let me read its contents (or is too slow) - "
                              "use look_at_screen instead")
@@ -620,7 +655,7 @@ class DesktopAgent:
             try:
                 if not self._win.is_foreground(target):
                     raise AgentError(f"{label} is no longer in front, so I stopped")
-                self._input.press_combo(self._input.parse_combo("ctrl+v"))
+                self._input.press_combo(self._shortcut("v"))
                 self._wait_for_text(text, before_txt)   # restore the clipboard only once the app has it
             finally:
                 if saved:
@@ -662,7 +697,7 @@ class DesktopAgent:
         if changed is False:
             raise AgentError(f"nothing changed in {label} - the keyboard focus is not in a text field "
                              f"(focus: {where}). Open or click the right text area first (in editors press "
-                             "ctrl+n for a new file), then try again")
+                             f"{self._profile.primary}+n for a new file), then try again")
         msg = (f"{how} {len(text)} characters into {label}, but this app does not let me read text back. "
                "Here is a screenshot of the window now - CHECK where the text landed (e.g. in the editor, not in a "
                "chat panel or search box) before you tell the user it worked." + self.after(0.2))
@@ -707,9 +742,9 @@ class DesktopAgent:
         """Select everything in the focused editor and copy it (the exact text, even from editors
         that hide it from UI Automation, like VS Code).  Leaves everything selected."""
         seq = self._clipboard.sequence()
-        self._input.press_combo(self._input.parse_combo("ctrl+a"))
+        self._input.press_combo(self._shortcut("a"))
         time.sleep(0.08)
-        self._input.press_combo(self._input.parse_combo("ctrl+c"))
+        self._input.press_combo(self._shortcut("c"))
         end = time.time() + 1.5
         while time.time() < end:
             time.sleep(0.05)
@@ -792,7 +827,7 @@ class DesktopAgent:
                 raise AgentError(f"{label} is no longer in front, so I stopped")
             if paste:                                          # everything is still selected
                 self._clipboard.set_private_text(paste)
-                self._input.press_combo(self._input.parse_combo("ctrl+v"))
+                self._input.press_combo(self._shortcut("v"))
             else:                                              # nothing left: pasting "" would do nothing
                 self._input.press_combo(self._input.parse_combo("delete"))
             time.sleep(0.4)
@@ -802,16 +837,16 @@ class DesktopAgent:
             ok = check is not None and check.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") == result.rstrip("\n")
         finally:
             if selected and self._win.is_foreground(target):
-                self._input.press_combo(self._input.parse_combo("ctrl+end"))   # never leave the whole text selected
+                self._input.press_combo(self._keys_of(self._profile.doc_end))   # never leave the whole text selected
             self._clipboard.write(saved)
         n = len(spans)
         what = f"{n} place{'s' if n != 1 else ''}"
         if not ok:
             raise AgentError(f"I replaced the text in {label}, but reading it back it doesn't match exactly "
                              "(the editor may have reformatted it) - look at it and fix it if needed; "
-                             "ctrl+z undoes the change")
+                             f"{self._profile.primary}+z undoes the change")
         return (f"Replaced {old[:60]!r} with {new[:60]!r} in {label} ({what}). Checked: the whole text is exactly "
-                "as intended. (ctrl+z would undo it.)" + self.after(0.05))
+                f"as intended. ({self._profile.primary}+z would undo it.)" + self.after(0.05))
 
     def keys(self, combos: list[tuple[str, Keys]], hwnd: int, hold: float = 0.0) -> str:
         self._check_input_allowed(hwnd)
@@ -907,15 +942,17 @@ class DesktopAgent:
                 why = self._input.pinch(sp.x, sp.y, start, end, 0.3 + 0.08 * steps, self.cancel)
                 if why == "failed":
                     used, why = "wheel", ""
-                    note = " (Windows didn't take a touch pinch here, so I used ctrl + mouse wheel instead.)"
+                    note = (f" ({self._profile.os} didn't take a touch pinch here, so I used {self._profile.zoom} + "
+                            "mouse wheel instead.)")
             if used == "wheel" and not why:
-                with self._input.holding(["ctrl"]):
+                zoom = self._profile.zoom
+                with self._input.holding([self._profile.key_alias_map().get(zoom, zoom)]):
                     self._input.scroll(sp.x, sp.y, steps if direction == "in" else -steps)
             self._input.move_cursor(*old_pos)
         if why == "cancel":
             text = "Stopped zooming because you pressed Esc / Stop."
         else:
-            way = "two-finger pinch" if used == "pinch" else "ctrl + mouse wheel"
+            way = "two-finger pinch" if used == "pinch" else f"{self._profile.zoom} + mouse wheel"
             where = "" if ref[0] == "mid" else f" at {sp.what}"
             text = (f"Zoomed {direction} ({steps} step{'s' if steps != 1 else ''}, {way}){where} in "
                     f"{self._label(sp.hwnd)}.{note}")
@@ -1073,7 +1110,7 @@ class DesktopAgent:
             raise AgentError("say which text to watch for")
         first = True
         while not self.cancel.is_set():
-            got = _window_text(self._a11y, self._win.active_popup(hwnd), timeout=6.0)
+            got = _window_text(self._a11y, self._win.active_popup(hwnd), timeout=6.0, strict=True)
             if got is None:
                 if first:
                     raise AgentError(f"I can't read the text of {label} - use until='change' instead")
@@ -1092,6 +1129,13 @@ class DesktopAgent:
             time.sleep(0.1)
         return f"Waited {seconds:.1f} s." + self.after(0.0)
 
+    def _raise_new(self, hwnd: int) -> None:
+        """Bring a just-started app's window to the front - if the system lets the cat (opening it worked anyway)."""
+        try:
+            self._win.bring_to_front(hwnd, timeout=0.8)
+        except PermissionNeeded:
+            log.info("couldn't bring the new window to the front: not allowed yet")
+
     def wait_for_window(self, before: set[int], name: str, timeout: float = 15.0) -> str:
         """After launching an app: find its new window, wait until it has finished loading
         (keys sent to a half-started app get lost) and remember it as the target."""
@@ -1103,9 +1147,9 @@ class DesktopAgent:
             if new:
                 best = next((w for w in new if key and (key in w.app.lower() or key in w.title.lower())), new[0])
                 self.last_hwnd = best.hwnd
-                self._win.bring_to_front(best.hwnd, timeout=0.8)
+                self._raise_new(best.hwnd)
                 waited = self.wait_until_drawn(best.hwnd, max_s=max(3.0, end - time.time()))
-                self._win.bring_to_front(best.hwnd, timeout=0.8)
+                self._raise_new(best.hwnd)
                 label = self.describe_hwnd(best.hwnd) if self._win.exists(best.hwnd) else best.label()
                 return f" Its window is ready and in front ({waited:.0f} s to load): {label}."
         fg = self._win.foreground()

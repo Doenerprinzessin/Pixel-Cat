@@ -124,7 +124,8 @@ class PixelCatApp(QObject):
         self.progress_io = ProgressIO(saved, self.popups, platform.folders, self.menu, self.game,   # export / import
                                       save=lambda: self.save(), stop_minigame=lambda: self.minigames.stop_minigame(),
                                       show_progress=lambda: self._show_progress(),
-                                      menu_items=lambda: self.menus.menu_items())
+                                      menu_items=lambda: self.menus.menu_items(),
+                                      other_account=platform.profile.other_account)
         self.provider_settings = ProviderSettings(   # the providers' menus, key and limit dialogs, sign-ins
             self.accounts, providers, saved, cfg, self.popups, self.menu, self.overlay, self.chat_state,
             parent=self,
@@ -136,7 +137,7 @@ class PixelCatApp(QObject):
             drop_copilot_chat=lambda: self.session.drop_copilot_chat(),
             stop_copilot=lambda background=False: self.session.stop_copilot(background=background),
             copilot_quota=lambda force=False: self.limits.copilot_quota(force=force),
-            show_model_banner=lambda: self.limits.show_model_banner())
+            show_model_banner=lambda: self.limits.show_model_banner(), account=platform.profile.account)
         for _p in self.accounts.external:                        # the external models' names (for labels)
             for _m in self.accounts.models(_p):
                 external.NAMES[f"{_p}:{_m['id']}"] = _m["name"]
@@ -159,7 +160,8 @@ class PixelCatApp(QObject):
                                                                   self.model_status.model == cfg.model)
                                         or self.model_status.model in self.model_choice.download_ok,
                                         ollama_finder=platform.apps.find_ollama, starter=platform.apps.start_ollama,
-                                        notify=self._status_notifier.changed.emit)
+                                        notify=self._status_notifier.changed.emit,
+                                        setup_hint=platform.profile.setup_hint)
         self.watches = WatchManager(self.own_pid, platform=self.platform)  # wait_for watches in the background
         self.session = AgentSession(   # the AI's turns: requests, tool rounds, tasks, watches and timers waking it up
             self.chat_state, cfg, saved, providers, self.accounts, self.provider_settings, self.watches,
@@ -170,7 +172,7 @@ class PixelCatApp(QObject):
             copilot_credits=lambda credits: self.limits.on_copilot_credits(credits),
             copilot_quota=lambda: self.limits.copilot_quota(), limit_popup=lambda p, info: self.limits.limit_popup(p, info),
             show_model_banner=lambda: self.limits.show_model_banner(),
-            local_command=lambda text: self.commands.local_command(text))
+            local_command=lambda text: self.commands.local_command(text), profile=platform.profile)
         self.watches.fired.connect(self.session.on_watch_fired)
         self.watches.changed.connect(self.session.on_watches_changed)
         self.session.toolbox = ToolBox(cfg, AppHooks(
@@ -193,7 +195,7 @@ class PixelCatApp(QObject):
             saved, cfg, self.brain, self.overlay, self.sprites, self.menu, self.tray, self.hud, self.world_state,
             self.world, self.minigames, self.provider_settings, self.model_choice, self.platform.autostart,
             parent=self, save=lambda: self.save(), chat=lambda: self.chat_ui.chat, quiet=lambda: self.quiet,
-            renamed=lambda: setattr(self.session, "copilot_stale", True))
+            renamed=lambda: setattr(self.session, "copilot_stale", True), start_with=platform.profile.start_with)
         self.chat_ui = ChatUI(   # the chat window and the saved chats (%APPDATA%\PixelCat\chats)
             self.chat_state, ChatStore(secrets=platform.secrets), saved, self.sprites, self.brain, self.overlay,
             self.world_state, self.world, self.watches, self.model_choice, self.model_status, self.platform.display,
@@ -202,14 +204,15 @@ class PixelCatApp(QObject):
             set_auto_mode=lambda on: self.session.set_auto_mode(on),
             cancel_watch=lambda wid: self.session.cancel_watch(wid),
             open_saved_chat=lambda cid: self.session.open_saved_chat(cid), save=lambda: self.save(),
-            show_model_banner=lambda: self.limits.show_model_banner(), selftest=lambda: self.selftest)
+            show_model_banner=lambda: self.limits.show_model_banner(), selftest=lambda: self.selftest,
+            new_chat_keys=platform.profile.new_chat_keys)
         self._status_notifier.changed.connect(self.chat_ui.on_model_status)   # (made above; from any thread)
         self.limits = Limits(   # the token and credit limits at request time, the limit popups, the model banner
             self.accounts, providers, saved, self.popups, self.menu, self.model_status, self.session,
             self.chat_ui, self.model_choice, self.provider_settings, self.menus, save=lambda: self.save())
         self.commands = ChatCommands(   # the chat's own commands (/new, /model, /force ...), never sent to the model
             self.chat_state, cfg, saved, self.brain, self.watches, self.model_status, self.session, self.chat_ui,
-            self.model_choice, save=lambda: self.save())
+            self.model_choice, save=lambda: self.save(), profile=platform.profile)
 
         # overlay input -> brain
         ov = self.overlay
@@ -349,7 +352,7 @@ class PixelCatApp(QObject):
                 log.exception("selftest: %s broken", part)
 
     def _ask_autostart(self) -> None:
-        dlg = PixelDialog("Meow! Start with Windows?",
+        dlg = PixelDialog(f"Meow! {self.platform.profile.start_with}?",
                           "Should I wake up automatically when you log in? (=^･ω･^=)<br>"
                           "You can change this any time in my right-click menu.", "YES PLEASE", "NO THANKS")
         dlg.answered.connect(self._autostart_answer)

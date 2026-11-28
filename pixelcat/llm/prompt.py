@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from ..domain import WINDOWS, Profile
+
 # Emoji-slang inspiration follows the common meanings collected in guides such as
 # https://www.guesmoji.com/guides/emoji-slang - used lightly, never inside code.
 SYSTEM_PROMPT = """You are Pixel, a tiny, fluffy pixel-art cat who lives on the user's Windows desktop.
@@ -136,12 +138,30 @@ battery, open windows or screen contents change - call the tool again instead of
 never write tool results yourself."""
 
 
-def build_system_prompt(tool_names: list[str], name: str = "Pixel") -> str:
-    """``name``: what the cat is called (Settings -> Name...)."""
+def _platform_words(p: Profile) -> list[tuple[str, str]]:
+    """The prompt's Windows words and shortcuts -> the platform's (the same words on Windows)."""
+    editor = p.text_editor.lower()
+    return [("the user's Windows desktop", f"the user's {p.desktop}"),
+            ("```powershell", f"```{p.shell}"),
+            ("teams, notepad, code", f"teams, {editor}, code"),
+            ("\"open notepad,", f"\"open {editor},"), ("open_app notepad", f"open_app {editor}"),
+            ("ctrl+", f"{p.primary}+"),
+            ("keys='ctrl'", f"keys='{p.primary}'"), ("(ctrl-click", f"({p.primary}-click"),
+            ("(ctrl + wheel", f"({p.zoom} + wheel"),
+            ("in Notepad/VS Code", f"in {p.text_editor}/VS Code"),
+            ("Windows shows its admin prompt (UAC)", p.admin_prompt)]
+
+
+def build_system_prompt(tool_names: list[str], name: str = "Pixel", profile: Profile = WINDOWS) -> str:
+    """``name``: what the cat is called (Settings -> Name...).  ``profile``: the platform's words and shortcuts
+    (:data:`SYSTEM_PROMPT` names Windows'; its ``prompt_note`` comes after it)."""
     # Only the date (no clock time): an unchanged prompt start lets Ollama reuse its cache,
     # so answers start much faster.  The exact time comes from the get_time tool.
     today = datetime.now().strftime("%A, %d %B %Y")
     tools = ", ".join(tool_names) if tool_names else "none"
     intro = SYSTEM_PROMPT if name == "Pixel" else SYSTEM_PROMPT.replace("You are Pixel,", f"You are {name},", 1)
-    return (f"{intro}{MEMORY_NOTE}\nAvailable tools: {tools}.\n"
+    if profile != WINDOWS:
+        for old, new in _platform_words(profile):
+            intro = intro.replace(old, new)
+    return (f"{intro}{profile.prompt_note}{MEMORY_NOTE}\nAvailable tools: {tools}.\n"
             f"Today is {today} (use get_time for the exact time).")

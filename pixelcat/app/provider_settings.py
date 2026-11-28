@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtGui import QGuiApplication
 
+from ..domain import WINDOWS
 from ..llm import external, models
 from ..ui.menu import MenuItem
 from .popups import paras
@@ -54,7 +55,7 @@ class ProviderSettings(QObject):
                  credit_budget: Callable[[], external.CreditBudget], model_choice: Callable[[], ModelChoice],
                  model_status: Callable[[], ModelStatus], drop_copilot_chat: Callable[[], None],
                  stop_copilot: Callable[..., None], copilot_quota: Callable[..., None],
-                 show_model_banner: Callable[[], None]) -> None:
+                 show_model_banner: Callable[[], None], account: str = WINDOWS.account) -> None:
         super().__init__(parent)
         self.accounts = accounts
         self.providers = providers
@@ -77,6 +78,7 @@ class ProviderSettings(QObject):
         self._stop_copilot = stop_copilot
         self._copilot_quota = copilot_quota
         self._show_model_banner = show_model_banner
+        self.account = account      # "your Windows account": the key texts name the platform's account
         self._signin_cancel: threading.Event | None = None
         self._ant_pop: Any = None
         self._ant_wait_pop: Any = None
@@ -446,7 +448,8 @@ class ProviderSettings(QObject):
         from ..ui.dialogs import KeyDialog
 
         prov = self.providers[p].info
-        dlg = KeyDialog(prov.key_title, prov.key_text, f"{prov.key_hint}...", bool(self.accounts.creds.get(f"{p}_key")),
+        text = prov.key_text.replace(WINDOWS.account, self.account)     # (the same text on Windows)
+        dlg = KeyDialog(prov.key_title, text, f"{prov.key_hint}...", bool(self.accounts.creds.get(f"{p}_key")),
                         noun=prov.key_noun)
         dlg.link.connect(lambda: QDesktopServices.openUrl(QUrl(prov.key_url)))
         dlg.submitted.connect(lambda key, d=dlg: self._check_key(p, key, d))

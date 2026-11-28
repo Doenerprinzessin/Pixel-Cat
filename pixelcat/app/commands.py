@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from ..domain import WINDOWS, Profile
 from ..llm import external, models
 from ..llm.tools import ToolError
 
@@ -32,7 +33,7 @@ class ChatCommands:
 
     def __init__(self, chat_state: ChatState, cfg: Config, saved: SavedState, brain: Brain, watches: WatchManager,
                  model_status: ModelStatus, session: AgentSession, chat_ui: ChatUI, model_choice: ModelChoice, *,
-                 save: Callable[[], None]) -> None:
+                 save: Callable[[], None], profile: Profile = WINDOWS) -> None:
         self.chat_state = chat_state
         self.cfg = cfg
         self.saved = saved
@@ -43,6 +44,7 @@ class ChatCommands:
         self.chat_ui = chat_ui
         self.model_choice = model_choice
         self._save = save
+        self.profile = profile      # the platform's words (Task Manager, Notepad ...)
 
     _FORCE_RE = re.compile(r"^/force(?:\s+(?:(end task|end|kill|close|quit|stop|terminate)|(open|start|run|launch)))?"
                            r"(?:\s+(.*))?$", re.I | re.S)
@@ -56,7 +58,8 @@ class ChatCommands:
         target = re.sub(r"\s+(as|with)\s+(admin(istrator)?|force)$", "", target, flags=re.I)
         target = re.sub(r"^(the\s+)?(app\s+)?", "", target, flags=re.I).strip().strip("\"'")
         if not m or not target:
-            self.chat_ui.chat.add("info", "Usage: /force end <app> (like Task Manager's End task, e.g. /force end teams) "
+            self.chat_ui.chat.add("info", f"Usage: /force end <app> (like {self.profile.task_manager}'s End task, "
+                                  "e.g. /force end teams) "
                                   "or /force open <app> (run as administrator).")
             return
         tool = "run_as_admin" if m.group(2) else "force_end"
@@ -88,7 +91,7 @@ class ChatCommands:
         denied = args.get("_denied") or []
         if denied:
             self.chat_ui.chat.ask_confirm(f"{len(denied)} process(es) of {args['_plan'].label} can only be ended with "
-                                  "ADMIN RIGHTS. Use admin rights to end them (Windows will ask you too)?",
+                                  f"ADMIN RIGHTS. Use admin rights to end them ({self.profile.os} will ask you too)?",
                                   lambda ans, d=list(denied): self._force_admin(d, ans))
 
     def _force_admin(self, denied: list[int], answer: str) -> None:
@@ -188,14 +191,15 @@ class ChatCommands:
             assert self.chat_ui.chat is not None
             self.chat_ui.chat.add("info", "Commands: /new (fresh chat), /history (our earlier chats), /auto on|off "
                                   "(no permission cards), "
-                                  "/force end <app> (like Task Manager), /force open <app> (as admin), "
+                                  f"/force end <app> (like {self.profile.task_manager}), /force open <app> (as admin), "
                                   "/watches, /unwatch, /model (AI model for this chat), /effort (how hard it "
                                   "thinks, this chat), /getmodel (download "
                                   "the AI model), /permissions, "
                                   "/permissions reset. "
                                   "Ask me to open, close, switch or minimize apps, search the web, control music, "
                                   "take screenshots, set timers, check the system and more! I can also SEE your "
-                                  "screen and use apps for you (click, type, shortcuts) - e.g. 'open Notepad and "
+                                  "screen and use apps for you (click, type, shortcuts) - e.g. "
+                                  f"'open {self.profile.text_editor} and "
                                   "write a packing list'. I can also wait for things in the background - "
                                   "'tell me when Anna writes on Teams', 'when the download is done, open it', "
                                   "'at 17:00 remind me and open Outlook'. Press Esc anywhere (or STOP) to stop me.")

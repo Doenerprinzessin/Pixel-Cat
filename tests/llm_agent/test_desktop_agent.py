@@ -604,7 +604,7 @@ def test_wait_for_window_falls_back(ag: DesktopAgent, desk, clock) -> None:  # t
 def texts(monkeypatch):  # type: ignore[no-untyped-def]
     seq: list = []
     monkeypatch.setattr(watch_mod, "_window_text",
-                        lambda a11y, hwnd, timeout=8.0: seq.pop(0) if len(seq) > 1 else seq[0])
+                        lambda a11y, hwnd, timeout=8.0, strict=False: seq.pop(0) if len(seq) > 1 else seq[0])
     return seq
 
 

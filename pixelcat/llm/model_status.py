@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from ..domain import WINDOWS
 from ..settings import Config
 
 log = logging.getLogger(__name__)
@@ -90,9 +91,11 @@ class ModelStatus:
 
     def __init__(self, cfg: Config, may_download: Callable[[], bool],
                  ollama_finder: Callable[[], Path | None] = find_ollama_app,
-                 starter: Callable[[Path], None] = start_ollama, *, notify: Callable[[], None]) -> None:
+                 starter: Callable[[Path], None] = start_ollama, *, notify: Callable[[], None],
+                 setup_hint: str = WINDOWS.setup_hint) -> None:
         self.cfg = cfg
         self.notify = notify
+        self.setup_hint = setup_hint       # how to get Ollama on this platform
         self.may_download = may_download
         self.find_ollama = ollama_finder
         self.start_ollama = starter
@@ -143,8 +146,7 @@ class ModelStatus:
         if st == "missing":
             return f"The AI model {m} isn't downloaded yet. Type /getmodel and I'll download it (that can take a while)."
         if st == "no_ollama":
-            return ("Ollama (the AI engine) isn't installed, so I can't chat yet. Run PixelCat-Setup.exe again and "
-                    "tick “Set up the AI chat”, or install it from ollama.com.")
+            return f"Ollama (the AI engine) isn't installed, so I can't chat yet. {self.setup_hint}"
         if st == "offline":
             return f"I can't reach Ollama at {self.cfg.ollama_url} - is it running?"
         if st == "error":

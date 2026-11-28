@@ -27,6 +27,7 @@ SYSTEM_KEYS = {_normalize(k) for k in WINDOWS.system_keys} | {
 APPS = (
     ("notepad", (_OPEN, "-a", "TextEdit")),
     ("textedit", (_OPEN, "-a", "TextEdit")),
+    ("wordpad", (_OPEN, "-a", "TextEdit")),
     ("calculator", (_OPEN, "-a", "Calculator")),
     ("paint", (_OPEN, "-a", "Preview")),
     ("preview", (_OPEN, "-a", "Preview")),
@@ -37,15 +38,15 @@ APPS = (
     ("screenshot", (_OPEN, "-a", "Screenshot")),
     ("settings", ("x-apple.systempreferences:",)),
     ("browser", ("https://www.bing.com",)),
-    ("character map", (_OPEN, "-a", "Character Viewer")),
     ("task manager", (_OPEN, "-a", "Activity Monitor")),
     ("activity monitor", (_OPEN, "-a", "Activity Monitor")),
 )
 
-# what users call an app -> its process name (lower case), for finding its windows
+# what users call an app -> its executable's name (lower case), for finding its windows (Teams' is "MSTeams")
 WINDOW_ALIASES = (
     ("word", "microsoft word"), ("excel", "microsoft excel"), ("powerpoint", "microsoft powerpoint"),
-    ("outlook", "microsoft outlook"), ("teams", "microsoft teams"), ("edge", "microsoft edge"),
+    ("onenote", "microsoft onenote"), ("outlook", "microsoft outlook"), ("teams", "msteams"),
+    ("microsoft teams", "msteams"), ("edge", "microsoft edge"),
     ("microsoft edge", "microsoft edge"), ("chrome", "google chrome"), ("google chrome", "google chrome"),
     ("firefox", "firefox"), ("safari", "safari"), ("vs code", "code"), ("vscode", "code"),
     ("visual studio code", "code"), ("file explorer", "finder"), ("explorer", "finder"), ("finder", "finder"),

@@ -50,7 +50,7 @@ class ChatUI(QObject):
                  cancel_chat: Callable[[], None], new_chat: Callable[[], None], set_auto_mode: Callable[[bool], None],
                  cancel_watch: Callable[[int], None], open_saved_chat: Callable[[str], None],
                  save: Callable[[], None], show_model_banner: Callable[[], None],
-                 selftest: Callable[[], Any]) -> None:
+                 selftest: Callable[[], Any], new_chat_keys: str = "Ctrl+N") -> None:
         super().__init__(parent)
         self.chat_state = chat_state
         self.chats = chats
@@ -64,6 +64,7 @@ class ChatUI(QObject):
         self.model_choice = model_choice
         self.model_status = model_status
         self.display = display
+        self.new_chat_keys = new_chat_keys       # the new-chat shortcut in the platform's words
         self._on_user_message = on_user_message
         self._cancel_chat = cancel_chat
         self._new_chat = new_chat
@@ -81,7 +82,7 @@ class ChatUI(QObject):
 
     def ensure_chat(self) -> ChatWindow:
         if self.chat is None:
-            self.chat = ChatWindow(self.sprites, display=self.display)
+            self.chat = ChatWindow(self.sprites, display=self.display, new_chat_keys=self.new_chat_keys)
             self.chat.set_layout(self.saved.chat_size or ChatWindow.SIZE_U, self.saved.chat_full)
             self.chat.layout_changed.connect(self._save_chat_layout)
             self.chat.send_requested.connect(self._on_user_message)

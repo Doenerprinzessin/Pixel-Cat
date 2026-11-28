@@ -20,6 +20,7 @@ from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from .. import naming, paths
+from ..domain import WINDOWS, Profile
 from ..llm import external, models
 from ..llm.agent import ToolOutput
 from ..llm.model_status import model_on_disk
@@ -93,7 +94,8 @@ class AgentSession(QObject):
                  save: Callable[[], None], sync_tray: Callable[[], None], ext_gate: Callable[[str], bool],
                  credit_gate: Callable[[], bool], copilot_credits: Callable[[float], None],
                  copilot_quota: Callable[[], None], limit_popup: Callable[[str, dict[str, Any]], None],
-                 show_model_banner: Callable[[], None], local_command: Callable[[str], bool]) -> None:
+                 show_model_banner: Callable[[], None], local_command: Callable[[str], bool],
+                 profile: Profile = WINDOWS) -> None:
         super().__init__(parent)
         self.chat_state = chat_state
         self.cfg = cfg
@@ -122,6 +124,7 @@ class AgentSession(QObject):
         self._limit_popup = limit_popup
         self._show_model_banner = show_model_banner
         self._local_command = local_command
+        self.profile = profile      # the platform's words and shortcuts (the system prompt, the error texts)
         self.resume_after_switch = False                 # token limit: go on once another model is picked
         self._ext_notes: set[str] = set()
         self._copilot: Any = None                        # the Copilot runtime's session for this chat
@@ -413,7 +416,7 @@ class AgentSession(QObject):
             self._long_hint_shown = True
             assert self.chat_ui.chat is not None
             self.chat_ui.chat.add("info", "Psst, our chat is getting long, so I only remember the latest part. "
-                                  "Press ＋ (or Ctrl+N) for a fresh one 🐾")
+                                  f"Press ＋ (or {self.profile.new_chat_keys}) for a fresh one 🐾")
         self.request()
 
     # ---------------------------------------------------------------- memory
@@ -479,7 +482,7 @@ class AgentSession(QObject):
                 and 0 < upto <= len(self.chat_state.history) and self.chat_state.history[upto - 1] is getattr(self, "_sent_last", None)):
             new = [context.clean(m) for m in self.chat_state.history[self._sent_upto:]]
             candidate = sent + new
-            fixed = context.tokens([{"content": build_system_prompt(self.toolbox.names())}]) + \
+            fixed = context.tokens([{"content": build_system_prompt(self.toolbox.names(), profile=self.profile)}]) + \
                 len(json.dumps(self.toolbox.schemas())) // 3
             if context.tokens(candidate) <= (self._ctx_budget() - 2000 - fixed) * 0.9:
                 self._sent, self._sent_upto = candidate, len(self.chat_state.history)
@@ -504,7 +507,7 @@ class AgentSession(QObject):
         if not turns:
             return []
         task = turns[-1]
-        fixed = context.tokens([{"content": build_system_prompt(self.toolbox.names())}]) + \
+        fixed = context.tokens([{"content": build_system_prompt(self.toolbox.names(), profile=self.profile)}]) + \
             len(json.dumps(self.toolbox.schemas())) // 3
         room = self._ctx_budget() - 2000 - fixed
         head = context.clean(task[0])
@@ -548,7 +551,7 @@ class AgentSession(QObject):
     def request(self) -> None:
         assert self.chat_ui.chat is not None
         sys_msg = {"role": "system", "content": build_system_prompt(self.toolbox.names() if self.cfg.enable_tools else [],
-                                                                    naming.ai())}
+                                                                    naming.ai(), self.profile)}
         msgs = [sys_msg] + self._context()
         ext = external.parse(self.model_choice.effective_model())
         if ext:
@@ -728,7 +731,8 @@ class AgentSession(QObject):
                     info = {"why": "rate"}
                 self._limit_popup(str(info.get("provider") or sender.provider), info)
                 return                                   # (the task waits: switch model, or OK ends it)
-            self.chat_ui.chat.add("error", external.friendly(kind, detail, sender.provider, sender.model))
+            self.chat_ui.chat.add("error", external.friendly(kind, detail, sender.provider, sender.model)
+                                  .replace("(or Ctrl+N)", f"(or {self.profile.new_chat_keys})"))
             self.end_task()
             return
         if kind == "no_tools" and self.native_tools:
@@ -737,7 +741,8 @@ class AgentSession(QObject):
             self.request()  # retry using the text tool protocol
             return
         self.chat_ui.chat.end_cat()
-        self.chat_ui.chat.add("error", friendly_error(kind, detail, self.model_choice.effective_model(), self.cfg.ollama_url))
+        self.chat_ui.chat.add("error", friendly_error(kind, detail, self.model_choice.effective_model(), self.cfg.ollama_url,
+                                                      self.profile.shell))
         self.end_task()
 
     def _next_call(self) -> None:

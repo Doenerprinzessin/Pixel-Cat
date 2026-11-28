@@ -65,15 +65,15 @@ def strip_tool_markup(text: str, known: set[str] | None = None) -> str:
     return text.strip()
 
 
-def friendly_error(kind: str, detail: str, model: str, url: str) -> str:
-    """Error messages in the cat's voice."""
+def friendly_error(kind: str, detail: str, model: str, url: str, shell: str = "powershell") -> str:
+    """Error messages in the cat's voice.  ``shell``: the command blocks' language tag (the platform's shell)."""
     if kind == "offline":
         return (f"Mrrrow… I can't reach my brain-yarn 🧶 (=;ω;=)\n"
                 f"Ollama doesn't seem to be running at {url}. Start the Ollama app (or run the command below), then try again, nyaa~\n"
-                "```powershell\nollama serve\n```")
+                f"```{shell}\nollama serve\n```")
     if kind == "model_missing":
         return (f"Mew?! My thinking-model **{model}** is missing 🙀 Please fetch it with:\n"
-                f"```powershell\nollama pull {model}\n```")
+                f"```{shell}\nollama pull {model}\n```")
     if kind == "timeout":
         return "Purrr… I thought so hard I fell asleep 😿 (the request timed out). Try again, maybe with a shorter question?"
     if kind == "no_tools":

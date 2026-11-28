@@ -11,7 +11,7 @@ from PySide6.QtGui import QColor, QPixmap
 
 from .. import games as minigames
 from .. import naming, progress
-from ..domain import monitor_at
+from ..domain import WINDOWS, monitor_at
 from ..engine.states import S
 from ..sprites import hats as hat_art
 from ..ui import theme
@@ -50,7 +50,7 @@ class Menus(QObject):
                  minigames: Minigames, provider_settings: ProviderSettings, model_choice: ModelChoice,
                  autostart: AutostartPort, *, parent: QObject | None = None, save: Callable[[], None],
                  chat: Callable[[], ChatWindow | None], quiet: Callable[[], bool],
-                 renamed: Callable[[], None]) -> None:
+                 renamed: Callable[[], None], start_with: str = WINDOWS.start_with) -> None:
         super().__init__(parent)
         self.saved = saved
         self.cfg = cfg
@@ -70,6 +70,7 @@ class Menus(QObject):
         self._chat = chat
         self._quiet = quiet
         self._renamed = renamed
+        self.start_with = start_with      # the autostart item: "Start with Windows" (the platform's words)
 
     def open_menu(self) -> None:
         if self.world_state.hidden_fullscreen:
@@ -112,7 +113,7 @@ class Menus(QObject):
                 MenuItem("export", "Export progress...", "export"),
                 MenuItem("import", "Import progress...", "import")]),
             MenuItem("quiet", "Quiet mode", checked=self._quiet(), separator_before=True),
-            MenuItem("autostart", "Start with Windows", checked=self.autostart.enabled()),
+            MenuItem("autostart", self.start_with, checked=self.autostart.enabled()),
             MenuItem("automode", "Chat auto mode", checked=self.saved.auto_mode),
             MenuItem("preload_ai", "Load AI at start", checked=self.cfg.preload_on_start),
             MenuItem("explore", "Sit inside windows", checked=self.cfg.explore_windows)]

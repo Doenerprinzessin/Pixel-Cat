@@ -72,13 +72,14 @@ _ALIASES = {
 }
 
 
-def find_windows(query: str, windows: list[AppWindow]) -> list[AppWindow]:
-    """Match by app name (exe), alias, or window title - best match group first."""
+def find_windows(query: str, windows: list[AppWindow], aliases: dict[str, str] | None = None) -> list[AppWindow]:
+    """Match by app name (exe), alias, or window title - best match group first.  ``aliases``: what users call
+    an app -> its app name (None: the Windows names, :data:`_ALIASES`)."""
     q = query.strip().lower()
     q = q[:-4] if q.endswith(".exe") else q
     if not q:
         return []
-    target = _ALIASES.get(q, q)
+    target = (_ALIASES if aliases is None else aliases).get(q, q)
     by_exe = [w for w in windows if w.app.lower() == target or (target == "ms-teams" and w.app.lower() in ("teams", "ms-teams"))]
     if by_exe:
         return by_exe

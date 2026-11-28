@@ -468,7 +468,7 @@ def test_wait_for_note_about_minimized_windows(wtb: ToolBox, watches, desk, monk
     from pixelcat.llm import watch
 
     desk.add_window(7, "Exporter", "exporter.exe", minimized=True)
-    monkeypatch.setattr(watch, "_window_text", lambda a11y, hwnd, timeout=8.0: None)
+    monkeypatch.setattr(watch, "_window_text", lambda a11y, hwnd, timeout=8.0, strict=False: None)
     out = run(wtb, "wait_for", event="window_text", app="exporter", text="Done")
     assert out.text.endswith("Note: the window is minimized - I can only read it while it isn't minimized (behind "
                              "other windows is fine).")

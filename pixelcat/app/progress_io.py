@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .. import paths, persistence, progress
+from ..domain import WINDOWS
 from .popups import paras
 
 if TYPE_CHECKING:
@@ -28,7 +29,7 @@ class ProgressIO:
 
     def __init__(self, saved: SavedState, popups: Popups, folders: KnownFolders, menu: PixelMenu, game: BallGame,
                  *, save: Callable[[], None], stop_minigame: Callable[[], None], show_progress: Callable[[], None],
-                 menu_items: Callable[[], list[MenuItem]]) -> None:
+                 menu_items: Callable[[], list[MenuItem]], other_account: str = WINDOWS.other_account) -> None:
         self.saved = saved
         self.popups = popups
         self.folders = folders
@@ -38,6 +39,7 @@ class ProgressIO:
         self._stop_minigame = stop_minigame
         self._show_progress = show_progress
         self._menu_items = menu_items
+        self.other_account = other_account     # "another Windows account or PC" (the platform's words)
 
     def _ask_file(self, save: bool, title: str, start: str) -> str:
         """A Windows file dialog ("" = cancelled).  The tests replace this."""
@@ -123,7 +125,7 @@ class ProgressIO:
 
     def tell_unreadable_save(self) -> None:
         self.popups.popup("A fresh start", paras([
-            "The cat couldn't read its save: it was changed by hand, or it's from another Windows account or PC.",
+            f"The cat couldn't read its save: it was changed by hand, or it's from {self.other_account}.",
             "If you exported your progress, load it with Menu &gt; Settings &gt; Your progress &gt; Import progress.",
             "The old file is kept in the PixelCat folder, just in case."]), "OK")
 

@@ -26,7 +26,7 @@ def checker(desk) -> Checker:  # type: ignore[no-untyped-def]
 def texts(monkeypatch):  # type: ignore[no-untyped-def]
     """hwnd -> the text _window_text reads (None = unreadable)."""
     by_hwnd: dict = {}
-    monkeypatch.setattr(watch_mod, "_window_text", lambda a11y, hwnd, timeout=8.0: by_hwnd.get(hwnd))
+    monkeypatch.setattr(watch_mod, "_window_text", lambda a11y, hwnd, timeout=8.0, strict=False: by_hwnd.get(hwnd))
     return by_hwnd
 
 

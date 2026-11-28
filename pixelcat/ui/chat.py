@@ -123,9 +123,10 @@ class ChatWindow(QWidget):
     SIZE_U = (175.0, 225.0)                 # the usual size, in art pixels
     MIN_U = (150.0, 160.0)
 
-    def __init__(self, sprites: SpriteLibrary, *, display: DisplayPort) -> None:
+    def __init__(self, sprites: SpriteLibrary, *, display: DisplayPort, new_chat_keys: str = "Ctrl+N") -> None:
         super().__init__(None)
         self._display = display
+        self._new_chat_keys = new_chat_keys     # the new-chat shortcut in the platform's words (Qt's Ctrl: Cmd on a Mac)
         self.setObjectName("chatRoot")
         self.setWindowTitle("Pixel Cat Chat")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
@@ -209,7 +210,7 @@ class ChatWindow(QWidget):
         self.model_bar.setOpenExternalLinks(True)
         self.model_bar.hide()
         self.input = QLineEdit()
-        self.input.setPlaceholderText(f"Talk to {naming.talk_to()}… (Ctrl+N: new chat)")
+        self.input.setPlaceholderText(f"Talk to {naming.talk_to()}… ({self._new_chat_keys}: new chat)")
         self.input.returnPressed.connect(self._send)
         self.send_btn = QPushButton("SEND")
         self.send_btn.clicked.connect(self._send)
@@ -493,7 +494,7 @@ class ChatWindow(QWidget):
 
     def rename(self) -> None:
         """The cat got another name (Settings -> Name...): the title, the input, its messages."""
-        self.input.setPlaceholderText(f"Talk to {naming.talk_to()}… (Ctrl+N: new chat)")
+        self.input.setPlaceholderText(f"Talk to {naming.talk_to()}… ({self._new_chat_keys}: new chat)")
         self._shown = []                      # every message again (the name above the cat's ones)
         self._mark()
         self.update()

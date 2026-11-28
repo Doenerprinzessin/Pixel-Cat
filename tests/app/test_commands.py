@@ -98,3 +98,24 @@ def test_the_other_commands_and_plain_messages() -> None:
     assert cmds.local_command("/unwatch 7") and f.cancelled == [7] and info(f)[-1] == "Stopped watching for: the kettle"
     assert cmds.local_command("/effort High") and f.efforts == ["high"]
     assert cmds.local_command("/effort extreme") and f.efforts == ["high"] and "This chat's effort" in info(f)[-1]
+
+
+def test_the_commands_name_the_platforms_apps() -> None:
+    from pixelcat.adapters.macos.profile import MAC
+
+    def texts(profile: Any = None) -> str:
+        cmds, f = make(denied=[41])
+        if profile is not None:
+            cmds.profile = profile
+        f.saved.auto_mode = True
+        for text in ("/force", "/help", "/force end teams"):
+            cmds.local_command(text)
+        return "\n".join(str(c[-1]) for c in f.chat.calls)
+
+    win = texts()
+    assert "Usage: /force end <app> (like Task Manager's End task, e.g. /force end teams) or /force open <app>" in win
+    assert "/force end <app> (like Task Manager), /force open" in win and "e.g. 'open Notepad and write a" in win
+    assert "Use admin rights to end them (Windows will ask you too)?" in win
+    mac = texts(MAC)
+    assert "(like Activity Monitor's End task" in mac and "(like Activity Monitor), /force open" in mac
+    assert "e.g. 'open TextEdit and write a" in mac and "(macOS will ask you too)?" in mac

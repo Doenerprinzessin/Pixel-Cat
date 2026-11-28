@@ -116,6 +116,7 @@ class ToolBox:
         self.cfg = cfg
         self.hooks = hooks
         self.platform = platform
+        self.profile = platform.profile       # the platform's words, shortcuts and app table
         self.folders = platform.folders       # the user's real Documents, Desktop ... (the platform's)
         self.specs: dict[str, ToolSpec] = {}
         self.agent = agent if agent is not None else DesktopAgent(cfg, hooks.own_pid, platform=platform)
@@ -128,10 +129,15 @@ class ToolBox:
              background: bool = False, group: str = "") -> None:
         self.specs[name] = ToolSpec(name, desc, props, required, confirm, run, describe, llm, background, group)
 
+    def _apps(self) -> dict[str, list[str]]:
+        """open_app's table (name -> command): the platform's own, else the config's."""
+        return self.profile.app_commands() or self.cfg.apps
+
     def _register(self) -> None:
-        apps = sorted(self.cfg.apps)
+        pr = self.profile
+        apps = sorted(self._apps())
         s = {"type": "string"}
-        start_menu = " or any app installed in the Start menu" if self.cfg.allow_start_menu_apps else ""
+        start_menu = f" or any app installed in the {pr.app_menu}" if self.cfg.allow_start_menu_apps else ""
         # read-only / in-app -----------------------------------------------------------
         self._add("get_time", "Get the current local date and time.", {}, [], "none",
                   self._get_time, lambda a: "tell the time")
@@ -174,10 +180,10 @@ class ToolBox:
                   "at the end of a part.",
                   {"url": s, "start": {"type": "integer"}}, ["url"], "soft", self._read_web_page,
                   lambda a: f"read the web page {a['url']}", background=True, group="web")
-        self._add("open_folder", "Open a folder in File Explorer. Use aliases: desktop, documents, downloads, "
+        self._add("open_folder", f"Open a folder in {pr.file_manager}. Use aliases: desktop, documents, downloads, "
                   "pictures, music, videos, notes, or a path inside them.", {"folder": s}, ["folder"], "soft",
                   self._open_folder, lambda a: f"open the folder {a['_path']}")
-        self._add("open_settings", "Open a Windows Settings page.",
+        self._add("open_settings", f"Open a {pr.settings} page.",
                   {"page": {"type": "string", "enum": sorted(SETTINGS_PAGES)}}, ["page"], "soft",
                   self._open_settings, lambda a: f"open the {a['page']} settings")
         self._add("media_control", "Control music/video playback (like the keyboard media keys).",
@@ -198,7 +204,7 @@ class ToolBox:
         self._add("create_note", "Create a new .txt or .md note file. folder: alias or path inside allowed folders "
                   "(default 'notes').", {"folder": s, "filename": s, "content": s}, ["filename", "content"], "hard",
                   self._create_note, lambda a: f"create the file {a['_target']} ({len(a['content'])} characters)")
-        self._add("lock_screen", "Lock the PC (Windows+L).", {}, [], "hard",
+        self._add("lock_screen", f"Lock the PC ({pr.lock_keys}).", {}, [], "hard",
                   lambda a: "Locked the PC." if self.platform.system.lock_screen() else "Could not lock the PC.",
                   lambda a: "lock your PC")
         # seeing and using the desktop ---------------------------------------------------
@@ -207,7 +213,7 @@ class ToolBox:
                "leave empty for the window you used last"}
         num = {"type": "integer"}
         pos = {"type": "number"}
-        mods = {"type": "string", "description": "keys held down meanwhile: ctrl, shift, alt, win, or e.g. 'ctrl+shift'"}
+        mods = {"type": "string", "description": f"keys held down meanwhile: {pr.held_hint}, or e.g. 'ctrl+shift'"}
         self._add("look_at_screen", "SEE a window (or the whole screen when target is empty): returns a screenshot "
                   "with pink numbered boxes on the clickable elements plus their list. Use it to find buttons and "
                   "to check that an action worked.", {"target": tgt}, [], eyes, self._look,
@@ -242,7 +248,7 @@ class ToolBox:
                   lambda a: f"move the mouse onto {a['_what']}", background=True, group="desktop")
         self._add("zoom", "ZOOM in or out (maps, pictures, web pages, documents, design apps) at an element or a spot "
                   "(x, y in your latest screenshot); without one: the middle of the window (target). steps 1-10 "
-                  "(default 3). how: 'wheel' = ctrl + mouse wheel (default, works in most apps), 'pinch' = two "
+                  f"(default 3). how: 'wheel' = {pr.zoom} + mouse wheel (default, works in most apps), 'pinch' = two "
                   "fingers like on a touch screen (maps, photo apps). Returns a screenshot afterwards.",
                   {"direction": {"type": "string", "enum": ["in", "out"]}, "steps": num, "element": num, "x": pos,
                    "y": pos, "how": {"type": "string", "enum": ["wheel", "pinch"]}, "target": tgt}, ["direction"],
@@ -252,11 +258,12 @@ class ToolBox:
                   "each item should be on its own line, the text must end with a line break. Several lines at once "
                   "are fine (one call). Only for writing new text - to change or fix text that is already there use "
                   "replace_text. element = id of a text field to click first. For a new document use press_keys "
-                  "ctrl+n first.",
+                  f"{pr.primary}+n first.",
                   {"text": s, "target": tgt, "element": num}, ["text"], "soft", self._type,
                   lambda a: f"type {len(a['text']):,} characters into {a['_label']}", background=True,
                   group="desktop")
-        self._add("replace_text", "CHANGE existing text in an editor (Notepad, VS Code, ...): replaces the exact "
+        self._add("replace_text", f"CHANGE existing text in an editor ({pr.text_editor}, VS Code, ...): "
+                  "replaces the exact "
                   "text 'old' with 'new' wherever it is in the document - use it to fix bugs, typos or lines. "
                   "'old' must be copied exactly from the document (include enough of the line to be unique); "
                   "'new' is what should stand there instead.",
@@ -264,7 +271,8 @@ class ToolBox:
                   self._replace, lambda a: f"replace {a['old'][:50]!r} with {a['new'][:50]!r} in {a['_label']}",
                   background=True, group="desktop")
         self._add("press_keys", "Press keys/shortcuts in a window, one or more separated by spaces: "
-                  "'ctrl+n', 'ctrl+s', 'enter', 'tab', 'esc', 'ctrl+a', 'down down enter', 'f5'. hold = seconds to "
+                  f"'{pr.primary}+n', '{pr.primary}+s', 'enter', 'tab', 'esc', '{pr.primary}+a', 'down down enter', "
+                  "'f5'. hold = seconds to "
                   "keep each one pressed (games: hold 'w' to walk, 'space' to charge).",
                   {"keys": s, "target": tgt, "hold": {"type": "number"}}, ["keys"], "soft", self._keys,
                   lambda a: f"press {a['_keys']}{a['_held']} in {a['_label']}", background=True, group="desktop")
@@ -304,7 +312,7 @@ class ToolBox:
                   "'wait for...', 'tell me when...', 'let me know if...', 'once X, do Y', 'at 5 pm do Z', 'keep an "
                   "eye on...'. After calling it, end your turn with one short sentence.",
                   {"event": {"type": "string", "enum": list(KINDS), "description":
-                             "notification = a new Windows notification (chat messages, emails, calls...); "
+                             f"notification = a new {pr.notification} (chat messages, emails, calls...); "
                              "window_text = a window shows a text (gone=true: until it no longer does, e.g. "
                              "'Downloading...'); window_opened / window_closed = a window appears / closes; file = a "
                              "file appears or changes, or any new file lands in a folder; time = at a clock time or "
@@ -344,11 +352,11 @@ class ToolBox:
                   lambda a: (f"OVERWRITE {a['_path']} with {len(a['content']):,} characters (a backup is kept)"
                              if a.get("_exists") else f"create the file {a['_path']} ({len(a['content']):,} characters)"),
                   background=True, group="files")
-        self._add("open_file", "Show a text file to the user in Notepad or VS Code (never runs it).",
+        self._add("open_file", f"Show a text file to the user in {pr.text_editor} or VS Code (never runs it).",
                   {"path": fp, "app": {"type": "string", "enum": ["notepad", "vscode"]}}, ["path"], "soft",
                   self._open_file, lambda a: f"open {a['_path'].name} in {a['app']}", background=True)
         # /force only (never offered to the model) ------------------------------------
-        self._add("force_end", "Force-end an app like Task Manager.", {"target": s}, ["target"], "hard",
+        self._add("force_end", f"Force-end an app like {pr.task_manager}.", {"target": s}, ["target"], "hard",
                   self._force_end, lambda a: f"FORCE-END {a['_plan'].label} right now - unsaved work in it will be lost"
                   " (if it needs admin rights, I'll ask you separately)", llm=False)
         self._add("run_as_admin", "Start an app as administrator.", {"name": s}, ["name"], "hard",
@@ -383,13 +391,14 @@ class ToolBox:
                 raise ToolError(f"missing argument '{req}'")
         if name == "open_app":
             key = str(a["name"]).strip().lower()
-            if key in self.cfg.apps:
-                a["_target"], a["_label"] = list(self.cfg.apps[key]), f"the app '{key}'"
+            apps = self._apps()
+            if key in apps:
+                a["_target"], a["_label"] = list(apps[key]), f"the app '{key}'"
             else:
                 hit = self.platform.apps.find_shortcut(key) if self.cfg.allow_start_menu_apps else None
                 if hit is None:
                     raise ToolError(f"I can't find an app called '{a['name']}'")
-                a["_target"], a["_label"] = hit[1], f"'{hit[0]}' (Start menu)"
+                a["_target"], a["_label"] = hit[1], f"'{hit[0]}' ({self.profile.app_menu})"
             a["name"] = key
             if self.platform.apps.needs_admin(a["_target"]) or str(a["_target"]) in self._admin_seen:
                 a["_admin"] = True
@@ -397,7 +406,8 @@ class ToolBox:
                 a["_force_confirm"] = True      # ...and asked even in auto mode
         elif name in ("window_action", "close_app"):
             target = str(a["target"]).strip()
-            wins = find_windows(target, self.platform.windows.app_windows(self.hooks.own_pid))
+            wins = find_windows(target, self.platform.windows.app_windows(self.hooks.own_pid),
+                                self.profile.window_alias_map())
             if not wins:
                 raise ToolError(f"no open window matches '{target}'")
             if name == "close_app":
@@ -611,9 +621,9 @@ class ToolBox:
             raise ToolError(f"{key} must be a number") from None
         return max(lo, min(hi, v)) if v == v else default
 
-    @staticmethod
-    def _held(a: dict[str, Any]) -> list[str]:
+    def _held(self, a: dict[str, Any]) -> list[str]:
         """Keys held down during a mouse action (ctrl-click, shift-drag...)."""
+        aliases = self.profile.key_alias_map()     # (empty on Windows)
         raw = str(a.get("keys") or "").strip().lower()
         if raw in ("", "none", "no", "nothing"):
             return []
@@ -621,7 +631,7 @@ class ToolBox:
         for part in re.split(r"[\s+,]+", raw):
             if not part:
                 continue
-            key = HELD_KEYS.get(part)
+            key = HELD_KEYS.get(aliases.get(part, part))
             if key is None:
                 raise ToolError("keys: only ctrl, shift, alt and win can be held with the mouse "
                                 "(to hold other keys use press_keys with hold)")
@@ -886,10 +896,11 @@ class ToolBox:
             a["_hold"] = min(hold, 60.0 / len(combos))
             a["_held"] = f" (held {a['_hold']:g} s)" if a["_hold"] >= 0.1 else ""
             self._target(a)
-            names = {c[0].replace("control", "ctrl").replace("windows", "win") for c in combos}
-            if names & CLOSING_KEYS:
+            names = {self.profile.normalize_combo(c[0].replace("control", "ctrl").replace("windows", "win"))
+                     for c in combos}
+            if names & self.profile.closing_keys:
                 a["_confirm"] = "hard"
-            if names & SYSTEM_KEYS or ag.is_command_line(a["_hwnd"]):
+            if names & self.profile.system_keys or ag.is_command_line(a["_hwnd"]):
                 a["_force_confirm"] = True
         elif name == "scroll":
             d = str(a["direction"]).strip().lower()
