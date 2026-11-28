@@ -15,6 +15,8 @@ _normalize = Profile(key_aliases=KEY_ALIASES).normalize_combo
 # shortcuts that close or end things, or lock the Mac: always a real confirmation (normalized, see Profile)
 CLOSING_KEYS = {_normalize(k) for k in WINDOWS.closing_keys} | {
     "win+q", "win+w", "shift+win+w", "alt+win+w",       # quit the app, close the window / all windows
+    "alt+win+q",                                        # quit the app without keeping its windows
+    "alt+shift+win+esc",                                # force quit the front app
     "ctrl+win+q", "shift+win+q", "alt+shift+win+q",     # lock the screen, log out
     "win+delete", "shift+win+delete", "alt+shift+win+delete",   # move to the Bin, empty the Bin
     "win+backspace", "shift+win+backspace", "alt+shift+win+backspace",   # (the Mac's Delete key is backspace)
@@ -90,6 +92,7 @@ MAC = Profile(
     closing_keys=frozenset(CLOSING_KEYS),
     system_keys=frozenset(SYSTEM_KEYS),
     key_aliases=KEY_ALIASES,
+    shifted_keys=keys.SHIFTED_NAMES,
     apps=APPS,
     window_aliases=WINDOW_ALIASES,
 )

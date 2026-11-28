@@ -77,6 +77,8 @@ ANSI.update({"=": 24, "9": 25, "7": 26, "-": 27, "8": 28, "0": 29, "]": 30, "o":
 US_SHIFTED = {"!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8", "(": "9", ")": "0",
               "_": "-", "+": "=", "{": "[", "}": "]", "|": "\\", ":": ";", '"': "'", "<": ",", ">": ".", "?": "/",
               "~": "`"}
+# the names parse_combo may press with shift (char_keys: shift + the US key): the Mac profile's shifted_keys
+SHIFTED_NAMES = frozenset(US_SHIFTED) | frozenset(name for name, ch in CHAR_NAMES.items() if ch in US_SHIFTED)
 
 _TTL = 5.0      # seconds a layout table is used before it is read again (the user may switch layouts)
 _lock = threading.Lock()

@@ -65,6 +65,8 @@ class Profile:
     closing_keys: frozenset[str] = _CLOSING_KEYS        # compared after normalize_combo
     system_keys: frozenset[str] = _SYSTEM_KEYS          # (on Windows: as written)
     key_aliases: tuple[tuple[str, str], ...] = ()        # key names the user may write -> the canonical names
+    # key names the keyboard input may type with shift ('!', 'plus' on a Mac): shift is then held from that key on
+    shifted_keys: frozenset[str] = frozenset()
     apps: tuple[tuple[str, tuple[str, ...]], ...] | None = None    # the open_app table; None: the config's
     window_aliases: tuple[tuple[str, str], ...] | None = None      # app words -> window names; None: the built-in
 
@@ -90,12 +92,18 @@ class Profile:
     def combo_names(self, combo: str) -> set[str]:
         """The shortcuts a combo presses, normalized: the whole combo and, for every key that isn't a held key,
         that key with the held keys written before it (keys are pressed in order: "cmd+q+w" presses cmd+q and
-        cmd+w, "q+cmd" no shortcut).  Without aliases (Windows) just ``{combo}``."""
+        cmd+w, "q+cmd" no shortcut).  A key of :attr:`shifted_keys` may press shift first, held for it and every
+        later key ("cmd+option+!+q" presses cmd+option+shift+q), or not (the layout types it unshifted): both
+        readings count.  Without aliases (Windows) just ``{combo}``."""
         if not self.key_aliases:
             return {combo}
         parts = self._keys(combo)
-        return {self._normalized(parts)} | {self._normalized([m for m in parts[:i] if m in MODIFIER_ORDER] + [k])
-                                            for i, k in enumerate(parts) if k not in MODIFIER_ORDER}
+        names: set[str] = set()
+        for at in [None] + [i for i, k in enumerate(parts) if k in self.shifted_keys]:
+            keys = parts if at is None else parts[:at] + ["shift"] + parts[at:]
+            names |= {self._normalized(keys)} | {self._normalized([m for m in keys[:i] if m in MODIFIER_ORDER] + [k])
+                                                 for i, k in enumerate(keys) if k not in MODIFIER_ORDER}
+        return names
 
     def _keys(self, combo: str) -> list[str]:
         aliases = dict(self.key_aliases)
