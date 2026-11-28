@@ -11,13 +11,15 @@ from .hardware import Gpu, Hardware
 from .input import MEDIA_ACTIONS, MODIFIERS, MOUSE_BUTTONS, ClipboardKind
 from .monitors import FALLBACK_MONITOR, Monitor, monitor_at, primary
 from .notifications import Notification, app_matches, badge_count, friendly
+from .permissions import PermissionNeeded
 from .processes import KillPlan, Proc
-from .secrets import Unreadable
+from .profile import WINDOWS, Profile
+from .secrets import SecretStoreUnavailable, Unreadable
 from .windows import AppWindow, UserState, WindowId, WinInfo, find_windows
 
 __all__ = [
     "FALLBACK_MONITOR", "AppWindow", "ClipboardKind", "Element", "ElementKinds", "Gpu", "Hardware", "KNOWN_FOLDERS", "KillPlan",
-    "MEDIA_ACTIONS", "MODIFIERS", "MOUSE_BUTTONS", "Monitor", "Notification", "Proc", "SETTINGS_PAGES", "Snapshot",
-    "Unreadable", "UserState", "WinInfo", "WindowId", "app_matches", "badge_count", "find_windows", "friendly",
-    "monitor_at", "primary",
+    "MEDIA_ACTIONS", "MODIFIERS", "MOUSE_BUTTONS", "Monitor", "Notification", "PermissionNeeded", "Proc", "Profile",
+    "SETTINGS_PAGES", "SecretStoreUnavailable", "Snapshot", "Unreadable", "UserState", "WINDOWS", "WinInfo", "WindowId",
+    "app_matches", "badge_count", "find_windows", "friendly", "monitor_at", "primary",
 ]

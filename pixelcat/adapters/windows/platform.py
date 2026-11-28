@@ -13,6 +13,7 @@ import time, and ``inputs.is_elevated`` relies on the ones ``control`` makes).
 from __future__ import annotations
 
 import importlib
+import os
 import threading
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -84,6 +85,9 @@ class WindowsDisplay:
 
     def session_locked(self) -> bool:
         return system.session_locked()
+
+    def qt_logical(self) -> bool:
+        return False        # physical pixels: main.py turns Qt's DPI scaling off
 
 
 class WindowsWindows:
@@ -344,8 +348,33 @@ class WindowsApps:
     def needs_admin(self, target: object) -> bool:
         return elevation.needs_admin(target)
 
-    def lnk_target(self, path: str | Path) -> tuple[str, bool]:
-        return elevation.lnk_target(path)
+    def editor_command(self, app: str) -> list[str] | None:
+        if app == "notepad":
+            return ["notepad.exe"]
+        if app != "vscode":
+            return None
+        exe = self._vscode_exe()
+        return [exe] if exe is not None else None
+
+    def _vscode_exe(self) -> str | None:
+        """VS Code's Code.exe: what its Start menu shortcut starts, else the per-user install folder."""
+        hit = self.find_shortcut("visual studio code")
+        if hit is not None and str(hit[1]).lower().endswith(".lnk"):
+            exe, _runas = elevation.lnk_target(hit[1])
+            if exe.lower().endswith("code.exe") and os.path.isfile(exe):
+                return exe
+        guess = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe")
+        return guess if os.path.isfile(guess) else None
+
+    def find_ollama(self) -> Path | None:
+        from ...llm import model_status
+
+        return model_status.find_ollama_app()
+
+    def start_ollama(self, exe: Path) -> None:
+        from ...llm import model_status
+
+        model_status.start_ollama(exe)
 
     def run_as_admin(self, target: str | Path) -> tuple[bool, str]:
         return control.run_as_admin(target)

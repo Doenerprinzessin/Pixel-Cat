@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..domain import WINDOWS, Profile
 from .desktop import (AccessibilityPort, AppsPort, CapturePort, ClipboardBackup, ClipboardPort, DisplayPort,
                       EscapeWatcher, InputPort, Keys, NotificationFeed, NotificationPort, ProcessPort, Rect,
                       SystemPort, WindowPort)
@@ -35,6 +36,7 @@ class Platform:
     autostart: AutostartPort
     save_marks: SaveMarks
     installer: InstallerPort
+    profile: Profile = WINDOWS          # the platform's words and shortcuts (last: it has a default)
 
 
 __all__ = [

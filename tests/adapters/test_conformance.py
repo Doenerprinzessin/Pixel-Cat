@@ -88,7 +88,7 @@ def test_build_fills_each_port_with_its_implementation(build):  # type: ignore[n
     hints = {f.name: f.type for f in fields(ports.Platform)}
     index = 0 if build is windows.build else 1
     for name, hint in hints.items():
-        if name != "name":
+        if name not in ("name", "profile"):        # (the profile is data, not a port)
             assert type(getattr(platform, name)) is IMPLEMENTATIONS[getattr(ports, hint)][index], name
 
 

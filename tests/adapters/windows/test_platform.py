@@ -13,6 +13,7 @@ from pixelcat.adapters.windows import (capture, control, dpapi, elevation, escwa
                                        known_folders, ledges, monitors, notifications, platform, registry, system, uia,
                                        volume, win32, windows)
 from pixelcat.domain import AppWindow, KillPlan, UserState
+from pixelcat.llm import model_status
 
 EV = threading.Event()
 R = (10, 20, 110, 220)
@@ -109,7 +110,8 @@ DELEGATES = [
     ("apps", "open", ("C:\\x.lnk",), control, "launch"),
     ("apps", "open_elevated", ("C:\\x.exe", ["/a", "b c"]), control, "launch_elevated"),
     ("apps", "needs_admin", (["x.exe"],), elevation, "needs_admin"),
-    ("apps", "lnk_target", ("C:\\x.lnk",), elevation, "lnk_target"),
+    ("apps", "find_ollama", (), model_status, "find_ollama_app"),
+    ("apps", "start_ollama", (R,), model_status, "start_ollama"),
     ("apps", "run_as_admin", ("C:\\x.exe",), control, "run_as_admin"),
     ("processes", "process_exe", (5,), control, "process_exe"),
     ("processes", "plan_force_end", ("chrome", 42), control, "plan_force_end"),
@@ -165,8 +167,9 @@ def test_forwards_to_the_module_function(plat, monkeypatch, port, method, args, 
 def test_the_table_covers_every_port_method(plat):  # type: ignore[no-untyped-def]
     translated = {("display", "user_state"), ("input", "set_passthrough_until"), ("input", "holding"),
                   ("clipboard", "has"), ("accessibility", "snapshot"), ("apps", "open_settings"),
-                  ("save_marks", "is_marked"), ("save_marks", "mark"), ("save_marks", "forget")}
-    public = {(port, name) for port in vars(plat) if port != "name"
+                  ("save_marks", "is_marked"), ("save_marks", "mark"), ("save_marks", "forget"),
+                  ("display", "qt_logical"), ("apps", "editor_command")}
+    public = {(port, name) for port in vars(plat) if port not in ("name", "profile")
               for name in dir(getattr(plat, port)) if not name.startswith("_") and name != "instance"}
     assert public == {(d[0], d[1]) for d in DELEGATES} | translated
 
@@ -250,6 +253,27 @@ def test_open_settings_uri(plat, monkeypatch):  # type: ignore[no-untyped-def]
     rec = _recorder(monkeypatch, control, "launch")
     plat.apps.open_settings("display")
     assert rec.calls == [(("ms-settings:display",), {})]
+
+
+def test_qt_logical_is_off_and_the_profile_is_windows(plat):  # type: ignore[no-untyped-def]
+    assert plat.display.qt_logical() is False and plat.profile is domain.WINDOWS
+
+
+def test_editor_command(plat, monkeypatch, isolated_dirs):  # type: ignore[no-untyped-def]
+    exe = isolated_dirs / "Code.exe"
+    link = str(isolated_dirs / "VS Code.lnk")
+    shortcuts: dict = {}
+    monkeypatch.setattr(control, "find_shortcut", lambda name: shortcuts.get(name))
+    monkeypatch.setattr(elevation, "lnk_target", lambda path: (str(exe), False) if path == link else ("", False))
+    assert plat.apps.editor_command("notepad") == ["notepad.exe"]
+    assert plat.apps.editor_command("emacs") is None
+    assert plat.apps.editor_command("vscode") is None                   # no shortcut, nothing installed
+    shortcuts["visual studio code"] = ("Visual Studio Code", link)
+    assert plat.apps.editor_command("vscode") is None                   # the shortcut's Code.exe is gone
+    exe.write_text("")
+    assert plat.apps.editor_command("vscode") == [str(exe)]
+    shortcuts["visual studio code"] = ("Visual Studio Code", str(exe))  # not a shortcut file
+    assert plat.apps.editor_command("vscode") is None
 
 
 def test_instance(plat, monkeypatch):  # type: ignore[no-untyped-def]

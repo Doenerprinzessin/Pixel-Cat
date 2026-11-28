@@ -82,3 +82,46 @@ def test_golden_sealed_blob_still_opens() -> None:
     """Sealed with the code of PR 0: the app key and format must never change, or every
     export users have made becomes unreadable."""
     assert savecrypt.unseal((DATA / "sealed_v1.bin").read_bytes()) == b"Pixel Cat golden vector \x00\x01\x02 :3"
+
+
+# ---------------------------------------------------------------- seal_keyed / unseal_keyed (per-user keys)
+KEYS = (b"e" * 32, b"m" * 32)
+
+
+def test_seal_is_seal_keyed_with_the_app_keys(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(savecrypt.os, "urandom", lambda n: b"\x07" * n)
+    plain = b"pixel cat " * 20
+    assert savecrypt.seal(plain) == savecrypt.seal_keyed(savecrypt._ENC_KEY, savecrypt._MAC_KEY, plain)
+
+
+@pytest.mark.parametrize("header", [b"", b"PXK1" + b"\x01" * 8])
+def test_seal_keyed_round_trip(header: bytes) -> None:
+    plain = _rand(50_000)
+    blob = savecrypt.seal_keyed(*KEYS, plain, header=header)
+    assert savecrypt.unseal_keyed(*KEYS, blob, header=header) == plain
+    with pytest.raises(savecrypt.Unreadable):
+        savecrypt.unseal(blob)                         # not an export
+
+
+@pytest.mark.parametrize("keys, header", [((b"x" * 32, KEYS[1]), b"H"), ((KEYS[0], b"x" * 32), b"H"), (KEYS, b"h")],
+                         ids=["other-enc-key", "other-mac-key", "other-header"])
+def test_unseal_keyed_refuses_other_keys_or_header(keys: tuple[bytes, bytes], header: bytes) -> None:
+    blob = savecrypt.seal_keyed(*KEYS, b"a chat", header=b"H")
+    with pytest.raises(savecrypt.Unreadable):          # (another encryption key: the tag matches, it's garbage)
+        savecrypt.unseal_keyed(*keys, blob, header=header)
+
+
+def test_unseal_keyed_refuses_a_changed_byte_and_short_blobs() -> None:
+    blob = bytearray(savecrypt.seal_keyed(*KEYS, b"a chat"))
+    blob[20] ^= 0x01
+    with pytest.raises(savecrypt.Unreadable, match="changed"):
+        savecrypt.unseal_keyed(*KEYS, bytes(blob))
+    with pytest.raises(savecrypt.Unreadable, match="too short"):
+        savecrypt.unseal_keyed(*KEYS, b"x" * 47)
+
+
+def test_unseal_keyed_takes_more_than_an_export() -> None:
+    plain = b"\0" * (savecrypt.MAX_PLAIN + 1)
+    assert savecrypt.unseal_keyed(*KEYS, savecrypt.seal_keyed(*KEYS, plain)) == plain
+    with pytest.raises(savecrypt.Unreadable, match="too big"):
+        savecrypt.unseal_keyed(*KEYS, savecrypt.seal_keyed(*KEYS, plain), max_plain=savecrypt.MAX_PLAIN)

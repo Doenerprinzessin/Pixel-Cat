@@ -53,6 +53,9 @@ class NullDisplay:
     def session_locked(self) -> bool:
         return False
 
+    def qt_logical(self) -> bool:
+        return False
+
 
 class NullWindows:
     def top_level(self, own_pid: int, include: set[int] | frozenset[int] = frozenset()) -> list[WinInfo]:
@@ -338,8 +341,14 @@ class NullApps:
     def needs_admin(self, target: object) -> bool:
         return False
 
-    def lnk_target(self, path: str | Path) -> tuple[str, bool]:
-        return ("", False)
+    def editor_command(self, app: str) -> list[str] | None:
+        return None
+
+    def find_ollama(self) -> Path | None:
+        return None
+
+    def start_ollama(self, exe: Path) -> None:
+        pass
 
     def run_as_admin(self, target: str | Path) -> tuple[bool, str]:
         return (False, UNSUPPORTED)

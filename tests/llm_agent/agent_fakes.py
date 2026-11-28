@@ -94,6 +94,7 @@ class FakeDesktop:
         self.uac = False
         self.shortcuts: dict[str, tuple[str, Any]] = {}
         self.admin_targets: set[str] = set()
+        self.editors: dict[str, list[str]] = {"notepad": ["notepad.exe"]}   # editor_command answers (no VS Code)
         self.snapshots: dict[int, Snapshot] = {}
         self.focused: Element | None = None
         self.field_text: Any = None             # focused_text result (value or callable)
@@ -251,7 +252,7 @@ class FakeDesktop:
         apps = p.apps
         apps.answers("find_shortcut", lambda name: self.shortcuts.get(name.strip().lower()))
         apps.answers("needs_admin", lambda t: str(t) in self.admin_targets)
-        apps.answers("lnk_target", lambda path: ("", False))
+        apps.answers("editor_command", lambda app: list(self.editors[app]) if app in self.editors else None)
         apps.answers("run_as_admin", self.record("run_as_admin", lambda t: (True, "")))
         apps.answers("open", self.record("open"))
         apps.answers("open_elevated", self.record("open_elevated"))

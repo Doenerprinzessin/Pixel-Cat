@@ -375,20 +375,12 @@ def test_edit_file_refuses(toolbox: ToolBox, js: Path) -> None:
     ("", ".js", True, "vscode"), ("", ".js", False, "notepad"), ("", ".txt", True, "notepad"),
     ("emacs", ".py", True, "vscode"),
 ])
-def test_open_file_picks_an_editor(toolbox: ToolBox, folders, monkeypatch, app: str, suffix: str, vscode: bool,  # type: ignore[no-untyped-def]
+def test_open_file_picks_an_editor(toolbox: ToolBox, folders, desk, app: str, suffix: str, vscode: bool,  # type: ignore[no-untyped-def]
                                    chosen: str) -> None:
-    monkeypatch.setattr(ToolBox, "_vscode_exe", staticmethod(lambda: "C:/VS/Code.exe" if vscode else None))
+    if vscode:
+        desk.editors["vscode"] = ["C:/VS/Code.exe"]
     (folders["desktop"] / f"f{suffix}").write_text("x")
     assert prep(toolbox, "open_file", path=f"desktop/f{suffix}", app=app)["app"] == chosen
-
-
-def test_vscode_exe_lookup(toolbox: ToolBox, desk, isolated_dirs) -> None:  # type: ignore[no-untyped-def]
-    assert toolbox._vscode_exe() is None
-    exe = isolated_dirs / "Code.exe"
-    exe.write_text("")
-    desk.shortcuts["visual studio code"] = ("Visual Studio Code", str(isolated_dirs / "VS Code.lnk"))
-    desk.platform.apps.answers("lnk_target", lambda p: (str(exe), False))
-    assert toolbox._vscode_exe() == str(exe)
 
 
 # ------------------------------------------------------------------ wait_for

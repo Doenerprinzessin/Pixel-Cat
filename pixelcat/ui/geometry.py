@@ -6,18 +6,41 @@ so Qt and Win32 share one physical coordinate space and these conversions are
 the identity.  They still handle a non-1 device pixel ratio correctly in case a
 future Qt ignores that switch: Qt keeps each screen's *origin* in native pixels
 and scales only the extent, so qt = origin + (phys - origin) / dpr.
+
+On macOS the platform's coordinates already are Qt's logical points (Cocoa does the Retina
+scaling, the display port says so with ``qt_logical()``): the app calls :func:`set_qt_logical`
+once, and every ratio here is 1.
 """
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtGui import QGuiApplication, QScreen
+from PySide6.QtWidgets import QWidget
 
 Rect = tuple[int, int, int, int]  # left, top, right, bottom
+
+_QT_LOGICAL = False     # the platform's coordinates are Qt's logical coordinates (set_qt_logical)
+
+
+def set_qt_logical(on: bool) -> None:
+    """The platform's coordinates are Qt's logical ones (macOS): no device pixel ratio to undo."""
+    global _QT_LOGICAL
+    _QT_LOGICAL = bool(on)
+
+
+def _ratio(screen: QScreen) -> float:
+    """How many platform pixels one Qt pixel of ``screen`` is."""
+    return 1.0 if _QT_LOGICAL else screen.devicePixelRatio()
+
+
+def paint_ratio(widget: QWidget) -> float:
+    """The scale a widget's painter undoes to draw in platform pixels (``p.scale(1 / r, 1 / r)``)."""
+    return 1.0 if _QT_LOGICAL else widget.devicePixelRatioF()
 
 
 def _native_rect(screen: QScreen) -> QRect:
     g = screen.geometry()
-    dpr = screen.devicePixelRatio()
+    dpr = _ratio(screen)
     return QRect(g.x(), g.y(), int(round(g.width() * dpr)), int(round(g.height() * dpr)))
 
 
@@ -43,13 +66,13 @@ def phys_to_qt(x: int, y: int) -> QPoint:
     if sc is None:
         return QPoint(x, y)
     g = sc.geometry()
-    dpr = sc.devicePixelRatio()
+    dpr = _ratio(sc)
     return QPoint(int(g.x() + (x - g.x()) / dpr), int(g.y() + (y - g.y()) / dpr))
 
 
 def dpr_at(x: int, y: int) -> float:
     sc = screen_for_phys(x, y)
-    return sc.devicePixelRatio() if sc is not None else 1.0
+    return _ratio(sc) if sc is not None else 1.0
 
 
 def _overlap(a: Rect, b: Rect) -> int:

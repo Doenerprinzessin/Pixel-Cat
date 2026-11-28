@@ -338,7 +338,7 @@ def test_write_file_unencodable_text(toolbox: ToolBox, folders) -> None:  # type
 @pytest.mark.parametrize(("app", "argv0"), [("notepad", "notepad.exe"), ("vscode", "C:/VS/Code.exe")])
 def test_open_file_shows_it_in_an_editor(toolbox: ToolBox, js: Path, desk, no_wait, monkeypatch,  # type: ignore[no-untyped-def]
                                          app: str, argv0: str) -> None:
-    monkeypatch.setattr(ToolBox, "_vscode_exe", staticmethod(lambda: "C:/VS/Code.exe"))
+    desk.editors["vscode"] = ["C:/VS/Code.exe"]
     out = run(toolbox, "open_file", path="desktop/sort.js", app=app)
     assert out == f"Opened sort.js in {app}. (window ready)"
     assert desk.called("popen") == [([argv0, str(js.resolve())], ("close_fds", True))]
@@ -346,11 +346,20 @@ def test_open_file_shows_it_in_an_editor(toolbox: ToolBox, js: Path, desk, no_wa
     assert not desk.called("open") and not desk.called("open_elevated")
 
 
-def test_open_file_without_vscode(toolbox: ToolBox, js: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_open_file_without_vscode(toolbox: ToolBox, js: Path, desk) -> None:  # type: ignore[no-untyped-def]
+    desk.editors["vscode"] = ["C:/VS/Code.exe"]
     spec, a = toolbox.prepare("open_file", {"path": "desktop/sort.js", "app": "vscode"})
-    monkeypatch.setattr(ToolBox, "_vscode_exe", staticmethod(lambda: None))
+    del desk.editors["vscode"]
     with pytest.raises(ToolError, match="^VS Code isn't installed - try notepad$"):
         toolbox.run(spec, a)
+
+
+def test_open_file_without_any_editor(toolbox: ToolBox, js: Path, desk) -> None:  # type: ignore[no-untyped-def]
+    spec, a = toolbox.prepare("open_file", {"path": "desktop/sort.js", "app": "notepad"})
+    desk.editors.clear()
+    with pytest.raises(ToolError, match="^there's no text editor I can open here$"):
+        toolbox.run(spec, a)
+    assert not desk.called("popen")
 
 
 # ------------------------------------------------------------------ screen tools hand over to the agent

@@ -10,14 +10,16 @@ from typing import Any, Protocol
 
 
 class SecretStore(Protocol):
-    """Encrypts data so only this user on this PC can read it (Windows data protection)."""
+    """Encrypts data so only this user on this PC can read it (the platform's per-user protection: DPAPI on
+    Windows, a key in the Keychain on macOS)."""
 
     def protect(self, data: bytes) -> bytes:
-        """Encrypt for this user; raises OSError if the platform can't."""
+        """Encrypt for this user; raises OSError if the platform can't (SecretStoreUnavailable if only for now)."""
         ...
 
     def unprotect(self, blob: bytes) -> bytes:
-        """Decrypt a :meth:`protect` result; raises Unreadable if it was changed or is another user's."""
+        """Decrypt a :meth:`protect` result; raises Unreadable if it was changed or is another user's, and
+        SecretStoreUnavailable if the store can't be used right now (the data may be fine: keep it)."""
         ...
 
 

@@ -36,7 +36,7 @@ from ..ui.ball import BallOverlay
 from ..ui.dialogs import PixelDialog
 from ..ui.ledges import LedgeFinder
 from ..llm import external
-from ..ui import theme
+from ..ui import geometry, theme
 from ..ui.menu import PixelMenu
 from ..ui.overlay import CatOverlay
 from ..ui.tray import Tray
@@ -67,6 +67,7 @@ class PixelCatApp(QObject):
         self.qapp = qapp
         self.platform = platform        # the ports (from pixelcat.bootstrap)
         self.providers = providers      # the AI model providers by key (from pixelcat.bootstrap)
+        geometry.set_qt_logical(platform.display.qt_logical())   # the ports' coordinates are Qt's (macOS)?
         self.cfg = cfg
         self.t = cfg.tuning
         self.saved = saved
@@ -157,6 +158,7 @@ class PixelCatApp(QObject):
         self.model_status = ModelStatus(cfg, may_download=lambda: (self.saved.model_download_ok and
                                                                   self.model_status.model == cfg.model)
                                         or self.model_status.model in self.model_choice.download_ok,
+                                        ollama_finder=platform.apps.find_ollama, starter=platform.apps.start_ollama,
                                         notify=self._status_notifier.changed.emit)
         self.watches = WatchManager(self.own_pid, platform=self.platform)  # wait_for watches in the background
         self.session = AgentSession(   # the AI's turns: requests, tool rounds, tasks, watches and timers waking it up

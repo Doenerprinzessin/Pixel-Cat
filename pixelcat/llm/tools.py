@@ -575,17 +575,12 @@ class ToolBox:
             p = self._resolve_file(a["path"], True)
             app = str(a.get("app") or "").lower().replace(" ", "")
             if app not in ("notepad", "vscode", "code"):
-                app = "vscode" if p.suffix.lower() in CODE_EXT and self._vscode_exe() else "notepad"
+                app = "vscode" if p.suffix.lower() in CODE_EXT and self._editor("vscode") else "notepad"
             a["_path"], a["app"] = p, "vscode" if app == "code" else app
 
-    def _vscode_exe(self) -> str | None:
-        hit = self.platform.apps.find_shortcut("visual studio code")
-        if hit is not None and str(hit[1]).lower().endswith(".lnk"):
-            exe, _runas = self.platform.apps.lnk_target(hit[1])
-            if exe.lower().endswith("code.exe") and os.path.isfile(exe):
-                return exe
-        guess = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe")
-        return guess if os.path.isfile(guess) else None
+    def _editor(self, app: str) -> list[str] | None:
+        """The command that opens a file in "vscode" or "notepad" (the file goes last); None if not installed."""
+        return self.platform.apps.editor_command(app)
 
     def _local_model(self) -> bool:
         host = (urlparse(self.cfg.ollama_url).hostname or "").lower()
@@ -1152,15 +1147,16 @@ class ToolBox:
     def _open_file(self, a: dict[str, Any]) -> str:
         p: Path = a["_path"]
         before = {w.hwnd for w in self.agent.windows()}
+        cmd = self._editor(a["app"])
         if a["app"] == "vscode":
-            exe = self._vscode_exe()
-            if exe is None:
+            if cmd is None:
                 raise ToolError("VS Code isn't installed - try notepad")
-            subprocess.Popen([exe, str(p)], close_fds=True)
             key = "code"
         else:
-            subprocess.Popen(["notepad.exe", str(p)], close_fds=True)
+            if cmd is None:
+                raise ToolError("there's no text editor I can open here")
             key = "notepad"
+        subprocess.Popen(cmd + [str(p)], close_fds=True)
         return f"Opened {p.name} in {a['app']}." + self.agent.wait_for_window(before, key)
 
     def _wait_for(self, a: dict[str, Any]) -> ToolOutput:

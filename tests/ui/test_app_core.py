@@ -38,6 +38,18 @@ def test_construction_wires_the_parts_without_starting_anything(pet, app_env) ->
     assert not pet.overlay.isVisible()
 
 
+@pytest.mark.parametrize("logical", [False, True])
+def test_the_platform_says_how_to_place_windows_and_where_ollama_is(make_app, fake_platform,  # type: ignore[no-untyped-def]
+                                                                   logical: bool) -> None:
+    from pixelcat.ui import geometry
+
+    fake_platform.display.returns("qt_logical", logical)
+    pet = make_app()
+    assert geometry._QT_LOGICAL is logical
+    assert pet.model_status.find_ollama == fake_platform.apps.find_ollama
+    assert pet.model_status.start_ollama == fake_platform.apps.start_ollama
+
+
 def test_locked_cosmetics_in_the_save_fall_back(make_app) -> None:  # type: ignore[no-untyped-def]
     locked_skin = next(k for k in progress.SKINS if not progress.is_unlocked(0, "skin", k))
     locked_hat = next(k for k in progress.HATS if not progress.is_unlocked(0, "hat", k))
@@ -88,7 +100,7 @@ def test_start_shows_the_cat_and_starts_the_timers(pet, app_env) -> None:  # typ
 
 
 def test_starts_and_lives_on_the_null_platform(make_app, qtbot) -> None:  # type: ignore[no-untyped-def]
-    # Off Windows (macOS until it has its own adapters) bootstrap picks the null adapter: the cat must
+    # Off Windows and macOS (or on a Mac without pyobjc) bootstrap picks the null adapter: the cat must
     # still start, find a screen and keep running, with no desktop to look at.
     from pixelcat.adapters import null
 

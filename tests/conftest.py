@@ -4,6 +4,13 @@
   ``winreg`` so every ``pixelcat`` module imports (see that module).
 * Tests marked ``@pytest.mark.windows`` run only on Windows: they exercise the
   real Win32 / UI Automation / DPAPI / registry code.
+* Tests marked ``@pytest.mark.macos`` run only on macOS (read-only pyobjc calls that
+  never prompt); ``@pytest.mark.macos_live`` ones only on macOS with
+  ``PIXELCAT_MACOS_LIVE=1`` (they move the mouse, press keys, change and restore the
+  volume, use a throwaway Keychain service, write and remove a LaunchAgent).
+* Nothing may ask the user for a macOS permission or touch the real Keychain items:
+  every test runs with ``PIXELCAT_NO_PROMPTS=1`` and
+  ``PIXELCAT_KEYCHAIN_SERVICE=PixelCat-tests-never``.
 * Every test gets its own ``%APPDATA%``, ``%LOCALAPPDATA%``, home folder, Known
   Folders (Desktop, Documents ... answered from ``known_folders._known_cache``) and installer
   root (``PIXELCAT_TEST_ROOT``), so nothing touches the developer's real settings,
@@ -32,6 +39,12 @@ from pathlib import Path
 import pytest
 
 IS_WINDOWS = sys.platform == "win32"
+IS_MACOS = sys.platform == "darwin"
+MACOS_LIVE = IS_MACOS and os.environ.get("PIXELCAT_MACOS_LIVE") == "1"
+
+# No macOS permission prompts or settings panes, and never the real Keychain items (also for subprocesses).
+TEST_ENV = {"PIXELCAT_NO_PROMPTS": "1", "PIXELCAT_KEYCHAIN_SERVICE": "PixelCat-tests-never"}
+os.environ.update(TEST_ENV)
 
 # Same as main.py: the app does its own DPI scaling.
 os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
@@ -110,17 +123,23 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "windows: needs real Windows (Win32, UIA, DPAPI, registry)")
+    config.addinivalue_line("markers", "macos: needs real macOS (read-only pyobjc calls, never prompts)")
+    config.addinivalue_line("markers", "macos_live: drives the real Mac; only with PIXELCAT_MACOS_LIVE=1")
     config.addinivalue_line("markers", "qt: needs a QApplication (pytest-qt qapp/qtbot)")
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    if IS_WINDOWS:
-        return
-    skip = pytest.mark.skip(reason="needs real Windows")
+    skip_windows = pytest.mark.skip(reason="needs real Windows")
+    skip_macos = pytest.mark.skip(reason="needs real macOS")
+    skip_live = pytest.mark.skip(reason="drives the real Mac: needs macOS and PIXELCAT_MACOS_LIVE=1")
     for item in items:
         # the marker itself: item.keywords also holds folder names, and tests/adapters/windows is one
-        if item.get_closest_marker("windows"):
-            item.add_marker(skip)
+        if item.get_closest_marker("windows") and not IS_WINDOWS:
+            item.add_marker(skip_windows)
+        if item.get_closest_marker("macos") and not IS_MACOS:
+            item.add_marker(skip_macos)
+        if item.get_closest_marker("macos_live") and not MACOS_LIVE:
+            item.add_marker(skip_live)
 
 
 @pytest.fixture(autouse=True)
@@ -133,6 +152,8 @@ def isolated_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         path.mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv(var, str(path))
     monkeypatch.delenv("OLLAMA_MODELS", raising=False)
+    for var, value in TEST_ENV.items():
+        monkeypatch.setenv(var, value)
     # On Windows the shell would still answer with the developer's real Desktop, Documents,
     # Pictures ..., so the Known Folders are answered from the cache, inside tmp_path.
     from pixelcat.adapters.windows import known_folders
@@ -145,6 +166,13 @@ def isolated_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # registry keys) under a test root instead of asking the shell.
     monkeypatch.setenv("PIXELCAT_TEST_ROOT", str(tmp_path / "install-root"))
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def qt_coordinates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test starts with physical-pixel coordinates (``ui.geometry.set_qt_logical`` doesn't leak)."""
+    from pixelcat.ui import geometry
+    monkeypatch.setattr(geometry, "_QT_LOGICAL", False)
 
 
 @pytest.fixture(autouse=True)

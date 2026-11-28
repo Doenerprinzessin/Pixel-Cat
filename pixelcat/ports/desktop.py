@@ -2,8 +2,8 @@
 accessibility, screenshots, the PC itself, apps, processes and notifications.
 
 Plain interfaces (``typing.Protocol``); an adapter in ``pixelcat.adapters`` implements them for one
-platform and ``pixelcat.bootstrap`` picks it.  Coordinates are physical pixels on the virtual screen,
-rects are (left, top, right, bottom).  Window handles are opaque :data:`~pixelcat.domain.WindowId`s.
+platform and ``pixelcat.bootstrap`` picks it.  Coordinates are physical pixels on the virtual screen (or
+Qt's logical points where :meth:`DisplayPort.qt_logical` says so), rects are (left, top, right, bottom).  Window handles are opaque :data:`~pixelcat.domain.WindowId`s.
 """
 from __future__ import annotations
 
@@ -51,6 +51,11 @@ class DisplayPort(Protocol):
 
     def session_locked(self) -> bool:
         """True while the PC is locked (desktop input can't work then)."""
+        ...
+
+    def qt_logical(self) -> bool:
+        """True if this port's coordinates are Qt's logical coordinates (the window system scales for Retina
+        screens); False if they are physical pixels (Qt's DPI scaling is off, Windows)."""
         ...
 
 
@@ -423,8 +428,17 @@ class AppsPort(Protocol):
         """True if starting an app target (command list, shortcut, program, URI) asks for admin rights."""
         ...
 
-    def lnk_target(self, path: str | Path) -> tuple[str, bool]:
-        """What a shortcut starts, and whether it is set to run as administrator."""
+    def editor_command(self, app: str) -> list[str] | None:
+        """The command that opens a file in an editor ("vscode" or "notepad", the plain text editor); the file's
+        path goes last.  None if that editor isn't installed."""
+        ...
+
+    def find_ollama(self) -> Path | None:
+        """Ollama on this PC (its app, or the command-line program); None if it isn't installed."""
+        ...
+
+    def start_ollama(self, exe: Path) -> None:
+        """Start Ollama (what :meth:`find_ollama` found) in the background; gives up quietly."""
         ...
 
     def run_as_admin(self, target: str | Path) -> tuple[bool, str]:

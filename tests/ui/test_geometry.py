@@ -85,3 +85,38 @@ def test_phys_to_qt_without_screens_passes_points_through(qapp, monkeypatch) -> 
     p = geometry.phys_to_qt(123, 456)
     assert (p.x(), p.y()) == (123, 456)
     assert geometry.dpr_at(1, 1) == 1.0
+
+
+class _Screen:
+    """A Retina screen as Qt reports it on macOS: logical geometry, device pixel ratio 2."""
+
+    def __init__(self, x: int, y: int, w: int, h: int) -> None:
+        from PySide6.QtCore import QRect
+
+        self._g = QRect(x, y, w, h)
+
+    def geometry(self):  # type: ignore[no-untyped-def]
+        return self._g
+
+    def devicePixelRatio(self) -> float:
+        return 2.0
+
+
+class _Widget:
+    def devicePixelRatioF(self) -> float:
+        return 2.0
+
+
+@pytest.mark.parametrize("logical", [False, True])
+def test_qt_logical_turns_the_device_pixel_ratio_off(monkeypatch, logical) -> None:  # type: ignore[no-untyped-def]
+    screens = [_Screen(0, 0, 1728, 1117), _Screen(1728, 0, 1920, 1080)]
+    monkeypatch.setattr(geometry.QGuiApplication, "screens", staticmethod(lambda: screens))
+    geometry.set_qt_logical(logical)
+    if logical:     # the platform's points are Qt's: nothing to undo
+        assert geometry.screen_for_phys(1800, 10) is screens[1]
+        p = geometry.phys_to_qt(1800, 10)
+        assert (p.x(), p.y(), geometry.dpr_at(1800, 10), geometry.paint_ratio(_Widget())) == (1800, 10, 1.0, 1.0)
+    else:           # physical pixels: the first screen spans 3456 of them
+        assert geometry.screen_for_phys(1800, 10) is screens[0]
+        p = geometry.phys_to_qt(1800, 10)
+        assert (p.x(), p.y(), geometry.dpr_at(1800, 10), geometry.paint_ratio(_Widget())) == (900, 5, 2.0, 2.0)
