@@ -480,13 +480,25 @@ def test_rate_limit_reset(fake_sdk, record, headers, minutes):
         assert abs(reset - (time.time() + minutes * 60)) < 5
 
 
-def test_connection_error_after_cancel_is_quiet(fake_sdk, record):
-    fake_sdk.script = [anthropic.APIConnectionError(request=_REQ)]
+def test_connection_error_after_cancel_is_quiet(fake_sdk, record, monkeypatch):
     w = AC.AnthropicWorker("claude-opus-5-5", ASK, None, True, "high", MemoryCredentials({}), INFO)
     rec = record(w)
-    w._cancel = True
+
+    def stream(**params: Any) -> Any:                # the user cancels; closing the stream drops the connection
+        fake_sdk.calls.append(params)
+        w.cancel()
+        raise anthropic.APIConnectionError(request=_REQ)
+
+    monkeypatch.setattr(AC, "client", lambda creds, auth="key", timeout=600.0:
+                        SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(stream=stream))))
     w.run()
-    assert rec.events == [] and fake_sdk.calls == []
+    assert len(fake_sdk.calls) == 1 and rec.events == []
+
+
+def test_connection_error_without_cancel_is_reported(fake_sdk, record):
+    fake_sdk.script = [anthropic.APIConnectionError(request=_REQ)]
+    _w, rec = run(record)
+    assert rec.failed[0] == "ext_offline" and len(fake_sdk.calls) == 1
 
 
 def test_unreadable_tool_json_is_asked_again_up_to_eight_times(fake_sdk, record):
