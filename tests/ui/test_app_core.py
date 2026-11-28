@@ -29,8 +29,8 @@ def _win(hwnd: int, rect: tuple[int, int, int, int], z: int = 0) -> WinInfo:
 def test_construction_wires_the_parts_without_starting_anything(pet, app_env) -> None:  # type: ignore[no-untyped-def]
     assert [m.device for m in pet.monitors] == ["TEST1"]
     assert pet.menu.title == "PIXEL CAT" and pet.model_menu.title == "MODEL FOR THIS CHAT"
-    assert pet.chat is None and pet.mini is None and pet.worker is None and pet.history == []
-    assert pet.brain.game is pet.game and pet.game.on_end == pet._game_ended
+    assert pet.chat is None and pet.game_state.mini is None and pet.worker is None and pet.history == []
+    assert pet.brain.game is pet.game and pet.game.on_end == pet.minigames.game_ended
     assert not any(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer,
                                           pet.save_timer, pet.top_timer, pet.tray_timer, pet.quit_timer))
     assert pet.tick_timer.interval() == 1000 // pet.t.fps_active
@@ -175,8 +175,8 @@ def test_ticks_run_the_cat(started, app_env) -> None:  # type: ignore[no-untyped
 def test_ticks_with_the_ball_game(started) -> None:  # type: ignore[no-untyped-def]
     pet = started
     pet.saved.tutorials_seen.append("ball")
-    pet.start_minigame("ball")
-    assert pet.game.active and pet._running_game() == "ball"
+    pet.minigames.start_minigame("ball")
+    assert pet.game.active and pet.minigames.running_game() == "ball"
     for _ in range(30):
         pet._last_tick -= 1 / 60
         pet._tick()

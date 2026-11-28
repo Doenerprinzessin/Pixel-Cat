@@ -385,7 +385,7 @@ def test_cat_actions_wait_for_minigames(pet) -> None:  # type: ignore[no-untyped
     assert "minigame" not in pet._tool_cat_action("happy")
     pet.saved.tutorials_seen.append("ball")
     pet.start()
-    pet.start_minigame("ball")
+    pet.minigames.start_minigame("ball")
     assert "in the middle of a minigame" in pet._tool_cat_action("happy")
 
 

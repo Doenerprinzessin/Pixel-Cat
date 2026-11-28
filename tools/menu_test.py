@@ -488,8 +488,8 @@ def main() -> int:
     m.items = pet._menu_items()
     m._layout()
     began: list[str] = []
-    real_begin = pet._begin_game
-    pet._begin_game = lambda k: began.append(k)  # type: ignore[method-assign]
+    real_begin = pet.minigames._begin_game
+    pet.minigames._begin_game = lambda k: began.append(k)  # type: ignore[method-assign]
     m._activate(row("game:hide"))
     check("clicking a locked game does nothing (menu stays open)", not began and not closed)
     # the first time: an explanation first (a fake popup - nothing on screen)
@@ -516,17 +516,17 @@ def main() -> int:
     pops[0][5].answered.emit(True)
     check("'Let's play!' starts the game and it is not explained again", began == ["laser"]
           and "laser" in pet.saved.tutorials_seen)
-    pet.start_minigame("laser")
+    pet.minigames.start_minigame("laser")
     check("the second time it starts right away", began == ["laser", "laser"] and len(pops) == 1)
-    pet.start_minigame("treats")
+    pet.minigames.start_minigame("treats")
     pops[-1][5].answered.emit(False)
     check("'Not now' doesn't start it (and it is explained again next time)", began[-1] == "laser"
           and "treats" not in pet.saved.tutorials_seen)
-    pet._begin_game = real_begin  # type: ignore[method-assign]
+    pet.minigames._begin_game = real_begin  # type: ignore[method-assign]
     # XP: stages unlock things, with a result window
     pet.saved.xp = progress.xp_to_reach(4) - 10
     pops.clear()
-    pet._award("laser", "Laser pointer", 40, "12 pounces!", "")
+    pet.minigames._award("laser", "Laser pointer", 40, "12 pounces!", "")
     check("XP from a game fills the Cat Pass; a new stage unlocks something (shown in the result window)",
           progress.state(pet.saved.xp).stage == 4 and pops and "+40 XP" in pops[-1][1] and "Ginger" in pops[-1][1]
           and pops[-1][2] == "PUT IT ON", pops[-1][1] if pops else "")
@@ -599,7 +599,7 @@ def main() -> int:
           and r.bottom() - m._scroll <= m._view_bottom(), f"row {m._hover}, scroll {m._scroll}")
     m._scroll = 0
     m._work = (0, 0, 1920, 1080)
-    pet._set_skin("charcoal")
+    pet.minigames.set_skin("charcoal")
     pet.saved.xp = 0
     # a game: menu closes, the game starts
     pet._refresh_windows()                       # the cat needs its world (monitors, windows) to play

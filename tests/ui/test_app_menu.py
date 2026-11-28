@@ -390,45 +390,46 @@ def test_locked_skins_hats_and_games_do_nothing(pet) -> None:  # type: ignore[no
     pet._on_menu(f"skin:{skin}")
     pet._on_menu(f"hat:{hat}")
     pet._on_menu("game:boxes")
-    assert (pet.saved.skin, pet.saved.hat, pet.mini) == ("charcoal", "", None)
+    assert (pet.saved.skin, pet.saved.hat, pet.game_state.mini) == ("charcoal", "", None)
     assert pet.brain.bubble.kind == "bubble_question"
 
 
 def test_a_new_game_is_explained_first(pet) -> None:  # type: ignore[no-untyped-def]
     pet._on_menu("game:laser")
     pop = pet.popups.open[-1]
-    assert pop.title == "Laser pointer" and pop.kind == "tutorial" and pet.mini is None
+    assert pop.title == "Laser pointer" and pop.kind == "tutorial" and pet.game_state.mini is None
     pop.answered.emit(False)
-    assert pet.mini is None and "laser" not in pet.saved.tutorials_seen
+    assert pet.game_state.mini is None and "laser" not in pet.saved.tutorials_seen
 
 
 def test_a_minigame_starts_and_stops(pet) -> None:  # type: ignore[no-untyped-def]
     pet.start()
     pet._on_menu("game:laser")
     pet.popups.open[-1].ok.click()
-    assert pet.saved.tutorials_seen == ["laser"] and pet._mini_active() and pet._running_game() == "laser"
+    assert (pet.saved.tutorials_seen == ["laser"] and pet.minigames.mini_active()
+            and pet.minigames.running_game() == "laser")
     assert find(pet._menu_items(), "stopgame").label == "Stop Laser pointer"
     for _ in range(5):
         pet._last_tick -= 1 / 30
         pet._tick()
     pet._on_menu("stopgame")
-    assert pet.mini is None and pet.saved.game_plays == {"laser": 1}
+    assert pet.game_state.mini is None and pet.saved.game_plays == {"laser": 1}
 
 
 def test_ball_game_over_gives_xp_and_keeps_the_record(pet) -> None:  # type: ignore[no-untyped-def]
-    pet._game_ended(3)
+    pet.minigames.game_ended(3)
     assert (pet.saved.plays, pet.saved.best_round, pet.game.best, pet.saved.xp) == (1, 3, 3, 25 + 36)
     pop = pet.popups.open[-1]
     assert "caught the ball 3 times" in pop.text.text() and "+61 XP" in pop.text.text()
-    pet._game_ended(5)
+    pet.minigames.game_ended(5)
     assert pet.saved.best_round == 5 and "New record: 5 catches!" in pet.popups.open[-1].text.text()
-    pet._game_ended(0)
+    pet.minigames.game_ended(0)
     assert pet.saved.plays == 3
 
 
 def test_an_unlock_offers_to_use_it(pet) -> None:  # type: ignore[no-untyped-def]
     pet.saved.xp = progress.xp_to_reach(2) - 1
-    pet._award("ball", "Play ball", 50, "ok", "")
+    pet.minigames._award("ball", "Play ball", 50, "ok", "")
     pop = pet.popups.open[-1]
     assert progress.REWARDS[0] == ("hat", "party")
     assert "Stage 2! New hat: " in pop.text.text() and pop.ok.text() == "PUT IT ON" and pop.no.text() == "LATER"
@@ -437,7 +438,7 @@ def test_an_unlock_offers_to_use_it(pet) -> None:  # type: ignore[no-untyped-def
 
 
 def test_xp_per_play_is_capped(pet) -> None:  # type: ignore[no-untyped-def]
-    pet._award("mice", "Mouse hunt", 10**6, "", "")
+    pet.minigames._award("mice", "Mouse hunt", 10**6, "", "")
     assert pet.saved.xp == persistence.MAX_XP_PER_PLAY
 
 

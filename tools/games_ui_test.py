@@ -86,7 +86,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     def timed_tick() -> None:
         t0 = time.perf_counter()
         real_tick()
-        if pet.mini is not None:
+        if pet.game_state.mini is not None:
             ticks.append(time.perf_counter() - t0)
     pet.tick_timer.timeout.disconnect()
     pet.tick_timer.timeout.connect(timed_tick)
@@ -152,12 +152,12 @@ def main() -> int:  # noqa: C901 - a linear test script
         return brain.smap.floor_at(brain.x).y
 
     def finish_game(key: str) -> None:
-        game = pet.mini
+        game = pet.game_state.mini
         wins = [w for w in windows_of(game) if w is not None]
         xp0 = saved.xp
         host.hud.close_requested.emit()            # the HUD's X
         pump(0.6)
-        check(f"{key}: the HUD's X stops it; all its windows go away", pet.mini is None and not game.active
+        check(f"{key}: the HUD's X stops it; all its windows go away", pet.game_state.mini is None and not game.active
               and not host.sprites and not host.props and not any(w.isVisible() for w in wins)
               and not host.hud.isVisible())
         ex = win32.get_exstyle(pet.overlay.hwnd())
@@ -178,7 +178,8 @@ def main() -> int:  # noqa: C901 - a linear test script
     pump(0.5)
     pops = [p for p in pet.popups.open if p.isVisible()]
     ex = win32.get_exstyle(int(pops[0].winId())) if pops else 0
-    check("first time: the explanation window shows (and doesn't take the focus)", bool(pops) and pet.mini is None
+    check("first time: the explanation window shows (and doesn't take the focus)",
+          bool(pops) and pet.game_state.mini is None
           and bool(ex & win32.WS_EX_NOACTIVATE) and pops[0].title == "Laser pointer")
     if pops:
         pet.overlay.grab()  # (nothing saved - just exercising paint)
@@ -186,11 +187,11 @@ def main() -> int:  # noqa: C901 - a linear test script
         pops[0].ok.click()
     pump(0.5)
     # ---------------------------------------------------------------- laser, with no windows at all
-    pet.stop_minigame()
+    pet.minigames.stop_minigame()
     pet.platform.windows.top_level = lambda pid, include=frozenset(): []   # type: ignore[method-assign]
     pet._refresh_windows()
-    pet._begin_game("laser")
-    g = pet.mini
+    pet.minigames._begin_game("laser")
+    g = pet.game_state.mini
     props = list(host.props)
     pids = {p.hwnd for p in props}
     check("laser with no windows: temporary furniture appears (real windows the cat can stand on)",
@@ -222,7 +223,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     pet._refresh_windows()
     # ---------------------------------------------------------------- treat toss
     pet._on_menu("game:treats")
-    g = pet.mini
+    g = pet.game_state.mini
     pump(1.0)
     check("treats: the jar appears", g is not None and styles_ok([g.jar.win]))
     fake[0] = opaque_point(g.jar.win)
@@ -240,7 +241,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     finish_game("treats")
     # ---------------------------------------------------------------- knock it off
     pet._on_menu("game:knock")
-    g = pet.mini
+    g = pet.game_state.mini
     falls = pump(30, lambda: any(th.state == "fall" for th in g.things),
                  lambda: setattr(g, "speed", 2.5))
     check("knock: the cat pushes something off a window", falls, f"things {len(g.things)}")
@@ -256,7 +257,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     finish_game("knock")
     # ---------------------------------------------------------------- mouse hunt
     pet._on_menu("game:mice")
-    g = pet.mini
+    g = pet.game_state.mini
     spawned = pump(6, lambda: any(m.sprite.x and not m.gone for m in g.mice))
     if spawned:
         m = g.mice[0]
@@ -267,7 +268,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     finish_game("mice")
     # ---------------------------------------------------------------- fishing
     pet._on_menu("game:fishing")
-    g = pet.mini
+    g = pet.game_state.mini
     bite = pump(25, lambda: g.phase == "bite")
     if bite:
         click(g.pond.win)
@@ -277,7 +278,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     finish_game("fishing")
     # ---------------------------------------------------------------- hide and seek
     pet._on_menu("game:hide")
-    g = pet.mini
+    g = pet.game_state.mini
     hidden = pump(15, lambda: g.phase == "hidden")
     under = host.cat_under
     real_spot = bool(g.spot and g.spot["real"])
@@ -310,7 +311,7 @@ def main() -> int:  # noqa: C901 - a linear test script
         return bool(hw)
     if pump(10, find_helper):
         pet._on_menu("game:hide")
-        g = pet.mini
+        g = pet.game_state.mini
         orig = g._spots
         g._spots = lambda: [sp for sp in orig() if sp["hwnd"] == hw] or orig()   # type: ignore[method-assign]
         hidden = pump(15, lambda: g.phase == "hidden")
@@ -340,7 +341,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     helper.kill()
     # ---------------------------------------------------------------- box fort
     pet._on_menu("game:boxes")
-    g = pet.mini
+    g = pet.game_state.mini
     pump(2.5)
     check("boxes: boxes and the pile appear", g is not None and len(g.boxes) >= 2 and styles_ok(windows_of(g)))
     bx = g.boxes[0]

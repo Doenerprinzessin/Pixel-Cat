@@ -54,13 +54,14 @@ from ..ui.menu import MenuItem, PixelMenu
 from ..ui.overlay import CatOverlay
 from ..ui.tray import Tray
 from .. import games as minigames
-from ..games.base import MiniGame
-from ..games.qt_host import QtHost, art_pixmap
+from ..games.qt_host import QtHost
 from ..sprites import hats as hat_art
 from . import context
 from .geometry import rect_gap
 from .popups import Popups, paras
+from .minigames import Minigames
 from .progress_io import ProgressIO
+from .state import GameState
 
 log = logging.getLogger("pixelcat.app")   # (the name it had as pixelcat/app.py; tests look for it)
 
@@ -121,7 +122,6 @@ class PixelCatApp(QObject):
         self.overlay.hat = saved.hat                   # Cosmetics -> Hats
         self.game = BallGame(self.brain)              # "Play": grab the ball, the cat hunts it
         self.game.best = saved.best_round
-        self.game.on_end = self._game_ended
         self.brain.game = self.game
         self.ball_win = BallOverlay(self.game, self.sprites, self.t, windows=self.platform.windows,
                                     input=self.platform.input)
@@ -129,7 +129,7 @@ class PixelCatApp(QObject):
         theme.on_change(self._on_style_changed)
         naming.set_name(saved.cat_name)                                                  # Settings -> Name...
         # the minigames: their things (mice, shelves, the laser dot...) are small windows of their own
-        self.mini: MiniGame | None = None
+        self.game_state = GameState()                  # the running minigame (the world reads it too)
         self._real_wins: list[Any] = []                  # the last window list (props come on top)
         self.ledges = LedgeFinder(self.platform.capture)  # borders inside windows the cat can sit on
         self._ledge_t = -100.0
@@ -138,11 +138,12 @@ class PixelCatApp(QObject):
         self._ledge_quick = 2
         self._own_hwnds: set[int] = set()
         self.host = QtHost(self.brain, self.sprites, self._game_windows, self.scale_for,
-                           self.t.min_surface_len, on_world=self._rebuild_world, work_area=self._game_work,
-                           ui_unit=self._game_unit, cat_hwnd=self.overlay.hwnd, on_hud_close=self.stop_minigame,
+                           self.t.min_surface_len, on_world=self._rebuild_world,
+                           work_area=lambda: self.minigames.game_work(), ui_unit=lambda: self.minigames.game_unit(),
+                           cat_hwnd=self.overlay.hwnd, on_hud_close=lambda: self.minigames.stop_minigame(),
                            windows=self.platform.windows, input=self.platform.input)
         self.host.ctx = {"fish_book": saved.fish_book}
-        self.host.ended = self._mini_ended
+        self.host.ended = lambda game: self.minigames.mini_ended(game)
         self.hud = self.host.hud
         self.menu = PixelMenu(self.sprites)
         self.menu.title = naming.title().upper()
@@ -160,7 +161,7 @@ class PixelCatApp(QObject):
         self.popups = Popups(self.sprites, self.platform.windows, anchor=lambda: self._popup_anchor(),
                              hidden=lambda: self.hidden_fullscreen)   # popups next to the cat, background work
         self.progress_io = ProgressIO(saved, self.popups, platform.folders, self.menu, self.game,   # export / import
-                                      save=lambda: self.save(), stop_minigame=lambda: self.stop_minigame(),
+                                      save=lambda: self.save(), stop_minigame=lambda: self.minigames.stop_minigame(),
                                       show_progress=lambda: self._show_progress(),
                                       menu_items=lambda: self._menu_items())
         self._resume_after_switch = False                # token limit: go on once another model is picked
@@ -184,6 +185,14 @@ class PixelCatApp(QObject):
         self.tray = Tray(self.sprites)
         self.tray.action.connect(self._on_menu)
         self.tray.messageClicked.connect(self.open_chat)
+        self.minigames = Minigames(   # Play ball and the minigames: start/stop, XP, records, unlocks
+            self.game_state, saved, self.brain, self.game, self.host, self.overlay, self.sprites, self.popups,
+            self.menu, self.tray, self.platform.windows, save=lambda: self.save(),
+            rebuild_world=lambda: self._rebuild_world(), cat_monitor=lambda: self._cat_monitor(),
+            ui_unit=lambda mon: self.ui_unit(mon), hidden_fullscreen=lambda: self.hidden_fullscreen,
+            selftest=lambda: self.selftest, quitting=lambda: self._quitting,
+            reward_picture=lambda kind, key, u, hat_scale: self._reward_picture(kind, key, u, hat_scale))
+        self.game.on_end = self.minigames.game_ended
 
         # chat / tools state
         # the AI: Ollama started and the model loaded in the background, status shown in the chat
@@ -330,7 +339,7 @@ class PixelCatApp(QObject):
             for tm in (self.tick_timer, self.win_timer, self.mon_timer, self.fs_timer, self.save_timer):
                 tm.stop()
             self.agent.cancel.set()
-            self.stop_minigame()
+            self.minigames.stop_minigame()
             for pop in list(self.popups.open):
                 pop.close()
             self.esc_watch.stop()
@@ -404,7 +413,7 @@ class PixelCatApp(QObject):
                       scale=scale, cursor_over_cat=self.overlay.cursor_over)
             self._ride_window()
             self.brain.update(dt, ctx)
-            mini = self.mini
+            mini = self.game_state.mini
             if mini is not None and mini.active:
                 mini.update(dt, self.activity.cursor)
             self.overlay.sync(scale)
@@ -438,7 +447,7 @@ class PixelCatApp(QObject):
             wins = self.platform.windows.top_level(self.own_pid, self._own_hwnds)
             self._real_wins = wins
             rects = {w.hwnd: w.rect for w in wins}
-            if self._known_hwnds is not None and self.brain.mode == "ground" and not self._mini_active():
+            if self._known_hwnds is not None and self.brain.mode == "ground" and not self.minigames.mini_active():
                 cat = self.overlay.cat_rect()
                 s = self.scale_for(monitor_at(self.monitors, self.brain.x, self.brain.y - 1))
                 for w in wins:
@@ -453,7 +462,7 @@ class PixelCatApp(QObject):
             self.rl.exception("windows", "window refresh failed")
 
     def _ledges_on(self) -> bool:
-        return self.cfg.explore_windows and not self._mini_active() and not self.game.active
+        return self.cfg.explore_windows and not self.minigames.mini_active() and not self.game.active
 
     def _cat_box(self) -> tuple[int, int, int, int]:
         """The cat's own pixels (a little bigger): it covers the line it sits on."""
@@ -510,7 +519,7 @@ class PixelCatApp(QObject):
     def _rebuild_world(self) -> None:
         """The cat's surfaces: real windows (and the chat, the menu) with the borders inside
         them, plus the game's furniture (it is always on top)."""
-        base = self._game_windows() if self._mini_active() else list(self._real_wins)
+        base = self._game_windows() if self.minigames.mini_active() else list(self._real_wins)
         wins = base + self.host.prop_infos()
         inner = self.ledges.current(self._real_wins) if self._ledges_on() else None
         smap = SurfaceMap.build(self.monitors, wins, self.scale_for, self.t.min_surface_len, inner)
@@ -597,7 +606,7 @@ class PixelCatApp(QObject):
 
     def _keep_on_top(self) -> None:
         if not self.hidden_fullscreen and self.overlay.hwnd():
-            mini = self.mini if self._mini_active() else None
+            mini = self.game_state.mini if self.minigames.mini_active() else None
             if mini is None or not mini.cat_z_locked:     # hide and seek: the cat stays behind its window
                 try:
                     self.platform.windows.keep_topmost(self.overlay.hwnd())
@@ -620,13 +629,13 @@ class PixelCatApp(QObject):
         self.brain.pick_up()
 
     def _on_cat_click(self) -> None:
-        mini = self.mini if self._mini_active() else None
+        mini = self.game_state.mini if self.minigames.mini_active() else None
         if mini is not None and mini.on_cat_click():     # hide and seek: found you!
             return
         self.brain.poke()
 
     def _on_cat_double(self) -> None:
-        mini = self.mini if self._mini_active() else None
+        mini = self.game_state.mini if self.minigames.mini_active() else None
         if mini is not None and mini.on_cat_click():
             return
         self.brain.double_click()
@@ -698,7 +707,7 @@ class PixelCatApp(QObject):
     def _game_items(self) -> list[MenuItem]:
         """Every minigame: locked ones show the Cat Pass stage that unlocks them."""
         st = self.saved
-        running = self._running_game()
+        running = self.minigames.running_game()
         out: list[MenuItem] = []
         for key in minigames.ORDER:
             title = minigames.title(key)
@@ -726,7 +735,7 @@ class PixelCatApp(QObject):
         """The Cat Pass (stages and what they unlock), skins and hats."""
         st = self.saved
         ps = progress.state(st.xp)
-        u = self._game_unit()
+        u = self.minigames.game_unit()
         hat_scale = max(1, (9 * u + 2) // 13)
         stages = [MenuItem("pass_total", f"{st.xp} XP in total", "star", info=True,
                            note=(f"NEXT STAGE IN {ps.cost - ps.into} XP" if ps.cost else "ALL DONE!"))]
@@ -2108,19 +2117,19 @@ class PixelCatApp(QObject):
                     self.menu.refresh(self._menu_items())
                 return
             if key.startswith("game:"):
-                self.start_minigame(key.split(":", 1)[1])
+                self.minigames.start_minigame(key.split(":", 1)[1])
                 return
             if key.startswith("skin:"):
-                self._set_skin(key.split(":", 1)[1])
+                self.minigames.set_skin(key.split(":", 1)[1])
             elif key.startswith("hat:"):
-                self._set_hat(key.split(":", 1)[1])
+                self.minigames.set_hat(key.split(":", 1)[1])
             elif key == "stopgame":
-                self.stop_minigame()
+                self.minigames.stop_minigame()
                 if self.game.active:
                     self.game.stop()
             elif key == "pause":
                 if not b.paused:
-                    self.stop_minigame()
+                    self.minigames.stop_minigame()
                     if self.game.active:
                         self.game.stop()
                 b.set_paused(not b.paused)
@@ -2135,7 +2144,7 @@ class PixelCatApp(QObject):
                 if self.game.active:
                     self.game.stop()
                 else:
-                    self.start_minigame("ball")
+                    self.minigames.start_minigame("ball")
             elif key == "quiet":
                 self.quiet = not self.quiet
                 if self.quiet and not b.paused:
@@ -2164,7 +2173,7 @@ class PixelCatApp(QObject):
                 self._ledge_t = 0.0
                 self._rebuild_world()
             elif key == "find":
-                self.stop_minigame()              # (hide and seek: no cheating - the round ends)
+                self.minigames.stop_minigame()              # (hide and seek: no cheating - the round ends)
                 p = primary(self.monitors)
                 b.plan.clear()
                 b.place((p.work[0] + p.work[2]) / 2, p.work[3] - 200)
@@ -2181,225 +2190,14 @@ class PixelCatApp(QObject):
         except Exception:  # noqa: BLE001
             log.exception("menu action %s failed", key)
 
-    def _game_ended(self, rounds: int) -> None:
-        """A ball game is over: remember the best one, XP for the Cat Pass."""
-        log.info("ball game over after %d round(s) (best so far %d)", rounds, self.saved.best_round)
-        self.saved.plays += 1
-        best = ""
-        if rounds > self.saved.best_round:
-            if self.saved.best_round:
-                best = f"New record: {rounds} catches!"
-            self.saved.best_round = rounds
-            self.game.best = rounds
-        xp = min(80, 25 + rounds * 12) if rounds else 0
-        result = f"The cat caught the ball {rounds} time{'s' if rounds != 1 else ''}!" if rounds else ""
-        self._award("ball", "Play ball", xp, result, best)
-
-    # ================================================================ minigames
-    def _mini_active(self) -> bool:
-        return self.mini is not None and self.mini.active
-
-    def _running_game(self) -> str | None:
-        if self._mini_active():
-            assert self.mini is not None
-            return self.mini.key
-        return "ball" if self.game.active else None
-
+    # ================================================================ where the cat is
     def _cat_monitor(self) -> Monitor:
         return monitor_at(self.monitors, self.brain.x, self.brain.y - 1)
-
-    def _game_work(self) -> tuple[int, int, int, int]:
-        return self._cat_monitor().work
-
-    def _game_unit(self) -> int:
-        return self.ui_unit(self._cat_monitor())
-
-    def start_minigame(self, key: str) -> None:
-        """Menu -> Minigames.  The first time, a little window explains the game."""
-        if key != "ball" and key not in minigames.GAMES:
-            return
-        if not progress.is_unlocked(self.saved.xp, "game", key):
-            self.brain.show_bubble("bubble_question", 1.5)
-            return
-        if self.hidden_fullscreen:
-            return
-        if key not in self.saved.tutorials_seen and not self.selftest:
-            self._show_tutorial(key)
-            return
-        self._begin_game(key)
-
-    def _show_tutorial(self, key: str) -> None:
-        for pop in list(self.popups.open):
-            if getattr(pop, "kind", "") == "tutorial":
-                pop.close()
-                self.popups.open.remove(pop)
-        text = "".join(f"<p style='margin:0 0 6px 0'>{html.escape(t)}</p>" for t in minigames.tutorial(key))
-        pop = self.popups.popup(minigames.title(key), text, "LET'S PLAY!", "NOT NOW", self._game_picture(key))
-        pop.kind = "tutorial"  # type: ignore[attr-defined]
-        pop.answered.connect(lambda ok, k=key: self._tutorial_answer(k, ok))
-
-    def _tutorial_answer(self, key: str, ok: bool) -> None:
-        if not ok:
-            return                         # explained again next time
-        if key not in self.saved.tutorials_seen:
-            self.saved.tutorials_seen.append(key)
-            self.save()
-        self._begin_game(key)
-
-    def _game_picture(self, key: str) -> QPixmap | None:
-        u = self._game_unit()
-        try:
-            if key == "ball":
-                return self.sprites.effect("yarn0", u + 1)
-            return art_pixmap(minigames.PICTURES[key], u + 1)[0]
-        except Exception:  # noqa: BLE001
-            log.exception("no picture for %s", key)
-            return None
 
     def _popup_anchor(self) -> tuple[Any, tuple[int, int, int, int], int, int]:
         """Where a popup shows: next to the cat, on the cat's monitor."""
         mon = self._cat_monitor()
         return self.overlay.cat_rect(), mon.work, self.ui_unit(mon), mon.dpi
-
-    def _begin_game(self, key: str) -> None:
-        if self.hidden_fullscreen or not progress.is_unlocked(self.saved.xp, "game", key):
-            return
-        self.menu.close()
-        self.stop_minigame()
-        if self.game.active:
-            self.game.stop()
-        b = self.brain
-        if b.state == S.HELD:
-            self.overlay.cancel_press()
-            b.drop(0.0, 0.0)
-        if key == "ball":
-            b.game = self.game
-            b.play()
-            return
-        self.saved.game_plays[key] = self.saved.game_plays.get(key, 0) + 1
-        self._rebuild_world()
-        mini = minigames.GAMES[key](self.host)
-        self.mini = mini
-        self.overlay.raise_on_move = False      # the game's windows stay above the cat
-        try:
-            mini.start()
-        except Exception:  # noqa: BLE001
-            log.exception("minigame %s failed to start", key)
-            self.mini = None
-            b.game = self.game
-            self.overlay.raise_on_move = True
-            self.host.clear()
-            self._rebuild_world()
-
-    def stop_minigame(self) -> None:
-        """The HUD's X, Pause, Quit, or another game: end the running minigame (not Play ball)."""
-        if self._mini_active():
-            assert self.mini is not None
-            self.mini.stop()
-
-    def _mini_ended(self, game: MiniGame) -> None:
-        """A minigame is over (finished or stopped): XP, best score, the result."""
-        self.overlay.raise_on_move = True
-        if self.brain.game is game:
-            self.brain.game = self.game
-        if self.mini is game:
-            self.mini = None
-        try:
-            if self.overlay.hwnd():
-                self.platform.windows.keep_topmost(self.overlay.hwnd())
-        except Exception:  # noqa: BLE001
-            pass
-        st = self.saved
-        st.fish_book = self.host.ctx.get("fish_book", st.fish_book)
-        xp = game.xp()
-        if game.ends_by_stop:                   # a sandbox: XP for the time spent playing
-            xp = int(xp * min(1.0, game.t / 60.0))
-        elif not game.finished:                 # stopped early: a little XP for the time played
-            xp = int(xp * 0.5 * min(1.0, game.t / max(30.0, game.duration or 60.0)))
-        if game.t < 8:
-            xp = 0
-        best = ""
-        if (game.finished or game.ends_by_stop) and game.score:
-            old = st.game_best.get(game.key)
-            better = old is None or (game.score < old if game.lower_is_better else game.score > old)
-            if better:
-                st.game_best[game.key] = game.score
-                if old is not None:
-                    best = "New record!"
-        self._award(game.key, game.title, xp, game.result, best)
-
-    def _award(self, key: str, title: str, xp: int, result: str, best: str) -> None:
-        """Cat Pass XP; a little window shows the result and anything newly unlocked."""
-        st = self.saved
-        old = st.xp
-        xp = min(persistence.MAX_XP_PER_PLAY, max(0, int(xp)))   # (the save's XP check relies on it)
-        st.xp = old + xp
-        unlocks = progress.new_unlocks(old, st.xp)
-        self.save()
-        log.info("%s: +%d XP (total %d), unlocked %s", key, xp, st.xp, unlocks)
-        if self._quitting or self.selftest or (not xp and not result):
-            return
-        b = self.brain
-        if xp:
-            self.host.float_text(f"+{xp} XP", b.x, b.y - 46 * b.scale, "#ffd84a")
-        ps = progress.state(st.xp)
-        lines = [html.escape(result or "Game over!")]
-        if best:
-            lines.append(f"<b>{html.escape(best)}</b>")
-        if xp:
-            stage = (f"Cat Pass stage {ps.stage}: {ps.into}/{ps.cost} XP" if ps.cost
-                     else "The Cat Pass is complete!")
-            lines.append(f"<b>+{xp} XP</b> &middot; {stage}")
-        ok, cancel, picture = "NICE!", None, None
-        for n, kind, k in unlocks:
-            what = progress.kind_label(kind, k)
-            lines.append(f"<b>Stage {n}! New {what}: {html.escape(progress.name_of(kind, k))}</b>")
-        if unlocks:
-            n, kind, k = unlocks[-1]
-            u = self._game_unit()
-            picture = self._reward_picture(kind, k, u + (2 if kind == "game" else 0), max(2, u))
-            if len(unlocks) == 1 and kind in ("skin", "hat"):
-                ok, cancel = "PUT IT ON", "LATER"
-            elif len(unlocks) == 1 and kind == "game":
-                ok, cancel = "PLAY IT", "LATER"
-            if kind == "game" and picture is None:
-                picture = self._game_picture(k)
-        text = "".join(f"<p style='margin:0 0 5px 0'>{ln}</p>" for ln in lines)
-        pop = self.popups.popup(title, text, ok, cancel, picture)
-        if unlocks and cancel:
-            n, kind, k = unlocks[-1]
-            pop.answered.connect(lambda yes, kd=kind, kk=k: self._use_unlock(kd, kk) if yes else None)
-        pop.close_later(40 if unlocks else 12)
-
-    def _use_unlock(self, kind: str, key: str) -> None:
-        if kind == "skin":
-            self._set_skin(key)
-        elif kind == "hat":
-            self._set_hat(key)
-        elif kind == "game":
-            self.start_minigame(key)
-
-    def _set_skin(self, key: str) -> None:
-        if key not in progress.SKINS or not progress.is_unlocked(self.saved.xp, "skin", key):
-            return
-        self.saved.skin = key
-        self.sprites.set_skin(key)
-        self.tray.refresh_icon()
-        self.overlay.update()
-        self.brain.show_bubble("bubble_heart", 1.2)
-        self.save()
-        log.info("skin: %s", key)
-
-    def _set_hat(self, key: str) -> None:
-        if key and (key not in progress.HATS or not progress.is_unlocked(self.saved.xp, "hat", key)):
-            return
-        self.saved.hat = key
-        self.overlay.hat = key
-        self.overlay.update()
-        if key:
-            self.brain.show_bubble("bubble_heart", 1.2)
-        self.save()
-        log.info("hat: %s", key or "none")
 
     # ================================================================ your progress (export / import)
     def _show_progress(self) -> None:
@@ -3384,7 +3182,7 @@ class PixelCatApp(QObject):
         return f"Copied {len(text)} characters to the clipboard."
 
     def _tool_cat_action(self, action: str) -> str:
-        if self._mini_active() or self.game.active:
+        if self.minigames.mini_active() or self.game.active:
             return "The cat is in the middle of a minigame right now - it will do that afterwards."
         return self.brain.command(action)
 
