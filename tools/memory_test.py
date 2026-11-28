@@ -35,11 +35,12 @@ def main() -> int:
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     from pixelcat.app import PixelCatApp
-    from pixelcat.bootstrap import build_platform
+    from pixelcat.bootstrap import build_platform, build_providers
     from pixelcat.persistence import SavedState
     from pixelcat.settings import load_config
 
-    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0, platform=build_platform())
+    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0, platform=build_platform(),
+                      providers=build_providers())
     pet.save = lambda: None
     h = pet.history
     for t in range(14):

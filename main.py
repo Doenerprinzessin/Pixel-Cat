@@ -95,7 +95,8 @@ def main() -> int:
     log.info("starting Pixel Cat (model=%s)", cfg.model)
     for scr in qapp.screens():
         log.info("qt screen %s geometry=%s dpr=%.2f", scr.name(), scr.geometry().getRect(), scr.devicePixelRatio())
-    pet = PixelCatApp(qapp, cfg, saved, selftest=args.selftest, platform=platform)
+    pet = PixelCatApp(qapp, cfg, saved, selftest=args.selftest, platform=platform,
+                      providers=bootstrap.build_providers())
     pet.start(warm_model=True)
     code = qapp.exec()
     log.info("bye (exit code %s)", code)

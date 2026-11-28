@@ -65,7 +65,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     from pixelcat.app import PixelCatApp
-    from pixelcat.bootstrap import build_platform
+    from pixelcat.bootstrap import build_platform, build_providers
     from pixelcat.adapters.windows import notifications as nf
     from pixelcat.llm.agent import ToolOutput
     from pixelcat.llm.tools import ToolError
@@ -76,7 +76,8 @@ def main() -> int:  # noqa: C901 - a linear test script
     shutil.rmtree(DROP, ignore_errors=True)
     DROP.mkdir(parents=True)
     TOAST.write_text(TOAST_PS1, encoding="utf-8")
-    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0, platform=build_platform())
+    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0, platform=build_platform(),
+                      providers=build_providers())
     pet.save = lambda: None
     tb = pet.toolbox
     tag = f"{random.randint(1000, 9999)}"

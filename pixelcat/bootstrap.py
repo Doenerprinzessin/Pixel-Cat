@@ -1,13 +1,13 @@
-"""The composition root: the only place that picks the platform adapters.
+"""The composition root: the only place that picks the adapters.
 
-``main`` builds the :class:`~pixelcat.ports.Platform` here and hands it to the app, which passes the ports
-on to its parts.  Nothing else in the core imports ``pixelcat.adapters``.
+``main`` builds the :class:`~pixelcat.ports.Platform` and the AI model providers here and hands them to the app,
+which passes the ports on to its parts.  Nothing else in the core imports ``pixelcat.adapters``.
 """
 from __future__ import annotations
 
 import sys
 
-from .ports import Platform
+from .ports import ModelProvider, Platform
 
 
 def build_platform(platform: str = sys.platform) -> Platform:
@@ -19,3 +19,10 @@ def build_platform(platform: str = sys.platform) -> Platform:
     from .adapters import null
 
     return null.build()
+
+
+def build_providers() -> dict[str, ModelProvider]:
+    """The AI model providers by key: Anthropic, OpenAI, GitHub Copilot, then the local Ollama."""
+    from .adapters import llm
+
+    return llm.build_providers()

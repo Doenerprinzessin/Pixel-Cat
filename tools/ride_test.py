@@ -86,13 +86,14 @@ def main() -> int:  # noqa: C901 - a linear test script
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     from pixelcat.app import PixelCatApp
-    from pixelcat.bootstrap import build_platform
+    from pixelcat.bootstrap import build_platform, build_providers
     from pixelcat.domain import primary
     from pixelcat.engine.states import S
     from pixelcat.persistence import SavedState
     from pixelcat.settings import load_config
 
-    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0, platform=build_platform())
+    pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0, platform=build_platform(),
+                      providers=build_providers())
     pet.save = lambda: None
     pet.start()
     b = pet.brain

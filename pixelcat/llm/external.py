@@ -27,13 +27,13 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from .. import paths, savecrypt
+from ..ports.llm import ProviderInfo
 
 if TYPE_CHECKING:
     from ..ports import SecretStore
@@ -41,16 +41,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class Provider:
-    key: str
-    name: str            # the company
-    brand: str           # the models
-    signin: str          # the sign-in button
-    key_url: str         # where an API key is made
-    key_hint: str        # what a key starts with
-    usage_url: str       # where the account's usage / credits are
-
+Provider = ProviderInfo     # (the name it had before the port)
 
 ANTHROPIC = Provider("anthropic", "Anthropic", "Claude", "Sign in with Anthropic",
                      "https://platform.claude.com/settings/keys", "sk-ant-", "https://platform.claude.com/")

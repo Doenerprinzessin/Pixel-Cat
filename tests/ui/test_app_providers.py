@@ -138,17 +138,12 @@ def test_custom_credit_limit_asks_github_for_the_plan_first(bg, dialogs, monkeyp
 
 
 # ---------------------------------------------------------------- connection state
+# (each provider's rules: tests/adapters/llm/test_model_providers.py; here: the app asks with its creds and choice)
 @pytest.mark.parametrize(("p", "creds", "settings", "auth"), [
-    ("anthropic", {}, {}, ""), ("anthropic", {"anthropic_key": "k"}, {}, "key"),
-    ("anthropic", {}, {"auth": "signin"}, "signin"), ("anthropic", {"anthropic_key": "k"}, {"auth": "signin"}, "signin"),
-    ("openai", {}, {}, ""), ("openai", {"openai_key": "k"}, {}, "key"),
+    ("anthropic", {}, {}, ""), ("anthropic", {"anthropic_key": "k"}, {"auth": "signin"}, "signin"),
     ("openai", {"chatgpt": {"access_token": "a", "refresh_token": "r"}}, {"auth": "chatgpt"}, "chatgpt"),
-    ("openai", {"chatgpt": {"access_token": "a"}}, {"auth": "chatgpt"}, ""),
-    ("openai", {"openai_key": "k", "chatgpt": {}}, {"auth": "chatgpt"}, "key"),
-    ("copilot", {}, {}, ""), ("copilot", {"copilot_key": "k"}, {}, "key"),
+    ("copilot", {"copilot_key": "k"}, {}, "key"),
     ("copilot", {"copilot_signin": {"token": "t"}}, {"auth": "signin"}, "signin"),
-    ("copilot", {"copilot_signin": {"token": ""}, "copilot_key": "k"}, {"auth": "signin"}, "key"),
-    ("copilot", {"copilot_signin": {"token": "t"}}, {}, ""),
 ])
 def test_ext_auth(pet, p: str, creds: dict, settings: dict, auth: str) -> None:  # type: ignore[no-untyped-def,type-arg]
     for k, v in creds.items():
@@ -497,11 +492,10 @@ def test_a_local_default_model_switches_back_to_local_ai(pet, app_env) -> None: 
     assert app_env.user_settings == [("model", "qwen3.5:4b"), ("ai_mode", "local")] and app_env.ensures == [True]
 
 
+# (each provider's levels: tests/adapters/llm/test_model_providers.py; here: the chat's model and its list entry)
 @pytest.mark.parametrize(("model", "info", "levels"), [
     ("qwen3.5:9b", {}, ["low", "medium", "high"]),
     ("anthropic:m1", {"effort": ["low", "high"]}, ["low", "high"]),
-    ("anthropic:m1", {"effort": []}, None),
-    ("anthropic:m1", {}, ["low", "medium", "high", "xhigh", "max"]),
     ("copilot:m1", {"efforts": ["medium", "xhigh"]}, ["medium", "xhigh"]),
     ("openai:m1", {}, ["low", "medium", "high", "xhigh", "max"])])
 def test_effort_levels(pet, model: str, info: dict, levels) -> None:  # type: ignore[no-untyped-def,type-arg]

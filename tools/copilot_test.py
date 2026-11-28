@@ -430,7 +430,7 @@ def wait(cond, timeout: float = 30.0) -> bool:
 def app_checks() -> None:  # noqa: C901 - a linear test
     from pixelcat import persistence
     from pixelcat.app import PixelCatApp
-    from pixelcat.bootstrap import build_platform
+    from pixelcat.bootstrap import build_platform, build_providers
     from pixelcat.adapters.windows import win32
     from pixelcat.logsetup import setup_logging
     from pixelcat.settings import load_config
@@ -439,7 +439,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     win32.set_dpi_awareness()
     cfg = load_config()
     saved = persistence.SavedState(autostart_asked=True)
-    pet = PixelCatApp(app, cfg, saved, selftest=1, platform=build_platform())
+    pet = PixelCatApp(app, cfg, saved, selftest=1, platform=build_platform(), providers=build_providers())
     pet.save = lambda: None
     from pixelcat.ui import dialogs
     dialogs.KeyDialog.show_near = lambda self, *a: None   # (never shown: no focus taken from the user)

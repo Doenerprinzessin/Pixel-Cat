@@ -822,7 +822,7 @@ def wait(cond, timeout: float = 20.0) -> bool:
 def app_checks(creds) -> None:  # noqa: C901 - a linear test
     from pixelcat import persistence
     from pixelcat.app import PixelCatApp
-    from pixelcat.bootstrap import build_platform
+    from pixelcat.bootstrap import build_platform, build_providers
     from pixelcat.adapters.windows import win32
     from pixelcat.logsetup import setup_logging
     from pixelcat.settings import load_config
@@ -831,7 +831,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     win32.set_dpi_awareness()
     cfg = load_config()
     saved = persistence.SavedState(autostart_asked=True)
-    pet = PixelCatApp(app, cfg, saved, selftest=1, platform=build_platform())
+    pet = PixelCatApp(app, cfg, saved, selftest=1, platform=build_platform(), providers=build_providers())
     pet.save = lambda: None
     pet.creds = creds
     pet.creds.set("anthropic_key", "sk-ant-secret-123")

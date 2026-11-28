@@ -179,7 +179,7 @@ def main() -> int:  # noqa: C901 - a linear test script
 
     from pixelcat.app import PixelCatApp
 
-    from pixelcat.bootstrap import build_platform
+    from pixelcat.bootstrap import build_platform, build_providers
     from pixelcat.adapters.windows import win32
     from pixelcat.logsetup import setup_logging
     from pixelcat.settings import load_config
@@ -189,7 +189,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     st0 = SavedState(autostart_asked=True, xp=150, game_plays={"laser": 1}, plays=1, auto_mode=False)
-    pet = PixelCatApp(app, load_config(), st0, selftest=1, platform=build_platform())
+    pet = PixelCatApp(app, load_config(), st0, selftest=1, platform=build_platform(), providers=build_providers())
     asked: list[str] = []
     answer = [str(TEST / "from-app")]
     pet._ask_file = lambda save, title, start: (asked.append(start), answer[0])[1]   # type: ignore[assignment]

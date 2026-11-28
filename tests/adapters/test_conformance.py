@@ -1,5 +1,6 @@
 """Every adapter implements every port: each method and property, with the port's parameter names and defaults.
-The chat ports (``ports.llm``) too: the chat jobs, the Qt bridge's events sink and Copilot's conversation."""
+The chat ports (``ports.llm``) too: the model providers, the chat jobs, the Qt bridge's events sink and Copilot's
+conversation."""
 from __future__ import annotations
 
 import inspect
@@ -8,7 +9,7 @@ from dataclasses import fields
 import pytest
 
 from pixelcat import ports
-from pixelcat.adapters import null
+from pixelcat.adapters import llm, null
 from pixelcat.adapters.windows import escwatch, notifications
 from pixelcat.adapters.windows import platform as windows
 from pixelcat.llm import anthropic_client, copilot_client, ollama_client, openai_client, qt_chat
@@ -33,6 +34,7 @@ IMPLEMENTATIONS = {
     ports.InstallerPort: (windows.WindowsInstaller, null.NullInstaller),
 }
 CHAT_IMPLEMENTATIONS = {
+    ports.ModelProvider: (llm.AnthropicProvider, llm.OpenAIProvider, llm.CopilotProvider, llm.OllamaProvider),
     ports.ChatEvents: (qt_chat._QtEvents,),
     ports.ChatJob: (anthropic_client.AnthropicChat, openai_client.OpenAIChat, copilot_client.CopilotJob,
                     ollama_client.OllamaChat),
@@ -84,3 +86,11 @@ def test_build_fills_each_port_with_its_implementation(build):  # type: ignore[n
     for name, hint in hints.items():
         if name != "name":
             assert type(getattr(platform, name)) is IMPLEMENTATIONS[getattr(ports, hint)][index], name
+
+
+def test_build_providers_makes_one_of_each_with_its_description():
+    providers = llm.build_providers()
+    assert [type(p) for p in providers.values()] == list(CHAT_IMPLEMENTATIONS[ports.ModelProvider])
+    for key, prov in providers.items():
+        assert isinstance(prov.info, ports.ProviderInfo) and prov.info.key == key
+    assert set(ports.ModelProvider.__annotations__) == {"info"}      # (its only attribute; methods: above)

@@ -199,14 +199,13 @@ def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path, fake_pl
     monkeypatch.setattr(webbrowser, "open", lambda url, *a, **k: env.opened_urls.append(url))
     monkeypatch.setattr(QGuiApplication, "clipboard", staticmethod(lambda: env.clipboard))   # not the real one
     monkeypatch.setenv("OLLAMA_MODELS", str(tmp_path / "ollama-models"))     # no model is downloaded
-    from pixelcat.llm import anthropic_client, copilot_client, openai_client, qt_chat
+    from pixelcat.llm import anthropic_client, copilot_client, ollama_client, openai_client, qt_chat
 
     def no_request(*a: Any, **k: Any) -> None:
         raise AssertionError("a test reached a real model request - use the `workers` fixture or a fake")
 
-    monkeypatch.setattr(app_mod, "OllamaChat", no_request)
-    for mod, name in ((anthropic_client, "AnthropicChat"), (openai_client, "OpenAIChat"),
-                      (copilot_client, "CopilotJob")):
+    for mod, name in ((ollama_client, "OllamaChat"), (anthropic_client, "AnthropicChat"),
+                      (openai_client, "OpenAIChat"), (copilot_client, "CopilotJob")):
         monkeypatch.setattr(mod, name, no_request)
     # (no chat job runs in a thread here: start() runs the (fake) job at once; the test reports through its events)
     monkeypatch.setattr(qt_chat.QtChatWorker, "start", lambda self, *a: self.run())
@@ -235,9 +234,11 @@ def _close_all(pet: Any) -> None:
 
 @pytest.fixture
 def make_app(qapp, app_env: AppEnv, fake_platform):  # type: ignore[no-untyped-def]
-    """``make_app(saved=..., cfg=..., selftest=..., platform=...)`` -> a headless ``PixelCatApp`` (not started:
-    no timer runs unless a test starts it or calls the loop methods itself).  Looking inside
-    windows (screen captures) is off unless a test passes its own ``cfg``."""
+    """``make_app(saved=..., cfg=..., selftest=..., platform=..., providers=...)`` -> a headless ``PixelCatApp``
+    (not started: no timer runs unless a test starts it or calls the loop methods itself).  Looking inside
+    windows (screen captures) is off unless a test passes its own ``cfg``.  The providers are the real ones
+    (no request leaves: ``app_env`` replaces the chat jobs)."""
+    from pixelcat.adapters.llm import build_providers
     from pixelcat.app import PixelCatApp
     from pixelcat.persistence import SavedState
     from pixelcat.settings import Config
@@ -245,12 +246,13 @@ def make_app(qapp, app_env: AppEnv, fake_platform):  # type: ignore[no-untyped-d
     made: list[Any] = []
 
     def make(saved: SavedState | None = None, cfg: Config | None = None, selftest: float = 0.0,
-             platform: Any = None) -> PixelCatApp:
+             platform: Any = None, providers: Any = None) -> PixelCatApp:
         if cfg is None:
             cfg = Config()
             cfg.explore_windows = False
         pet = PixelCatApp(qapp, cfg, saved or SavedState(autostart_asked=True), selftest=selftest,
-                          platform=fake_platform if platform is None else platform)
+                          platform=fake_platform if platform is None else platform,
+                          providers=build_providers() if providers is None else providers)
         made.append(pet)
         return pet
 
@@ -286,7 +288,7 @@ def workers(monkeypatch: pytest.MonkeyPatch, app_env: AppEnv) -> list[Any]:
     (``workers[-1].events.done("hi", [])``)."""
     from fakes.chat import FakeJob
 
-    import pixelcat.app as app_mod
+    from pixelcat.llm import ollama_client
 
     made: list[Any] = []
 
@@ -295,5 +297,5 @@ def workers(monkeypatch: pytest.MonkeyPatch, app_env: AppEnv) -> list[Any]:
         made.append(job)
         return job
 
-    monkeypatch.setattr(app_mod, "OllamaChat", make)
+    monkeypatch.setattr(ollama_client, "OllamaChat", make)
     return made

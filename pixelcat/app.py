@@ -2,6 +2,7 @@
 tray, desktop queries, persistence and the LLM tool layer together."""
 from __future__ import annotations
 
+import functools
 import hashlib
 import html
 import json
@@ -10,6 +11,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import replace as dc_replace
 from datetime import datetime
 from pathlib import Path
@@ -31,14 +33,14 @@ from .engine.states import STATES, S
 from .engine.surfaces import WINDOW_KINDS, SurfaceMap
 from .llm.agent import ToolOutput
 from .llm.model_status import ModelStatus
-from .llm.ollama_client import OllamaChat, friendly_error, parse_text_tool_calls, strip_tool_markup
 from .llm.prompt import build_system_prompt
 from .llm.qt_chat import QtChatWorker, QtNotifier
+from .llm.replies import friendly_error, parse_text_tool_calls, strip_tool_markup
 from .llm.tools import SCREEN_EYES, AppHooks, ToolBox, ToolError, ToolSpec
 from .llm.watch import Watch, WatchManager
 from .logsetup import RateLimitedLogger
 from .persistence import SavedState, save_state
-from .ports import ChatRequest, Platform
+from .ports import ChatRequest, ModelProvider, Platform
 from .settings import Config
 from .sprites.library import SpriteLibrary
 from .ui.ball import BallOverlay
@@ -126,10 +128,11 @@ class _Later(QObject):
 
 class PixelCatApp(QObject):
     def __init__(self, qapp: QApplication, cfg: Config, saved: SavedState, selftest: float = 0.0, *,
-                 platform: Platform) -> None:
+                 platform: Platform, providers: Mapping[str, ModelProvider]) -> None:
         super().__init__()
         self.qapp = qapp
         self.platform = platform        # the ports (from pixelcat.bootstrap)
+        self.providers = providers      # the AI model providers by key (from pixelcat.bootstrap)
         self.cfg = cfg
         self.t = cfg.tuning
         self.saved = saved
@@ -391,23 +394,8 @@ class PixelCatApp(QObject):
                      self.brain.state.value, self.brain.mode, self.brain.x, self.brain.y,
                      len(self.brain.smap.surfaces) if self.brain.smap else 0,
                      len(self.brain.smap.walls) if self.brain.smap else 0, out)
-            try:                                     # the external models' parts are in the build
-                import anthropic
-
-                from .llm import ant_tool, anthropic_client, chatgpt_signin, openai_client  # noqa: F401
-                anthropic.Anthropic(api_key="selftest")            # (made, never used)
-                log.info("selftest: external models ok (anthropic %s)", anthropic.__version__)
-            except Exception:  # noqa: BLE001
-                log.exception("selftest: external models broken")
-            try:
-                from copilot._cli_version import CLI_VERSION
-
-                from .llm import copilot_client, github_signin  # noqa: F401
-                copilot_client.new_client("selftest", "copilot-runtime.exe")     # (made, never started)
-                log.info("selftest: copilot sdk ok (runtime %s, %s)", CLI_VERSION,
-                         "here" if copilot_client.runtime_path() else "downloaded on first use")
-            except Exception:  # noqa: BLE001
-                log.exception("selftest: copilot sdk broken")
+            for prov in self.providers.values():         # each provider's parts are in the build
+                prov.self_check()
         finally:
             self.quit()
 
@@ -955,14 +943,9 @@ class PixelCatApp(QObject):
         """The effort levels the chat's model has (None: it has none to pick)."""
         ext = external.parse(self._effective_model())
         if not ext:
-            return list(LOCAL_EFFORTS)
+            return self.providers["ollama"].effort_levels({})
         p, mid = ext
-        info = self._ext_info(p, mid)
-        if p == "anthropic" and isinstance(info.get("effort"), list):
-            return [e for e in external.EFFORTS if e in info["effort"]] or None
-        if p == "copilot" and isinstance(info.get("efforts"), list):
-            return [e for e in external.EFFORTS if e in info["efforts"]] or None
-        return list(external.EFFORTS)
+        return self.providers[p].effort_levels(self._ext_info(p, mid))
 
     def _default_effort(self) -> str:
         """The effort a chat has without its own: Settings (online models) or the thinking setting."""
@@ -1074,21 +1057,7 @@ class PixelCatApp(QObject):
 
     def _ext_auth(self, p: str) -> str:
         """How a provider is connected: "key", "signin" (Anthropic, GitHub), "chatgpt", or "" (not)."""
-        want = self._ext_p(p).get("auth", "")
-        if p == "openai":
-            from .llm import chatgpt_signin
-
-            if want == "chatgpt" and chatgpt_signin.signed_in(self.creds):
-                return "chatgpt"
-            return "key" if self.creds.get("openai_key") else ""
-        if p == "copilot":
-            s = self.creds.get("copilot_signin")
-            if want == "signin" and isinstance(s, dict) and s.get("token"):
-                return "signin"
-            return "key" if self.creds.get("copilot_key") else ""
-        if want == "signin":
-            return "signin"
-        return "key" if self.creds.get("anthropic_key") else ""
+        return self.providers[p].auth(self.creds, self._ext_p(p).get("auth", ""))
 
     def _ext_models(self, p: str) -> list[dict[str, Any]]:
         ms = self._ext_p(p).get("models")
@@ -1373,13 +1342,13 @@ class PixelCatApp(QObject):
             return
         auth = self._ext_auth("copilot")
         if self._credit_cap() is None and auth:          # (the plan's total isn't known yet: ask GitHub)
-            from .llm import copilot_client
+            prov = self.providers["copilot"]
 
             def got(q: Any) -> None:
                 if isinstance(q, dict):
                     self._ext_p("copilot")["quota"] = q
                 self._apply_credit_limit(v, dlg)
-            self._in_background(lambda: copilot_client.quota(self.creds, auth, start=True), got)
+            self._in_background(lambda: prov.quota(self.creds, auth, start=True), got)
             return
         self._apply_credit_limit(v, dlg)
 
@@ -1407,15 +1376,10 @@ class PixelCatApp(QObject):
         if not auth:
             return
 
+        prov = self.providers[p]
+
         def work() -> list[dict[str, Any]]:
-            if p == "anthropic":
-                from .llm import anthropic_client
-                return anthropic_client.list_models(self.creds, auth)
-            if p == "copilot":
-                from .llm import copilot_client
-                return copilot_client.list_models(self.creds, auth)
-            from .llm import openai_client
-            return openai_client.list_models(self.creds, auth)
+            return prov.list_models(self.creds, auth)
 
         def got(res: Any) -> None:
             if isinstance(res, Exception):
@@ -1485,14 +1449,10 @@ class PixelCatApp(QObject):
         if p == "copilot":
             self._check_token(key, dlg)
             return
-        trial = external.MemoryCredentials({f"{p}_key": key})
+        prov = self.providers[p]
 
         def work() -> list[dict[str, Any]]:
-            if p == "anthropic":
-                from .llm import anthropic_client
-                return anthropic_client.list_models(trial, "key")
-            from .llm import openai_client
-            return openai_client.list_models(trial, "key")
+            return prov.check_key(key)[1]
 
         def got(res: Any) -> None:
             if isinstance(res, Exception):
@@ -1720,10 +1680,10 @@ class PixelCatApp(QObject):
 
     def _copilot_ready(self, then: Any) -> None:
         """Copilot needs GitHub's runtime (about 100 MB): get it first if it isn't here yet."""
-        from .llm import copilot_client
+        prov = self.providers["copilot"]
 
-        def got(path: Any) -> None:
-            if isinstance(path, str):
+        def got(ready: Any) -> None:
+            if ready is True:
                 then()
                 return
             pop = self._popup("GitHub Copilot", self._paras([
@@ -1733,11 +1693,10 @@ class PixelCatApp(QObject):
                 "Chats with Copilot models go to GitHub, including what my tools read (screenshots, files, window "
                 "text), and use your Copilot plan's AI credits."]), "GET IT", "CANCEL")
             pop.answered.connect(lambda ok: self._copilot_install(then) if ok else None)
-        self._in_background(copilot_client.runtime_path, got)
+        self._in_background(prov.runtime_ready, got)
 
     def _copilot_install(self, then: Any) -> None:
-        from .llm import copilot_client
-
+        prov = self.providers["copilot"]
         cancel = threading.Event()
         pop = self._popup("GitHub Copilot", self._paras(["Getting GitHub's Copilot runtime…"]), "CANCEL")
         pop.answered.connect(lambda _ok: cancel.set())
@@ -1752,11 +1711,11 @@ class PixelCatApp(QObject):
             if cancel.is_set():
                 return
             if isinstance(res, Exception):
-                msg = str(res) if isinstance(res, copilot_client.CopilotError) else f"That didn't work ({res})."
+                msg = prov.error_text(res, f"That didn't work ({res}).")
                 self._popup("GitHub Copilot", self._paras([html.escape(msg)]), "OK")
                 return
             then()
-        self._in_background(lambda: copilot_client.install(progress, cancel), finished)
+        self._in_background(lambda: prov.install_runtime(progress, cancel), finished)
 
     def _cop_progress(self, value: Any) -> None:
         pop = self._cop_pop
@@ -1791,7 +1750,7 @@ class PixelCatApp(QObject):
         self._key_dialog = dlg
 
     def _check_token(self, key: str, dlg: Any) -> None:
-        from .llm import copilot_client
+        prov = self.providers["copilot"]
 
         def got(res: Any) -> None:
             if isinstance(res, Exception):
@@ -1814,7 +1773,7 @@ class PixelCatApp(QObject):
                 pass
             self._ext_connected("copilot")
             self._copilot_quota(force=True)
-        self._in_background(lambda: copilot_client.check_token(key), got)
+        self._in_background(lambda: prov.check_key(key), got)
 
     @staticmethod
     def _copilot_problem(exc: Exception) -> str:
@@ -1941,7 +1900,7 @@ class PixelCatApp(QObject):
         if not auth or (not force and time.time() - self._quota_t < 120):
             return
         self._quota_t = time.time()
-        from .llm import copilot_client
+        prov = self.providers["copilot"]
 
         def got(q: Any) -> None:
             if isinstance(q, dict):
@@ -1949,13 +1908,11 @@ class PixelCatApp(QObject):
                 self.save()
                 if self.menu.isVisible():
                     self.menu.refresh(self._menu_items())
-        self._in_background(lambda: copilot_client.quota(self.creds, auth, start=force), got)
+        self._in_background(lambda: prov.quota(self.creds, auth, start=force), got)
 
     def _copilot_chat(self) -> Any:
         if self._copilot is None:
-            from .llm.copilot_client import CopilotChat
-
-            self._copilot = CopilotChat()
+            self._copilot = self.providers["copilot"].new_conversation()
         return self._copilot
 
     def _drop_copilot_chat(self) -> None:
@@ -1965,18 +1922,15 @@ class PixelCatApp(QObject):
             self._copilot = None
 
     def _stop_copilot(self, background: bool = False) -> None:
-        """Quit / sign-out: the chat's session is deleted and GitHub's runtime stops."""
-        import sys
-
-        mod = sys.modules.get(f"{__package__}.llm.copilot_client")
-        if mod is None:
-            return
+        """Quit / sign-out: the chat's session is deleted and GitHub's runtime stops (the providers stop
+        only what they ever started)."""
         chat, self._copilot = self._copilot, None
 
         def stop() -> None:
             if chat is not None:
                 chat.close(3.0)
-            mod.shutdown(4.0)
+            for prov in self.providers.values():
+                prov.shutdown(4.0)
         if background:
             threading.Thread(target=stop, name="pixelcat-copilot-stop", daemon=True).start()
         else:
@@ -2043,7 +1997,7 @@ class PixelCatApp(QObject):
     def _ext_worker(self, p: str, mid: str, msgs: list[dict[str, Any]]) -> Any:
         """The request for an external model - or None (not connected, or the token limit)."""
         assert self.chat is not None
-        prov = external.PROVIDERS[p]
+        prov = self.providers[p].info
         auth = self._ext_auth(p)
         if not auth:
             self.chat.add("error", f"{prov.brand} models aren't connected yet. Sign in or add an API key in "
@@ -2055,25 +2009,14 @@ class PixelCatApp(QObject):
         st = self.saved.ext_settings
         think, effort = self._ext_think_effort()
         tools = self.toolbox.schemas() if self.cfg.enable_tools else None
-        req = ChatRequest(mid, msgs, tools, think, effort, self.creds, auth)
-        job: Any
-        if p == "anthropic":
-            from .llm.anthropic_client import AnthropicChat
-            req.info = self._ext_info(p, mid)
-            job = AnthropicChat
-        elif p == "copilot":
+        req = ChatRequest(mid, msgs, tools, think, effort, self.creds, auth, info=self._ext_info(p, mid))
+        if p == "copilot":
             if not self._credit_gate():
                 return None
-            from .llm.copilot_client import CopilotJob
             req.conversation, req.history = self._copilot_chat(), self.history
             req.system = str(msgs[0].get("content", "")) if msgs else ""
-            req.info = self._ext_info(p, mid)
-            job = CopilotJob
-        else:
-            from .llm.openai_client import OpenAIChat
-            job = OpenAIChat
         req.web = bool(st.get("web_search", True))
-        w = QtChatWorker(lambda events: job(req, events), provider=p, model=mid, local=False)
+        w = QtChatWorker(functools.partial(self.providers[p].new_chat, req), provider=p, model=mid, local=False)
         if p == "copilot":
             w.credits.connect(self._on_copilot_credits)
             w.permission.connect(self._copilot_permission)
@@ -3187,14 +3130,16 @@ class PixelCatApp(QObject):
         keeps its own context); Claude and ChatGPT: the model's own maximum - smaller if the
         provider said a request was too long."""
         ext = external.parse(self._effective_model())
-        if not ext or ext[0] not in ("anthropic", "openai"):
+        if not ext:
             return self.cfg.num_ctx
         p, mid = ext
-        info = self._ext_info(p, mid)
-        if p == "anthropic" and info and "context" not in info and p not in self._ctx_reloaded:
+        prov, info = self.providers[p], self._ext_info(p, mid)
+        budget = prov.max_input(mid, info)
+        if budget is None:
+            return self.cfg.num_ctx
+        if prov.refresh_models_for_context(info) and p not in self._ctx_reloaded:
             self._ctx_reloaded.add(p)                    # (a list saved before windows were kept: get it again)
             self._ext_load_models(p)
-        budget = external.max_input(p, mid, info)
         learned = (self._ext_p(p).get("ctx_learned") or {}).get(mid)
         return min(budget, int(learned)) if learned else budget
 
@@ -3315,7 +3260,8 @@ class PixelCatApp(QObject):
         msgs = [sys_msg] + self._context()
         ext = external.parse(self._effective_model())
         if ext:
-            if ext[0] in ("anthropic", "openai"):        # (how big this request is, if it turns out too long)
+            if self.providers[ext[0]].max_input(ext[1], self._ext_info(*ext)) is not None:
+                # (how big this request is, if it turns out too long)
                 self._sent_est = self._tokens(msgs) + len(json.dumps(self.toolbox.schemas())) // 3
             worker = self._ext_worker(ext[0], ext[1], msgs)
             if worker is None:
@@ -3330,8 +3276,8 @@ class PixelCatApp(QObject):
             tools = self.toolbox.schemas() if (self.cfg.enable_tools and self.native_tools) else None
             think = self._think_now()
             req = ChatRequest(self._effective_model(), msgs, tools, think, cfg=self.cfg)
-            worker = QtChatWorker(lambda events: OllamaChat(req, events), provider="ollama", model=req.model,
-                                  local=True)
+            worker = QtChatWorker(functools.partial(self.providers["ollama"].new_chat, req), provider="ollama",
+                                  model=req.model, local=True)
         worker.token.connect(self._on_token)
         worker.thinking.connect(self._on_thinking)
         worker.done.connect(self._on_done)

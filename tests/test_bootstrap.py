@@ -1,4 +1,4 @@
-"""pixelcat.bootstrap: the composition root picks the adapters for the platform."""
+"""pixelcat.bootstrap: the composition root picks the adapters for the platform and the AI model providers."""
 from __future__ import annotations
 
 import os
@@ -28,6 +28,16 @@ def test_other_platforms_get_the_null_adapter(name):  # type: ignore[no-untyped-
     plat = bootstrap.build_platform(name)
     assert isinstance(plat, Platform) and plat.name == "null"
     assert isinstance(plat.display, null.NullDisplay) and isinstance(plat.installer, null.NullInstaller)
+
+
+def test_the_ai_model_providers_one_per_provider_in_the_settings_order():
+    from pixelcat.adapters import llm
+
+    providers = bootstrap.build_providers()
+    assert list(providers) == ["anthropic", "openai", "copilot", "ollama"]
+    assert [type(p) for p in providers.values()] == [llm.AnthropicProvider, llm.OpenAIProvider, llm.CopilotProvider,
+                                                     llm.OllamaProvider]
+    assert providers["ollama"].info.local and not providers["copilot"].info.local
 
 
 def test_importing_it_loads_no_adapter():
