@@ -51,7 +51,7 @@ def test_a_message_goes_to_the_model_and_the_answer_streams_back(chat_pet, worke
     assert pet.chat.msgs[-1].text == "Mrrow!"
     w.events.done("Mrrow! Hi.", [])
     assert pet.chat.msgs[-1].text == "Mrrow! Hi." and not pet._task_active and pet.worker is None
-    assert pet.history[-1] == {"role": "assistant", "content": "Mrrow! Hi."}
+    assert pet.chat_state.history[-1] == {"role": "assistant", "content": "Mrrow! Hi."}
     assert pet.chat.send_btn.text() == "SEND"
 
 
@@ -70,8 +70,8 @@ def test_a_tool_call_runs_and_the_model_gets_the_result(chat_pet, workers) -> No
     _say(pet, "what time is it?")
     workers[-1].events.done("", [{"name": "get_time", "arguments": {}, "id": "c1"}])
     assert len(workers) == 2                                     # the result went back to the model
-    assert pet.history[-2]["tool_calls"] == [{"function": {"name": "get_time", "arguments": {}}, "id": "c1"}]
-    assert pet.history[-1]["role"] == "tool" and pet.history[-1]["content"].startswith("It is ")
+    assert pet.chat_state.history[-2]["tool_calls"] == [{"function": {"name": "get_time", "arguments": {}}, "id": "c1"}]
+    assert pet.chat_state.history[-1]["role"] == "tool" and pet.chat_state.history[-1]["content"].startswith("It is ")
     assert any(m.role == "info" and m.text.startswith("It is ") for m in pet.chat.msgs)
     assert workers[-1].think is False                            # (routine steps don't think)
     workers[-1].events.done("It's teatime.", [])
@@ -81,7 +81,7 @@ def test_a_tool_call_runs_and_the_model_gets_the_result(chat_pet, workers) -> No
 def test_tool_calls_written_as_text_are_understood(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "time?")
     workers[-1].events.done('<tool_call>{"name": "get_time", "arguments": {}}</tool_call>', [])
-    assert len(workers) == 2 and chat_pet.history[-1]["content"].startswith("It is ")
+    assert len(workers) == 2 and chat_pet.chat_state.history[-1]["content"].startswith("It is ")
 
 
 @pytest.mark.parametrize(("answer", "copied", "approved"), [("yes", True, []), ("always", True, ["copy_to_clipboard"]),
@@ -95,9 +95,9 @@ def test_an_action_asks_first(chat_pet, workers, app_env, answer: str, copied: b
     {"yes": pet.chat.yes_btn, "always": pet.chat.always_btn, "no": pet.chat.no_btn}[answer].click()
     assert (app_env.clipboard.text() == "meow") is copied
     assert pet.saved.auto_approved_tools == approved
-    assert pet.history[-1]["role"] == "tool"
+    assert pet.chat_state.history[-1]["role"] == "tool"
     if answer == "no":
-        assert pet.history[-1]["content"] == "The user declined this action."
+        assert pet.chat_state.history[-1]["content"] == "The user declined this action."
 
 
 def test_auto_mode_does_it_without_asking(chat_pet, workers, app_env) -> None:  # type: ignore[no-untyped-def]
@@ -112,7 +112,7 @@ def test_auto_mode_does_it_without_asking(chat_pet, workers, app_env) -> None:  
 def test_an_unknown_tool_is_reported_to_the_model(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "hack")
     workers[-1].events.done("", [{"name": "format_disk", "arguments": {}}])
-    assert chat_pet.history[-1]["content"].startswith("error: ") and len(workers) == 2
+    assert chat_pet.chat_state.history[-1]["content"].startswith("error: ") and len(workers) == 2
     assert any("I can't do that" in m.text for m in chat_pet.chat.msgs)
 
 
@@ -139,7 +139,7 @@ def test_a_model_without_tools_is_asked_again_with_text_tools(chat_pet, workers)
 def test_a_promise_to_wait_later_is_questioned(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "tell me when the build is done")
     workers[-1].events.done("Sure, I'll let you know when it's done!", [])
-    assert len(workers) == 2 and chat_pet.history[-1]["_tool"] and "wait_for" in chat_pet.history[-1]["content"]
+    assert len(workers) == 2 and chat_pet.chat_state.history[-1]["_tool"] and "wait_for" in chat_pet.chat_state.history[-1]["content"]
     workers[-1].events.done("Sorry, I can't wait for that.", [])
     assert not chat_pet._task_active
 
@@ -201,7 +201,7 @@ def test_a_copilot_request_reports_credits_and_pages(chat_pet, monkeypatch) -> N
     chat_pet._begin_task()
     w = chat_pet._ext_worker("copilot", "m3", [{"role": "system", "content": "be a cat"}])
     req = made[0].req
-    assert req.conversation is chat_pet._copilot and req.history is chat_pet.history and req.system == "be a cat"
+    assert req.conversation is chat_pet._copilot and req.history is chat_pet.chat_state.history and req.system == "be a cat"
     assert req.auth == "key" and req.web is True and (w.provider, w.model, w.local) == ("copilot", "m3", False)
     made[0].events.credits(0.5)
     assert chat_pet._credit_budget().used() == 0.5
@@ -244,7 +244,7 @@ def test_new_chat_and_history_commands(chat_pet, workers) -> None:  # type: igno
     _say(chat_pet, "remember this")
     workers[-1].events.done("ok", [])
     _say(chat_pet, "/new")
-    assert chat_pet.history == [] and [m.text for m in chat_pet.chat.msgs] == [GREETING]
+    assert chat_pet.chat_state.history == [] and [m.text for m in chat_pet.chat.msgs] == [GREETING]
     _say(chat_pet, "/history")
     assert chat_pet.chat.history_shown and "remember this" in chat_pet.chat.hist_view.toPlainText()
 
@@ -277,8 +277,8 @@ def _hist() -> list[dict]:  # type: ignore[type-arg]
 
 
 def test_turns_and_rounds(pet) -> None:  # type: ignore[no-untyped-def]
-    pet.history[:] = _hist()
-    turns = context.turns(pet.history)
+    pet.chat_state.history[:] = _hist()
+    turns = context.turns(pet.chat_state.history)
     assert [len(t) for t in turns] == [4, 5]                     # ("continue" stays in its task)
     rounds = context.rounds(turns[1][1:])
     assert [[m["role"] for m in r] for r in rounds] == [["user"], ["assistant"], ["user"], ["assistant"]]
@@ -297,22 +297,22 @@ def test_summarize_keeps_the_request_the_steps_and_the_answer(pet) -> None:  # t
 
 def test_the_context_keeps_the_request_and_the_newest_steps(pet) -> None:  # type: ignore[no-untyped-def]
     pet.cfg.num_ctx = 12_000
-    pet.history[:] = [{"role": "user", "content": "do the long task"}]
+    pet.chat_state.history[:] = [{"role": "user", "content": "do the long task"}]
     for i in range(60):
-        pet.history.append({"role": "assistant", "content": f"step {i}",
+        pet.chat_state.history.append({"role": "assistant", "content": f"step {i}",
                             "tool_calls": [{"function": {"name": "get_time", "arguments": {}}}]})
-        pet.history.append({"role": "tool", "content": f"result {i} " + "z" * 600, "tool_name": "get_time"})
+        pet.chat_state.history.append({"role": "tool", "content": f"result {i} " + "z" * 600, "tool_name": "get_time"})
     ctx = pet._build_context()
     assert ctx[0]["content"].startswith("do the long task")
     assert ctx[-1]["content"].startswith("result 59 ")
     assert context.tokens(ctx) < 12_000
-    assert len(ctx) < len(pet.history)
+    assert len(ctx) < len(pet.chat_state.history)
 
 
 def test_the_context_is_extended_during_a_task(pet) -> None:  # type: ignore[no-untyped-def]
-    pet.history[:] = [{"role": "user", "content": "go"}]
+    pet.chat_state.history[:] = [{"role": "user", "content": "go"}]
     first = pet._context()
-    pet.history.append({"role": "assistant", "content": "ok"})
+    pet.chat_state.history.append({"role": "assistant", "content": "ok"})
     second = pet._context()
     assert second[:len(first)] == first and second[-1] == {"role": "assistant", "content": "ok"}
 
@@ -322,7 +322,7 @@ def test_the_context_is_extended_during_a_task(pet) -> None:  # type: ignore[no-
     ("high", "auto", False, True), ("medium", True, False, False), (None, True, False, True), (None, "off", True, False)])
 def test_when_the_model_thinks(pet, effort, think, last_user: bool, want: bool) -> None:  # type: ignore[no-untyped-def]
     pet.chat_state.chat_effort, pet.cfg.think = effort, think
-    pet.history[:] = [{"role": "user", "content": "x"}] if last_user else [{"role": "tool", "content": "y"}]
+    pet.chat_state.history[:] = [{"role": "user", "content": "x"}] if last_user else [{"role": "tool", "content": "y"}]
     assert pet._think_now() is want
 
 
@@ -334,11 +334,11 @@ def test_a_chat_is_saved_and_can_be_reopened(chat_pet, workers) -> None:  # type
     cid = pet._chat_id
     assert cid and [i.title for i in pet.chats.index()] == ["plan a trip to Paris"]
     pet.new_chat()
-    assert pet.history == [] and pet._chat_id is None
+    assert pet.chat_state.history == [] and pet._chat_id is None
     pet._toggle_history()
     assert pet.chat.history_shown and "plan a trip to Paris" in pet.chat.hist_view.toPlainText()
     pet.open_saved_chat(cid)
-    assert pet._chat_id == cid and pet.history[-1]["content"] == "Pack a beret."
+    assert pet._chat_id == cid and pet.chat_state.history[-1]["content"] == "Pack a beret."
     assert [m.text for m in pet.chat.msgs][:2] == ["plan a trip to Paris", "Pack a beret."]
     assert pet.chat.msgs[-1].text.startswith("🕘 Our chat from ")
 
@@ -403,6 +403,6 @@ def test_a_fired_watch_wakes_the_chat(chat_pet, workers, monkeypatch) -> None:  
     chat_pet._on_watch_fired(w, "The kettle is done", False)
     assert chat_pet.chat.msgs[-2].role == "event" and "🔔 The kettle is done" in chat_pet.chat.msgs[-2].text
     assert chat_pet._task_active and chat_pet._task_wake and workers
-    assert "You were waiting for: the kettle" in chat_pet.history[-1]["content"]
+    assert "You were waiting for: the kettle" in chat_pet.chat_state.history[-1]["content"]
     workers[-1].events.done("Your tea is ready!", [])
     assert not chat_pet._task_active

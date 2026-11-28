@@ -166,7 +166,7 @@ def test_an_external_answer_counts_its_tokens(pet, claude) -> None:  # type: ign
     w.raw, w.note = [{"type": "text", "text": "Hello!"}], "This model always thinks."
     w.events.done("Hello!", [])
     assert pet.accounts.budget("anthropic").used() == 4321
-    assert pet.history[-1]["raw"] == [{"type": "text", "text": "Hello!"}]
+    assert pet.chat_state.history[-1]["raw"] == [{"type": "text", "text": "Hello!"}]
     assert any(m.text == "This model always thinks." for m in pet.chat.msgs)
 
 
@@ -255,7 +255,7 @@ def test_a_wake_waits_while_the_user_is_typing(pet, workers) -> None:  # type: i
     pet._wake_timer.stop()
     chat.input.setText("")
     pet._drain_wakes()
-    assert workers and "Tell the user briefly, and offer to keep waiting." in pet.history[-1]["content"]
+    assert workers and "Tell the user briefly, and offer to keep waiting." in pet.chat_state.history[-1]["content"]
 
 
 def test_watch_bar_and_cancel(pet) -> None:  # type: ignore[no-untyped-def]

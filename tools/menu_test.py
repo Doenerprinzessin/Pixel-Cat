@@ -199,7 +199,7 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     chat = pet._ensure_chat()
     chat.hide_history()
     pet.new_chat()
-    pet.history[:] = [
+    pet.chat_state.history[:] = [
         {"role": "user", "content": "Plan my trip to Rome please"},
         {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "look_at_screen", "arguments": {}}}],
          "raw": [{"type": "thinking", "signature": "abc"}]},
@@ -228,7 +228,7 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     check("an unchanged chat isn't written again", files[0].read_bytes() == raw)
     pet.new_chat()
     check("a new chat: the old one stays saved, the effort goes back to the default",
-          pet.history == [] and pet._chat_id is None and pet.chat_state.chat_effort is None and len(pet.chats.index()) == 1)
+          pet.chat_state.history == [] and pet._chat_id is None and pet.chat_state.chat_effort is None and len(pet.chats.index()) == 1)
     chat.mousePressEvent(QMouseEvent(QMouseEvent.Type.MouseButtonPress, QPointF(chat._hist_rect().center()),
                                      QPointF(chat.mapToGlobal(chat._hist_rect().center())), Qt.MouseButton.LeftButton,
                                      Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
@@ -243,20 +243,20 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     chat.hist_search.setText("")
     chat._history_link(QUrl(f"open:{cid}"))
     check("clicking a chat reopens it: the messages, what the AI remembers, its effort",
-          pet._chat_id == cid and len(pet.history) == 4 and pet.chat_state.chat_effort == "high" and not chat.history_shown
+          pet._chat_id == cid and len(pet.chat_state.history) == 4 and pet.chat_state.chat_effort == "high" and not chat.history_shown
           and [m.role for m in chat.msgs][:3] == ["user", "info", "cat"] and "remember it" in chat.msgs[-1].text,
           str([(m.role, m.text[:30]) for m in chat.msgs]))
     before = files[0].read_bytes()
     pet._store_chat()
     check("only opening it doesn't change it (it keeps its place in the list)", files[0].read_bytes() == before)
-    pet.history.append({"role": "user", "content": "And Florence?"})
+    pet.chat_state.history.append({"role": "user", "content": "And Florence?"})
     chat.add("user", "And Florence?")
     pet._store_chat()
     idx = pet.chats.index()
     check("talking on: the same chat is updated, not a new one", len(idx) == 1 and idx[0].id == cid
           and idx[0].count == 2)
     pet.new_chat()
-    pet.history[:] = [{"role": "user", "content": "What's 2+2?"}, {"role": "assistant", "content": "4"}]
+    pet.chat_state.history[:] = [{"role": "user", "content": "What's 2+2?"}, {"role": "assistant", "content": "4"}]
     chat.add("user", "What's 2+2?")
     chat.add("cat", "4")
     pet._store_chat()
@@ -271,18 +271,18 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
           chat.history_shown and asked and [i.id for i in pet.chats.index()] == [cid2] and pet._chat_id == cid2)
     chat._history_link(QUrl(f"del:{cid2}"))
     chat._history_link(QUrl(f"del:{cid2}:yes"))
-    check("deleting the open chat starts a fresh one", pet.chats.index() == [] and pet.history == []
+    check("deleting the open chat starts a fresh one", pet.chats.index() == [] and pet.chat_state.history == []
           and pet._chat_id is None and chat.history_shown and "No saved chats yet" in chat.hist_view.toPlainText())
     for q in ("One?", "Two?"):
         pet.new_chat()
-        pet.history[:] = [{"role": "user", "content": q}]
+        pet.chat_state.history[:] = [{"role": "user", "content": q}]
         pet._store_chat()
     chat.show_history(pet._history_items(), pet._chat_id)
     chat._history_link(QUrl("delall:ask"))
     asked = "Delete all 2 saved chats?" in chat.hist_view.toPlainText()
     chat._history_link(QUrl("delall:yes"))
     check("delete all: asks first, then every chat (and the open one) is gone",
-          asked and pet.chats.index() == [] and not list(folder.glob("*.chat")) and pet.history == [])
+          asked and pet.chats.index() == [] and not list(folder.glob("*.chat")) and pet.chat_state.history == [])
     chat._history_link(QUrl("back:"))
     keep = chats_mod.KEEP
     chats_mod.KEEP = 3
@@ -331,9 +331,9 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
     pet.model_choice.on_model_menu("chateffort:low")
     low = pet._think_now()
     pet.model_choice.on_model_menu("chateffort:medium")
-    pet.history[:] = [{"role": "user", "content": "hi"}]
+    pet.chat_state.history[:] = [{"role": "user", "content": "hi"}]
     planning = pet._think_now()
-    pet.history.append({"role": "user", "content": "[tool result for wait] ok", "_tool": True})
+    pet.chat_state.history.append({"role": "user", "content": "[tool result for wait] ok", "_tool": True})
     routine = pet._think_now()
     check("Low never thinks; Medium thinks when planning, not for routine steps",
           low is False and planning is True and routine is False)

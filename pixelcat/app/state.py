@@ -1,7 +1,7 @@
 """State that more than one part of the app reads and writes (no Qt): the parts get these holders, never copies."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..domain import Monitor
@@ -28,9 +28,11 @@ class WorldState:
 
 
 class ChatState:
-    """The open chat's own choices (None: the default): ``chat_model`` and ``chat_effort``.  Set by the model
-    menu (``ModelChoice``) and by the chat (a new chat, a saved chat opened, a provider disconnected)."""
+    """The open chat: ``history`` (its messages, the list is changed in place, never replaced) and its own
+    choices (None: the default) ``chat_model`` and ``chat_effort``, set by the model menu (``ModelChoice``) and by
+    the chat (a new chat, a saved chat opened, a provider disconnected)."""
 
     def __init__(self) -> None:
+        self.history: list[dict[str, Any]] = []
         self.chat_model: str | None = None
         self.chat_effort: str | None = None

@@ -73,7 +73,7 @@ def call(name: str, **args: Any) -> dict[str, Any]:
 
 
 def roles(pet) -> list[str]:  # type: ignore[no-untyped-def]
-    return [m["role"] for m in pet.history]
+    return [m["role"] for m in pet.chat_state.history]
 
 
 # ---------------------------------------------------------------- the happy path
@@ -91,7 +91,7 @@ def test_tool_call_then_result_then_final_answer(loop, workers) -> None:  # type
     workers[1].events.done("All pinged.", [])
     assert not loop._task_active and loop.worker is None
     assert roles(loop) == ["user", "assistant", "tool", "assistant"]
-    assert loop.history[1]["tool_calls"] == [{"function": {"name": "ping", "arguments": {"n": 1}}}]
+    assert loop.chat_state.history[1]["tool_calls"] == [{"function": {"name": "ping", "arguments": {"n": 1}}}]
     assert loop.chat.msgs[-1].text == "All pinged." and loop.chat.send_btn.text() == "SEND"
 
 
@@ -116,7 +116,7 @@ def test_tool_output_with_a_picture_keeps_only_the_newest(loop, workers) -> None
     ask(loop, "look twice")
     workers[0].events.done("", [call("look", n=1)])
     workers[1].events.done("", [call("look", n=2)])
-    tools = [m for m in loop.history if m["role"] == "tool"]
+    tools = [m for m in loop.chat_state.history if m["role"] == "tool"]
     assert "images" not in tools[0] and tools[0]["content"] == "saw 1 (older screenshot removed)"
     assert tools[1]["images"] == ["img2"]
     assert any(m.text == "👀 Looked" for m in loop.chat.msgs)
@@ -128,8 +128,8 @@ def test_text_tool_protocol_puts_results_in_user_messages(loop, workers) -> None
     ask(loop, "ping")
     assert workers[0].tools is None
     workers[0].events.done('<tool_call>{"name": "ping", "arguments": {"n": 4}}</tool_call>', [])
-    assert loop.history[-1] == {"role": "user", "content": "[tool result for ping] ping done 4", "_tool": True}
-    assert "tool_calls" not in loop.history[-2]
+    assert loop.chat_state.history[-1] == {"role": "user", "content": "[tool result for ping] ping done 4", "_tool": True}
+    assert "tool_calls" not in loop.chat_state.history[-2]
 
 
 # ---------------------------------------------------------------- limits and guards
@@ -144,7 +144,7 @@ def test_the_step_limit_pauses_the_task_and_continue_goes_on(loop, workers) -> N
     assert len(loop.tb.ran) == 3 and not loop._task_active
     assert "That was 3 steps in a row" in loop.chat.msgs[-1].text and len(workers) == 4
     ask(loop, "continue")
-    assert loop.history[-1] == {"role": "user", "content": "continue", "_continue": True}
+    assert loop.chat_state.history[-1] == {"role": "user", "content": "continue", "_continue": True}
     assert loop._tool_round == 0 and loop._task_active and len(workers) == 5
     workers[-1].events.done("", [call("step", n=100)])
     assert len(loop.tb.ran) == 4
@@ -181,7 +181,7 @@ def test_a_tool_error_goes_back_to_the_model(loop, workers) -> None:  # type: ig
     loop.tb.add("poke", run=broken)
     ask(loop, "poke")
     workers[0].events.done("", [call("poke", n=1)])
-    assert loop.history[-1]["content"] == "error: the window is gone" and loop._fail_streak == 1
+    assert loop.chat_state.history[-1]["content"] == "error: the window is gone" and loop._fail_streak == 1
     assert loop.chat.msgs[-2].role == "error" and "poke didn't work: the window is gone" in loop.chat.msgs[-2].text
     assert len(workers) == 2 and loop._task_active and workers[1].think is True      # (it thinks after a failure)
 
@@ -190,7 +190,7 @@ def test_an_unexpected_exception_in_a_tool_is_reported_too(loop, workers) -> Non
     loop.tb.add("bad", run=lambda a: 1 / 0)
     ask(loop, "go")
     workers[0].events.done("", [call("bad")])
-    assert loop.history[-1]["content"] == "error: division by zero" and len(workers) == 2
+    assert loop.chat_state.history[-1]["content"] == "error: division by zero" and len(workers) == 2
 
 
 def test_failing_again_and_again_stops(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -219,7 +219,7 @@ def test_an_unknown_tool_is_an_error_result_and_the_next_call_still_runs(loop, w
     loop.tb.add("ping")
     ask(loop, "go")
     workers[0].events.done("", [call("nope"), call("ping", n=2)])
-    tool_msgs = [m for m in loop.history if m["role"] == "tool"]
+    tool_msgs = [m for m in loop.chat_state.history if m["role"] == "tool"]
     assert tool_msgs[0]["content"] == "error: 'nope' is not an allowed tool"
     assert tool_msgs[1]["content"] == "ping done 2" and len(workers) == 2
 
@@ -232,7 +232,7 @@ def test_an_action_is_asked_first_and_no_means_no(loop, workers) -> None:  # typ
     assert loop.tb.ran == [] and "use close?" in loop.chat.confirm_label.text()
     assert not loop.chat.always_btn.isVisibleTo(loop.chat)               # (no ALWAYS for hard actions)
     loop.chat.no_btn.click()
-    assert loop.tb.ran == [] and loop.history[-1]["content"] == "The user declined this action."
+    assert loop.tb.ran == [] and loop.chat_state.history[-1]["content"] == "The user declined this action."
     assert loop.chat.msgs[-2].text == "Okay, I won't use close." and len(workers) == 2
 
 
@@ -288,7 +288,7 @@ def test_stop_while_the_model_is_answering(loop, workers) -> None:  # type: igno
     assert workers[0].cancelled and not loop._task_active and loop.agent.cancel.is_set()
     assert loop.chat.msgs[-1].text == "(stopped)"
     workers[0].events.done("Once upon a time", [call("anything")])
-    assert loop.history[-1]["role"] == "user" and len(workers) == 1
+    assert loop.chat_state.history[-1]["role"] == "user" and len(workers) == 1
 
 
 def test_stop_while_a_card_asks(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -323,7 +323,7 @@ def test_stop_while_a_background_tool_runs(loop, workers, qtbot) -> None:  # typ
     assert not loop._task_active and not loop.esc_watch.active and loop.chat.msgs[-1].text == "(stopped)"
     release.set()
     qtbot.waitUntil(lambda: loop._tool_thread is None and not loop._live_tools, timeout=3000)
-    assert loop.history[-1] == {"role": "tool", "content": "finally done", "tool_name": "slow"}
+    assert loop.chat_state.history[-1] == {"role": "tool", "content": "finally done", "tool_name": "slow"}
     assert len(workers) == 1                              # (the result is kept, nothing is asked any more)
     assert not any(m.text == "finally done" for m in loop.chat.msgs)
 
@@ -333,7 +333,7 @@ def test_a_background_tool_result_continues_the_task(loop, workers, qtbot) -> No
     ask(loop, "go")
     workers[0].events.done("", [call("slow")])
     qtbot.waitUntil(lambda: len(workers) == 2, timeout=3000)
-    assert loop.history[-1]["content"] == "slow done" and loop._tool_thread is None
+    assert loop.chat_state.history[-1]["content"] == "slow done" and loop._tool_thread is None
 
 
 def test_a_new_chat_stops_the_task_and_forgets_it(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -341,7 +341,7 @@ def test_a_new_chat_stops_the_task_and_forgets_it(loop, workers) -> None:  # typ
     ask(loop, "close it")
     workers[0].events.done("", [call("close")])
     loop.new_chat()
-    assert not loop._task_active and loop.history == [] and loop._pending_calls == []
+    assert not loop._task_active and loop.chat_state.history == [] and loop._pending_calls == []
     assert loop.chat._confirm_cb is None and loop.agent.cancel.is_set()
 
 

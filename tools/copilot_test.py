@@ -521,7 +521,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     say("what time is it?")
     reply2 = next((mm.text for mm in reversed(chat.msgs) if mm.role == "cat"), "")
     check("a tool that needs no yes runs, its result goes back, then the answer",
-          "nap" in reply2 and any(mm.get("role") == "tool" and mm.get("tool_name") == "get_time" for mm in pet.history),
+          "nap" in reply2 and any(mm.get("role") == "tool" and mm.get("tool_name") == "get_time" for mm in pet.chat_state.history),
           repr(reply2))
     S["script"] = [reply("", [("call_u", "open_url", {"url": "https://example.com/"})]), reply("Okay, I won't.")]
     say("open example.com")
@@ -529,7 +529,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     if asked:
         chat._answer("no")                              # (declined: nothing opens)
     wait(lambda: not pet._task_active, 60)
-    declined = any(mm.get("role") == "tool" and "declined" in str(mm.get("content")) for mm in pet.history)
+    declined = any(mm.get("role") == "tool" and "declined" in str(mm.get("content")) for mm in pet.chat_state.history)
     sent = any("declined" in json.dumps(b.get("messages", [])) for b in S["bodies"][-1:])
     check("a tool that needs a yes is asked in the chat (as with every model) - declined, the model hears so",
           asked and declined and sent, f"asked={asked} declined={declined} sent={sent}")

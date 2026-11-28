@@ -29,7 +29,7 @@ def _win(hwnd: int, rect: tuple[int, int, int, int], z: int = 0) -> WinInfo:
 def test_construction_wires_the_parts_without_starting_anything(pet, app_env) -> None:  # type: ignore[no-untyped-def]
     assert [m.device for m in pet.world_state.monitors] == ["TEST1"]
     assert pet.menu.title == "PIXEL CAT" and pet.model_menu.title == "MODEL FOR THIS CHAT"
-    assert pet.chat is None and pet.game_state.mini is None and pet.worker is None and pet.history == []
+    assert pet.chat is None and pet.game_state.mini is None and pet.worker is None and pet.chat_state.history == []
     assert pet.brain.game is pet.game and pet.game.on_end == pet.minigames.game_ended
     assert not any(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer,
                                           pet.save_timer, pet.top_timer, pet.tray_timer, pet.quit_timer))

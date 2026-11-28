@@ -532,7 +532,7 @@ def chat_test(pet, chat, app, pump, ed, ag) -> None:  # type: ignore[no-untyped-
         return
     # 2) the user's example: Notepad
     before = {w.hwnd for w in control.list_app_windows(pet.own_pid)}
-    n_hist = len(pet.history)
+    n_hist = len(pet.chat_state.history)
     out = converse("Open Notepad, make a new file and write a plan for a relaxed weekend trip to Munich.",
                    ("notepad", "editor"))
     np_wins = [w for w in control.list_app_windows(pet.own_pid) if w.app.lower() == "notepad"]
@@ -546,7 +546,7 @@ def chat_test(pet, chat, app, pump, ed, ag) -> None:  # type: ignore[no-untyped-
     print("  notepad text:", text[:600].replace("\r", "\n"), flush=True)
     check("AI opened Notepad and wrote the plan", target is not None and len(text) > 150,
           f"{len(text)} chars in {target.label() if target else '-'}")
-    typed = [c["function"]["arguments"].get("text", "") for m in pet.history[n_hist:] if m.get("tool_calls")
+    typed = [c["function"]["arguments"].get("text", "") for m in pet.chat_state.history[n_hist:] if m.get("tool_calls")
              for c in m["tool_calls"] if c["function"]["name"] == "type_text"]
     norm = lambda t: t.replace("\r\n", "\n").replace("\r", "\n").strip()  # noqa: E731
     check("Notepad holds exactly the text the AI wrote", bool(typed) and all(norm(t) in norm(text) for t in typed),

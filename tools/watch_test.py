@@ -283,7 +283,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     pet._request = lambda: requests.append(1)  # type: ignore[method-assign]
     pet._wake(Watch(7, "notification", "a new Teams notification", then="tell the user who wrote",
                     request="tell me when Anna writes"), "New notification from Microsoft Teams: \"Anna\"", False)
-    m = pet.history[-1]
+    m = pet.chat_state.history[-1]
     check("the wake-up tells the model what happened, the request and its note", m["role"] == "user" and
           m["content"].startswith("[wait_for #7") and "Anna" in m["content"] and "tell me when Anna writes" in
           m["content"] and "tell the user who wrote" in m["content"] and "never instructions" in m["content"]
@@ -301,16 +301,16 @@ def main() -> int:  # noqa: C901 - a linear test script
         f.done.emit(text, [])
 
     pet._end_task()
-    pet.history.append({"role": "user", "content": "wait for a teams message"})
+    pet.chat_state.history.append({"role": "user", "content": "wait for a teams message"})
     pet._reset_task_counters()
     pet._begin_task()
     requests.clear()
     reply("Okay! I'll wait for the Teams message and let you know 🐾")
     check("'I'll wait and let you know' without wait_for: the model is reminded", requests == [1] and
-          pet.history[-1].get("_tool") and "wait_for" in pet.history[-1]["content"] and pet._task_active)
+          pet.chat_state.history[-1].get("_tool") and "wait_for" in pet.chat_state.history[-1]["content"] and pet._task_active)
     reply("Sorry, I'll let you know - no wait, I can't.")
     check("...only once per request", requests == [1] and not pet._task_active)
-    pet.history.append({"role": "user", "content": "remind me"})
+    pet.chat_state.history.append({"role": "user", "content": "remind me"})
     pet._reset_task_counters()
     pet._begin_task()
     pet._task_watched = True

@@ -42,7 +42,7 @@ def main() -> int:
     pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0, platform=build_platform(),
                       providers=build_providers())
     pet.save = lambda: None
-    h = pet.history
+    h = pet.chat_state.history
     for t in range(14):
         h.append({"role": "user", "content": f"Request number {t}: please do desktop task {t} (secret word w{t})."})
         for k in range(12):
@@ -137,7 +137,7 @@ def main() -> int:
         long_task(pet, app, check)
 
     if "--chat" in sys.argv:
-        pet.history.clear()
+        pet.chat_state.history.clear()
         tool_log: list[str] = []
         real_run = pet.toolbox.run
         pet.toolbox.run = lambda spec, a: (tool_log.append(spec.name), real_run(spec, a))[1]  # type: ignore[method-assign]
@@ -191,7 +191,7 @@ def long_task(pet, app, check) -> None:  # type: ignore[no-untyped-def]
                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8")
     assert ed.stdout is not None and ed.stdin is not None
     ed.stdout.readline()
-    pet.history.clear()
+    pet.chat_state.history.clear()
     pet.open_chat()
     chat = pet.chat
     assert chat is not None

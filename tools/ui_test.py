@@ -207,14 +207,14 @@ def main() -> int:
         pet.chat.grab().save(str(OUT / "chat.png"))
         pet.chat._answer("no")
         # New chat: click the + in the title bar
-        pet.history.extend([{"role": "user", "content": "old question"}, {"role": "assistant", "content": "old answer"}])
+        pet.chat_state.history.extend([{"role": "user", "content": "old question"}, {"role": "assistant", "content": "old answer"}])
         r = pet.chat._new_rect()
         pt = QPointF(r.center().x(), r.center().y())
         ev = QMouseEvent(QMouseEvent.Type.MouseButtonPress, pt, pet.chat.mapToGlobal(pt), Qt.MouseButton.LeftButton,
                          Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
         QApplication.sendEvent(pet.chat, ev)
-        check("new chat clears the conversation", pet.history == [] and len(pet.chat.msgs) == 1
-              and pet.chat.msgs[0].role == "cat", f"history={len(pet.history)} msgs={len(pet.chat.msgs)}")
+        check("new chat clears the conversation", pet.chat_state.history == [] and len(pet.chat.msgs) == 1
+              and pet.chat.msgs[0].role == "cat", f"history={len(pet.chat_state.history)} msgs={len(pet.chat.msgs)}")
 
     def s_cpu_start() -> None:
         pet.brain.set_state(pet.brain.state.__class__.LOAFING, travel=False)
