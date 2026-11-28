@@ -10,7 +10,9 @@ Needs Screen Recording.  Every method first only *checks* it (``CGPreflightScree
   they raise without asking (for pictures nobody asked for, e.g. checking whether a starting app is drawn).
 
 Everything here may run on any thread: ScreenCaptureKit answers on its own queue, the caller waits for it (with a
-timeout).  Pictures stay in memory.
+timeout).  Only :meth:`MacCapture.snapshot` is called on the GUI thread (the ledge check under the cat), and there it
+never waits: it starts the picture in the background and answers with the last finished one of the same rect if
+that is at most SNAPSHOT_FRESH_S old, else None ("can't tell").  Pictures stay in memory.
 """
 from __future__ import annotations
 
@@ -31,6 +33,7 @@ log = logging.getLogger(__name__)
 
 WAIT_S = 3.0                 # how long a ScreenCaptureKit request may take
 CONTENT_TTL_S = 1.0          # the list of displays, windows and apps is reused this long
+SNAPSHOT_FRESH_S = 1.5       # a ledge snapshot taken in the background answers the GUI thread this long
 BGRA = 0x42475241            # kCVPixelFormatType_32BGRA ('BGRA')
 
 
@@ -116,9 +119,10 @@ class _Content:
         self._value: Any = None
         self._at = 0.0
 
-    def get(self) -> Any:
+    def get(self, fresh: bool = False) -> Any:
+        """The list (``fresh``: fetched again now, e.g. for a window that is newer than the reused list)."""
         with self._lock:
-            if self._value is not None and time.monotonic() - self._at < CONTENT_TTL_S:
+            if not fresh and self._value is not None and time.monotonic() - self._at < CONTENT_TTL_S:
                 return self._value
         value = _wait(lambda done: _objc.SCK.SCShareableContent
                       .getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler_(
@@ -155,6 +159,8 @@ class MacCapture:
         self._lock = threading.Lock()
         self._excluded: dict[int, int] = {}      # pid -> how many excluding() blocks hide it
         self._local = threading.local()
+        self._snaps: dict[Rect, tuple[QImage, float]] = {}   # GUI-thread snapshots taken in the background
+        self._snapping: set[Rect] = set()
 
     # -- permission
     @contextmanager
@@ -239,7 +245,9 @@ class MacCapture:
         img = None
         if _sck():
             try:
-                scwin = next((x for x in (self._content.get().windows() or []) if int(x.windowID()) == int(win)), None)
+                scwin = self._sc_window(win, self._content.get())
+                if scwin is None:                # (a window newer than the reused list: look once more)
+                    scwin = self._sc_window(win, self._content.get(fresh=True))
                 if scwin is None:
                     return None
                 flt = _objc.SCK.SCContentFilter.alloc().initWithDesktopIndependentWindow_(scwin)
@@ -258,6 +266,10 @@ class MacCapture:
                 return None
             img = to_qimage(cg, w, h)
         return None if _blank(img) else img
+
+    @staticmethod
+    def _sc_window(win: WindowId, content: Any) -> Any:
+        return next((x for x in (content.windows() or []) if int(x.windowID()) == int(win)), None)
 
     @contextmanager
     def _excluding(self, pid: int) -> Iterator[None]:
@@ -280,8 +292,38 @@ class MacCapture:
     def snapshot(self, rect: Rect) -> QImage | None:
         if rect[2] <= rect[0] or rect[3] <= rect[1] or not permissions.screen_recording():
             return None
+        if _objc.is_main_thread():
+            return self._snapshot_later(rect)
+        return self._snapshot_now(rect)
+
+    def _snapshot_now(self, rect: Rect) -> QImage | None:
         try:
             return self._grab(rect, set(), smooth=False)
         except Exception:  # noqa: BLE001 - no picture: no ledges this time
             log.debug("ledge snapshot failed", exc_info=True)
             return None
+
+    def _snapshot_later(self, rect: Rect) -> QImage | None:
+        """The GUI thread never waits for the screen: start a picture of ``rect`` in the background (one at a
+        time per rect) and answer with the last finished one if it is fresh enough, else None."""
+        now = time.monotonic()
+        with self._lock:
+            for key in [k for k, (_img, at) in self._snaps.items() if now - at > SNAPSHOT_FRESH_S]:
+                del self._snaps[key]
+            got = self._snaps.get(rect)
+            start = rect not in self._snapping
+            if start:
+                self._snapping.add(rect)
+        if start:
+            threading.Thread(target=self._snapshot_job, args=(rect,), name="pixelcat-snapshot", daemon=True).start()
+        return got[0] if got is not None else None
+
+    def _snapshot_job(self, rect: Rect) -> None:
+        img = None
+        try:
+            img = self._snapshot_now(rect)
+        finally:
+            with self._lock:
+                self._snapping.discard(rect)
+                if img is not None:
+                    self._snaps[rect] = (img, time.monotonic())

@@ -2,6 +2,7 @@
 points (as big as their rect), ScreenCaptureKit with the old CGWindowListCreateImage as the fallback."""
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -37,18 +38,24 @@ class FakeSCK:
         self.shots: list[tuple[Recorder, Recorder]] = []
         self.fail = False
         self.silent = False
+        self.held: list[tuple[Any, Any]] = []         # (filter, completion handler) of silent screenshots
+        self.window_ids = [42, 43]
+        self.listed = 0
         apps = [SimpleNamespace(processID=lambda: OWN_PID), SimpleNamespace(processID=lambda: 7)]
         self.apps = apps
         content = SimpleNamespace(
             applications=lambda: apps,
             displays=lambda: [SimpleNamespace(displayID=lambda i=i: i) for i in DISPLAYS],
-            windows=lambda: [SimpleNamespace(windowID=lambda: 42), SimpleNamespace(windowID=lambda: 43)])
+            windows=lambda: [SimpleNamespace(windowID=lambda i=i: i) for i in sck.window_ids])
         sck = self
 
         class Shareable:
             @staticmethod
             def getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler_(desk, on, done):  # type: ignore[no-untyped-def]
-                done(content, None)
+                sck.listed += 1
+                ids = list(sck.window_ids)                 # (the windows when it was listed)
+                done(SimpleNamespace(applications=content.applications, displays=content.displays,
+                                     windows=lambda: [SimpleNamespace(windowID=lambda i=i: i) for i in ids]), None)
 
         class Filter:
             @staticmethod
@@ -68,6 +75,7 @@ class FakeSCK:
             def captureImageWithFilter_configuration_completionHandler_(flt, cfg, done):  # type: ignore[no-untyped-def]
                 sck.shots.append((flt, cfg))
                 if sck.silent:
+                    sck.held.append((flt, done))
                     return
                 if sck.fail:
                     done(None, "SCStreamErrorDomain -3801")
@@ -100,7 +108,7 @@ def conv(monkeypatch):  # type: ignore[no-untyped-def]
         flt = getattr(cg, "source", None)
         if getattr(flt, "window", None) is not None:
             img.fill(QColor("white"))
-            if flt.window == 42:            # 43 draws nothing: one flat color
+            if flt.window != 43:            # 43 draws nothing: one flat color
                 for y in range(h):
                     for x in range(w // 2):
                         img.setPixel(x, y, 0xFF000000)
@@ -161,6 +169,15 @@ def test_grab_window_draws_the_window_itself_and_gives_up_on_flat_pictures(sck, 
     assert len(sck.shots) == n
 
 
+def test_grab_window_looks_again_for_a_window_newer_than_the_reused_list(sck, conv):  # type: ignore[no-untyped-def]
+    cap = capture.MacCapture()
+    assert cap.grab_window(42, (10, 20, 70, 60)) is not None and sck.listed == 1
+    sck.window_ids.append(44)                                      # (a dialog that just opened)
+    img = cap.grab_window(44, (10, 20, 70, 60))
+    assert img is not None and sck.shots[-1][0].window == 44 and sck.listed == 2
+    assert cap.grab_window(45, (10, 20, 70, 60)) is None and sck.listed == 3     # (looked once more, not again)
+
+
 def test_without_screencapturekit_the_old_call_takes_nominal_size_pictures(monkeypatch, conv):  # type: ignore[no-untyped-def]
     q = _quartz(CGWindowListCreateImage=lambda rect, opt, win, flags: SimpleNamespace(rect=rect, flags=flags))
     monkeypatch.setattr(_objc, "Q", q)
@@ -173,6 +190,7 @@ def test_without_screencapturekit_the_old_call_takes_nominal_size_pictures(monke
 
 def test_a_failing_or_silent_screencapturekit_falls_back(sck, conv, monkeypatch):  # type: ignore[no-untyped-def]
     monkeypatch.setattr(capture, "WAIT_S", 0.05)
+    monkeypatch.setattr(_objc, "is_main_thread", lambda: False)    # (the ledge search's worker thread)
     q = _quartz(CGWindowListCreateImage=lambda rect, opt, win, flags: SimpleNamespace())
     monkeypatch.setattr(_objc, "Q", q)
     cap = capture.MacCapture()
@@ -184,6 +202,7 @@ def test_a_failing_or_silent_screencapturekit_falls_back(sck, conv, monkeypatch)
 
 
 def test_the_ledge_snapshot_is_fast_scaled_and_none_on_failure(sck, conv, monkeypatch):  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(_objc, "is_main_thread", lambda: False)    # (the ledge search's worker thread: it waits)
     cap = capture.MacCapture()
     img = cap.snapshot((0, 0, 30, 20))
     assert img is not None and (img.width(), img.height()) == (30, 20) and conv[-1][3] is False
@@ -191,6 +210,42 @@ def test_the_ledge_snapshot_is_fast_scaled_and_none_on_failure(sck, conv, monkey
     monkeypatch.setattr(_objc, "SCK", SimpleNamespace())
     monkeypatch.setattr(_objc, "Q", _quartz(CGWindowListCreateImage=lambda *a: None))
     assert cap.snapshot((0, 0, 30, 20)) is None
+
+
+def _settled(cap: capture.MacCapture, sck: FakeSCK) -> None:
+    """Let the background snapshots finish (answering the held ones)."""
+    end = time.monotonic() + 5
+    while cap._snapping and time.monotonic() < end:
+        while sck.held:
+            flt, done = sck.held.pop()
+            done(SimpleNamespace(source=flt), None)
+        time.sleep(0.005)
+    assert not cap._snapping
+
+
+def test_the_gui_thread_never_waits_for_a_ledge_snapshot(sck, conv, monkeypatch):  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(_objc, "is_main_thread", lambda: True)
+    sck.silent = True                                              # (ScreenCaptureKit takes its time)
+    cap = capture.MacCapture()
+    rect = (0, 0, 30, 20)
+    t0 = time.perf_counter()
+    assert cap.snapshot(rect) is None and cap.snapshot(rect) is None          # can't tell yet
+    assert time.perf_counter() - t0 < 0.05
+    end = time.monotonic() + 5
+    while not sck.held and time.monotonic() < end:
+        time.sleep(0.005)
+    assert len(sck.held) == 1                                      # one picture at a time per rect
+    _settled(cap, sck)
+    t0 = time.perf_counter()
+    img = cap.snapshot(rect)
+    assert time.perf_counter() - t0 < 0.05
+    assert img is not None and (img.width(), img.height()) == (30, 20) and conv[-1][3] is False
+    assert cap.snapshot((0, 0, 31, 20)) is None                    # another rect: not this picture
+    _settled(cap, sck)
+    monkeypatch.setattr(capture, "SNAPSHOT_FRESH_S", 0.0)
+    time.sleep(0.01)
+    assert cap.snapshot(rect) is None                              # too old to tell
+    _settled(cap, sck)
 
 
 def test_without_screen_recording_background_pictures_are_none_and_nothing_asks(monkeypatch):  # type: ignore[no-untyped-def]

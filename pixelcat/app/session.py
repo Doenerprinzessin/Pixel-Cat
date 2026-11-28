@@ -53,6 +53,7 @@ if TYPE_CHECKING:
     from .state import ChatState
 
 log = logging.getLogger("pixelcat.app")   # (the app's logger name; tests look for it)
+SCREENSHOT_WAIT_S = 20.0                    # macOS: how long take_screenshot waits for the capture port
 
 
 class ToolThread(QThread):
@@ -982,6 +983,29 @@ class AgentSession(QObject):
         if self.chat_ui.chat is not None:
             self.chat_ui.chat.add("info", f"⏰ Time's up: {label}")
 
+    def _grab_off_gui_thread(self, rect: tuple[int, int, int, int]) -> QImage:
+        """``capture.grab(rect)`` on a worker thread while the GUI keeps running (ScreenCaptureKit answers
+        asynchronously: waiting for it here would freeze the cat).  Its errors are raised here."""
+        done = threading.Event()
+        box: dict[str, Any] = {}
+
+        def work() -> None:
+            try:
+                box["img"] = self.capture.grab(rect)
+            except BaseException as exc:  # noqa: BLE001 - raised on the GUI thread
+                box["error"] = exc
+            finally:
+                done.set()
+        threading.Thread(target=work, name="pixelcat-screenshot", daemon=True).start()
+        end = time.monotonic() + SCREENSHOT_WAIT_S
+        while not done.wait(0.01):
+            if time.monotonic() > end:
+                raise OSError("the screen didn't answer in time")
+            QApplication.processEvents()
+        if "error" in box:
+            raise box["error"]
+        return box["img"]
+
     def tool_screenshot(self) -> str:
         folder = (paths.known_folder("pictures", self.folders) or Path.home()) / "PixelCat Screenshots"
         folder.mkdir(parents=True, exist_ok=True)
@@ -998,7 +1022,7 @@ class AgentSession(QObject):
                 # macOS: Qt's grabWindow would quietly give the wallpaper alone without Screen Recording. The
                 # capture port asks for it (PermissionNeeded, shown as the tool's error) and grabs all monitors
                 # in points, as the agent's screenshots (the picture is as big as the desktop in points).
-                img = self.capture.grab(self.display.virtual_screen())
+                img = self._grab_off_gui_thread(self.display.virtual_screen())
                 if img.isNull():
                     raise OSError("could not capture the screen")
             else:

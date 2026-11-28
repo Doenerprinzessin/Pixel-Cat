@@ -150,6 +150,34 @@ def test_a_screenshot_on_macos_goes_through_the_capture_port_in_points(shooting,
     assert QImage(str(saved[0])).size().toTuple() == (1828, 1117) and f.shown == ["hide", "reshow"]
 
 
+def test_a_screenshot_on_macos_waits_for_the_capture_with_the_gui_running(shooting, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import threading
+
+    from PySide6.QtCore import QTimer
+
+    from pixelcat.app import session as session_mod
+
+    session, f = shooting
+    grab, threads, ticks = f.cap.grab, [], []
+    release = threading.Event()
+
+    def slow(rect):  # type: ignore[no-untyped-def]
+        threads.append(threading.current_thread())
+        release.wait(5)
+        return grab(rect)
+    f.cap.grab = slow
+    QTimer.singleShot(0, lambda: ticks.append("tick"))
+    QTimer.singleShot(50, release.set)                         # (only the GUI's event loop can let it finish)
+    assert session.tool_screenshot().startswith("Screenshot saved to ")
+    assert threads[0] is not threading.main_thread() and ticks == ["tick"]
+    release.clear()
+    monkeypatch.setattr(session_mod, "SCREENSHOT_WAIT_S", 0.05)
+    with pytest.raises(OSError, match="didn't answer in time"):
+        session.tool_screenshot()
+    release.set()
+    assert f.shown[-2:] == ["hide", "reshow"]
+
+
 def test_a_screenshot_on_macos_without_screen_recording_says_where_to_allow_it(shooting, tmp_path) -> None:  # type: ignore[no-untyped-def]
     from PySide6.QtGui import QImage
 
