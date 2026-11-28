@@ -235,7 +235,7 @@ def main() -> int:
         if not want_chat:
             return
         deadline = time.time() + 150
-        while time.time() < deadline and (pet.worker is not None or pet.chat_ui.chat._busy or pet._pending_calls):
+        while time.time() < deadline and (pet.session.worker is not None or pet.chat_ui.chat._busy or pet.session._pending_calls):
             QApplication.processEvents()
             time.sleep(0.05)
         texts = [m.text for m in pet.chat_ui.chat.msgs]

@@ -228,7 +228,7 @@ def test_copilot_sign_in_shows_when_this_build_can_do_it(pet, monkeypatch) -> No
 
 def test_no_limit_hides_resets_and_raise(pet) -> None:  # type: ignore[no-untyped-def]
     pet.provider_settings._set_token_limit("openai", 0)
-    pet._on_ext_used("openai", 1234)
+    pet.session._on_ext_used("openai", 1234)
     kids = tree(pet.provider_settings.provider_menu("openai").children)
     assert "ext_limit_openai | Token limit [NONE]" in [x if isinstance(x, str) else x[0] for x in kids]
     assert "ext:used:openai | Used 1.2k today" in kids
@@ -366,7 +366,7 @@ def test_name(pet, app_env, monkeypatch) -> None:  # type: ignore[no-untyped-def
     dlg.field.setText("  Mochi ")
     dlg._save()
     assert pet.saved.cat_name == "Mochi" and naming.custom() == "Mochi" and pet.menu.title == "MOCHI"
-    assert pet._copilot_stale and pet.chat_ui.chat._title_text() == "MOCHI CHAT"
+    assert pet.session.copilot_stale and pet.chat_ui.chat._title_text() == "MOCHI CHAT"
     pet.menus.set_cat_name("")
     assert pet.menu.title == "PIXEL CAT"
 

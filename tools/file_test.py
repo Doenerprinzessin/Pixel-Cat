@@ -53,7 +53,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0, platform=build_platform(),
                       providers=build_providers())
     pet.save = lambda: None
-    tb = pet.toolbox
+    tb = pet.session.toolbox
 
     def run(name: str, **args):  # type: ignore[no-untyped-def]
         spec, a = tb.prepare(name, args)
@@ -134,8 +134,8 @@ def chat_part(pet, app) -> None:  # type: ignore[no-untyped-def]
     pet.chat_ui.open_chat()
     chat = pet.chat_ui.chat
     calls: list[str] = []
-    real_run = pet.toolbox.run
-    pet.toolbox.run = lambda spec, a: (calls.append(spec.name), real_run(spec, a))[1]  # type: ignore[method-assign]
+    real_run = pet.session.toolbox.run
+    pet.session.toolbox.run = lambda spec, a: (calls.append(spec.name), real_run(spec, a))[1]  # type: ignore[method-assign]
 
     def converse(msg: str, timeout: float = 600) -> str:
         n0 = len(chat.msgs)
@@ -147,7 +147,7 @@ def chat_part(pet, app) -> None:  # type: ignore[no-untyped-def]
             if chat._confirm_cb is not None:
                 text = chat.confirm_label.text()
                 chat._answer("yes" if "filetest" in text or "sort.js" in text or "groceries" in text else "no")
-            if not pet._task_active and pet.worker is None and pet._tool_thread is None:
+            if not pet.session.task_active and pet.session.worker is None and pet.session._tool_thread is None:
                 break
             time.sleep(0.02)
         reply = [m.text for m in chat.msgs[n0:] if m.role == "cat"]

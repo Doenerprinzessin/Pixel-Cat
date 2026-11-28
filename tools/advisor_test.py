@@ -183,8 +183,8 @@ def app_checks() -> None:
           pet.model_status.state == "online_only" and pet.model_status.banner() == ONLINE_ONLY)
     pet.chat_ui.show_chat_quietly()
     pet._on_user_message("hello")
-    check("...a message gets that hint instead of waiting for a local AI", pet.worker is None
-          and not pet._task_active and ONLINE_ONLY in pet.chat_ui.chat.msgs[-1].text)
+    check("...a message gets that hint instead of waiting for a local AI", pet.session.worker is None
+          and not pet.session.task_active and ONLINE_ONLY in pet.chat_ui.chat.msgs[-1].text)
     items = {i.key: i for i in pet.menus.menu_items()}
     ai = next(c for c in items["settings"].children if c.key == "set_model")
     notes = {c.key: c.note for c in ai.children}

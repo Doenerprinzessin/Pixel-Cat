@@ -117,7 +117,7 @@ def main() -> int:  # noqa: C901 - a linear test script
                       providers=build_providers())
     pet.save = lambda: None
     pet.start()
-    tb, ag = pet.toolbox, pet.agent
+    tb, ag = pet.session.toolbox, pet.session.agent
 
     def pump(seconds: float, until=None) -> bool:  # type: ignore[no-untyped-def]
         end = time.time() + seconds
@@ -418,15 +418,15 @@ def main() -> int:  # noqa: C901 - a linear test script
               and a.get("_confirm") == "hard", tb.describe(spec, a))
         pet.chat_ui.open_chat()
         pet.set_auto_mode(True)
-        pet._begin_task()
-        pet._pending_calls = [{"name": "open_app", "arguments": {"name": "registry editor"}}]
-        pet._next_call()
+        pet.session.begin_task()
+        pet.session._pending_calls = [{"name": "open_app", "arguments": {"name": "registry editor"}}]
+        pet.session._next_call()
         shown = chat._confirm_cb is not None
         check("admin apps ask even in auto mode (no ALWAYS button)", shown and chat.always_btn.isHidden()
               and "ADMIN" in chat.confirm_label.text(), chat.confirm_label.text()[:120])
         if shown:
             chat._answer("no")   # never actually start it
-        pet._end_task()
+        pet.session.end_task()
         pet.set_auto_mode(False)
         chat.hide()
     except ToolError as exc:
@@ -471,9 +471,9 @@ def chat_test(pet, chat, app, pump, ed, ag) -> None:  # type: ignore[no-untyped-
                 print("  card:", text.replace("<b>", "").replace("</b>", "")[:160], "->", "yes" if ok else "NO",
                       flush=True)
                 chat._answer("yes" if ok else "no")
-            if not pet._task_active and pet.worker is None and pet._tool_thread is None:
+            if not pet.session.task_active and pet.session.worker is None and pet.session._tool_thread is None:
                 pump(0.3)
-                if not pet._task_active:
+                if not pet.session.task_active:
                     break
             time.sleep(0.02)
         lines = [f"{m.role}: {m.text}" for m in chat.msgs[n0:]]

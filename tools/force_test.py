@@ -115,15 +115,15 @@ def main() -> int:
           chat.msgs[-1].text)
     pet._on_user_message("/force end PixelCat")  # the cat itself must not end itself
     check("the cat never force-ends itself", pet.own_pid in [p.pid for p in control.list_processes()])
-    check("/force tools are hidden from the AI", "force_end" not in pet.toolbox.names()
-          and all(s["function"]["name"] not in ("force_end", "run_as_admin") for s in pet.toolbox.schemas()))
+    check("/force tools are hidden from the AI", "force_end" not in pet.session.toolbox.names()
+          and all(s["function"]["name"] not in ("force_end", "run_as_admin") for s in pet.session.toolbox.schemas()))
     try:
-        pet.toolbox.prepare("force_end", {"target": "notepad"})
+        pet.session.toolbox.prepare("force_end", {"target": "notepad"})
         check("the AI cannot call force_end", False)
     except Exception:  # noqa: BLE001
         check("the AI cannot call force_end", True)
-    spec, a = pet.toolbox.prepare("run_as_admin", {"name": "terminal"}, internal=True)
-    check("/force open resolves the app (not started)", "terminal" in a["_label"], pet.toolbox.describe(spec, a))
+    spec, a = pet.session.toolbox.prepare("run_as_admin", {"name": "terminal"}, internal=True)
+    check("/force open resolves the app (not started)", "terminal" in a["_label"], pet.session.toolbox.describe(spec, a))
     pet._on_user_message("/force")
     check("/force without target shows usage", "Usage" in chat.msgs[-1].text)
 

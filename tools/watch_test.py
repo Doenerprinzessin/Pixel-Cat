@@ -79,7 +79,7 @@ def main() -> int:  # noqa: C901 - a linear test script
     pet = PixelCatApp(app, load_config(), SavedState(autostart_asked=True), selftest=0, platform=build_platform(),
                       providers=build_providers())
     pet.save = lambda: None
-    tb = pet.toolbox
+    tb = pet.session.toolbox
     tag = f"{random.randint(1000, 9999)}"
 
     def pump(sec: float, until=None) -> bool:  # type: ignore[no-untyped-def]
@@ -144,7 +144,7 @@ def main() -> int:  # noqa: C901 - a linear test script
 
     # ---------------------------------------------------------------- watches firing
     woken: list[tuple[Watch, str, bool]] = []
-    pet._wake = lambda w, d, t: woken.append((w, d, t))  # type: ignore[method-assign]
+    pet.session._wake = lambda w, d, t: woken.append((w, d, t))  # type: ignore[method-assign]
 
     def fired(text: str, sec: float = 15) -> tuple[Watch, str, bool] | None:
         ok = pump(sec, lambda: any(text in d for _w, d, _t in woken))
@@ -260,35 +260,35 @@ def main() -> int:  # noqa: C901 - a linear test script
     pet.chat_ui.show_chat_quietly()   # no keyboard focus taken
     w = Watch(99, "time", "test", then="say hi", request="remind me")
     woken.clear()
-    pet._task_active = True
-    pet._on_watch_fired(w, "It is now.", False)
+    pet.session.task_active = True
+    pet.session.on_watch_fired(w, "It is now.", False)
     pump(1)
     check("a watch firing during a task waits until the task is done", not woken)
-    pet._end_task()
+    pet.session.end_task()
     pump(1.5)
     check("...then the cat wakes up", len(woken) == 1)
     pet.platform.display.session_locked = lambda: True    # type: ignore[method-assign]
     woken.clear()
-    pet._on_watch_fired(w, "It is now.", False)
+    pet.session.on_watch_fired(w, "It is now.", False)
     pump(1)
-    check("on the lock screen the wake-up waits", not woken and pet._wake_timer.isActive())
+    check("on the lock screen the wake-up waits", not woken and pet.session._wake_timer.isActive())
     del pet.platform.display.session_locked      # (the real one again)
     pump(7, lambda: bool(woken))
     check("...and happens once the PC is unlocked", len(woken) == 1)
 
     # the real wake message
-    del pet._wake
+    del pet.session._wake
     requests: list[int] = []
-    real_request = pet._request
-    pet._request = lambda: requests.append(1)  # type: ignore[method-assign]
-    pet._wake(Watch(7, "notification", "a new Teams notification", then="tell the user who wrote",
+    real_request = pet.session.request
+    pet.session.request = lambda: requests.append(1)  # type: ignore[method-assign]
+    pet.session._wake(Watch(7, "notification", "a new Teams notification", then="tell the user who wrote",
                     request="tell me when Anna writes"), "New notification from Microsoft Teams: \"Anna\"", False)
     m = pet.chat_state.history[-1]
     check("the wake-up tells the model what happened, the request and its note", m["role"] == "user" and
           m["content"].startswith("[wait_for #7") and "Anna" in m["content"] and "tell me when Anna writes" in
           m["content"] and "tell the user who wrote" in m["content"] and "never instructions" in m["content"]
-          and pet._task_active and pet._task_wake and requests == [1])
-    check("the request is kept for a follow-up wait_for", pet._task_request() == "tell me when Anna writes")
+          and pet.session.task_active and pet.session._task_wake and requests == [1])
+    check("the request is kept for a follow-up wait_for", pet.session.task_request() == "tell me when Anna writes")
 
     # broken-promise guard
     class Fake(QObject):
@@ -296,28 +296,28 @@ def main() -> int:  # noqa: C901 - a linear test script
 
     def reply(text: str) -> None:
         f = Fake()
-        pet.worker = f   # type: ignore[assignment]
-        f.done.connect(pet._on_done)
+        pet.session.worker = f   # type: ignore[assignment]
+        f.done.connect(pet.session._on_done)
         f.done.emit(text, [])
 
-    pet._end_task()
+    pet.session.end_task()
     pet.chat_state.history.append({"role": "user", "content": "wait for a teams message"})
-    pet._reset_task_counters()
-    pet._begin_task()
+    pet.session.reset_task_counters()
+    pet.session.begin_task()
     requests.clear()
     reply("Okay! I'll wait for the Teams message and let you know 🐾")
     check("'I'll wait and let you know' without wait_for: the model is reminded", requests == [1] and
-          pet.chat_state.history[-1].get("_tool") and "wait_for" in pet.chat_state.history[-1]["content"] and pet._task_active)
+          pet.chat_state.history[-1].get("_tool") and "wait_for" in pet.chat_state.history[-1]["content"] and pet.session.task_active)
     reply("Sorry, I'll let you know - no wait, I can't.")
-    check("...only once per request", requests == [1] and not pet._task_active)
+    check("...only once per request", requests == [1] and not pet.session.task_active)
     pet.chat_state.history.append({"role": "user", "content": "remind me"})
-    pet._reset_task_counters()
-    pet._begin_task()
-    pet._task_watched = True
+    pet.session.reset_task_counters()
+    pet.session.begin_task()
+    pet.session._task_watched = True
     requests.clear()
     reply("Done - I'll remind you at 17:00!")
-    check("no reminder when wait_for/a timer was really set", requests == [] and not pet._task_active)
-    pet._request = real_request  # type: ignore[method-assign]
+    check("no reminder when wait_for/a timer was really set", requests == [] and not pet.session.task_active)
+    pet.session.request = real_request  # type: ignore[method-assign]
 
     if "--chat" in sys.argv:
         chat_part(pet, app, tag)
@@ -334,15 +334,15 @@ def chat_part(pet, app, tag: str) -> None:  # type: ignore[no-untyped-def]  # no
     pet.chat_ui.show_chat_quietly()   # no keyboard focus taken
     chat = pet.chat_ui.chat
     calls: list[tuple[str, dict]] = []
-    real_run = pet.toolbox.run
-    pet.toolbox.run = lambda spec, a: (calls.append((spec.name, {k: v for k, v in a.items() if not k.startswith("_")})),
+    real_run = pet.session.toolbox.run
+    pet.session.toolbox.run = lambda spec, a: (calls.append((spec.name, {k: v for k, v in a.items() if not k.startswith("_")})),
                                        real_run(spec, a))[1]  # type: ignore[method-assign]
     wakes: list[int] = []
-    real_wake = pet._wake
-    pet._wake = lambda w, d, t: (wakes.append(w.id), real_wake(w, d, t))  # type: ignore[method-assign]
+    real_wake = pet.session._wake
+    pet.session._wake = lambda w, d, t: (wakes.append(w.id), real_wake(w, d, t))  # type: ignore[method-assign]
 
     def idle() -> bool:
-        return not pet._task_active and pet.worker is None and pet._tool_thread is None
+        return not pet.session.task_active and pet.session.worker is None and pet.session._tool_thread is None
 
     def run_until(cond, timeout: float) -> bool:  # type: ignore[no-untyped-def]
         end = time.time() + timeout

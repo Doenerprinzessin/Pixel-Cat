@@ -29,7 +29,7 @@ def _win(hwnd: int, rect: tuple[int, int, int, int], z: int = 0) -> WinInfo:
 def test_construction_wires_the_parts_without_starting_anything(pet, app_env) -> None:  # type: ignore[no-untyped-def]
     assert [m.device for m in pet.world_state.monitors] == ["TEST1"]
     assert pet.menu.title == "PIXEL CAT" and pet.model_menu.title == "MODEL FOR THIS CHAT"
-    assert pet.chat_ui.chat is None and pet.game_state.mini is None and pet.worker is None and pet.chat_state.history == []
+    assert pet.chat_ui.chat is None and pet.game_state.mini is None and pet.session.worker is None and pet.chat_state.history == []
     assert pet.brain.game is pet.game and pet.game.on_end == pet.minigames.game_ended
     assert not any(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer,
                                           pet.save_timer, pet.top_timer, pet.tray_timer, pet.quit_timer))
@@ -78,7 +78,7 @@ def test_ui_unit_follows_the_size_setting(pet) -> None:  # type: ignore[no-untyp
 def test_start_shows_the_cat_and_starts_the_timers(pet, app_env) -> None:  # type: ignore[no-untyped-def]
     pet.start()
     hwnd = pet.overlay.hwnd()
-    assert pet.overlay.isVisible() and hwnd and pet.agent.overlay_hwnd == hwnd
+    assert pet.overlay.isVisible() and hwnd and pet.session.agent.overlay_hwnd == hwnd
     assert ((hwnd,), {}) in pet.platform.windows.called("make_tool_window")
     assert all(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer, pet.save_timer,
                                        pet.top_timer, pet.tray_timer, pet.quit_timer))
@@ -322,7 +322,7 @@ def test_quit_saves_stops_and_hides_everything(pet, app_env) -> None:  # type: i
     assert not any(t.isActive() for t in (pet.tick_timer, pet.win_timer, pet.mon_timer, pet.fs_timer,
                                           pet.save_timer))
     assert not pet.overlay.isVisible() and not pet.chat_ui.chat.isVisible() and not pet.ball_win.isVisible()
-    assert pet.agent.cancel.is_set() and pet.watches._stop.is_set() and pet.model_status._stop.is_set()
+    assert pet.session.agent.cancel.is_set() and pet.watches._stop.is_set() and pet.model_status._stop.is_set()
 
 
 def test_quit_still_quits_when_saving_fails(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]

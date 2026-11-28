@@ -875,7 +875,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     pet._on_menu("ext:websearch")
     from pixelcat.ui.chat import md_to_html
     linked = md_to_html("See [Cat News](https://news.example.org/a?b=1&c=2) or [x](javascript:alert(1)).")
-    spec, a = pet.toolbox.prepare("read_web_page", {"url": "example.com/cats", "start": "12"})
+    spec, a = pet.session.toolbox.prepare("read_web_page", {"url": "example.com/cats", "start": "12"})
     check("links in the chat are clickable (web addresses only); read_web_page asks first (ALWAYS: group 'web')",
           '<a href="https://news.example.org/a?b=1&amp;c=2"' in linked and "javascript" not in linked.split("<a")[-1][:40]
           and linked.count("<a ") == 1 and a["url"] == "https://example.com/cats" and a["start"] == 12
@@ -923,7 +923,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     def say(text: str) -> None:
         n = len(pet.popups.open)
         pet._on_user_message(text)
-        wait(lambda: (pet.worker is None and not pet._task_active) or chat.choice.isVisible() or len(pet.popups.open) > n)
+        wait(lambda: (pet.session.worker is None and not pet.session.task_active) or chat.choice.isVisible() or len(pet.popups.open) > n)
 
     say("hi")
     used1 = pet.accounts.budget("anthropic").used()
@@ -936,14 +936,14 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
           (used1, used2, card0) == (600, 1200, False) and card1 and labels == ["SWITCH MODEL", "RAISE TO 1.7K", "STOP"],
           f"{used1} {used2} {labels}")
     chat._choice_btns[1].click()
-    wait(lambda: not pet._task_active)
+    wait(lambda: not pet.session.task_active)
     check("RAISE: the request goes on with the higher limit", pet.accounts.budget("anthropic").allowed() == 1700
           and pet.accounts.budget("anthropic").used() == 1800, str((pet.accounts.budget("anthropic").allowed(),
                                                             pet.accounts.budget("anthropic").used())))
     say("more")
     labels = [b_.text() for b_ in chat._choice_btns] if chat.choice.isVisible() else []
     chat._choice_btns[1].click() if labels else None
-    wait(lambda: not pet._task_active)
+    wait(lambda: not pet.session.task_active)
     check("...asked again - raising goes up to the maximum (2k)", labels[1:2] == ["RAISE TO 2K"]
           and pet.accounts.budget("anthropic").used() == 2400, str(labels))
     n_pop = len(pet.popups.open)
@@ -955,7 +955,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
           and "resets" in text and "tomorrow at 00:00" in text, text[:160])
     if pop is not None:
         pop._finish(False)
-    wait(lambda: not pet._task_active)
+    wait(lambda: not pet.session.task_active)
     # switching model from the card ---------------------------------------------------------------------
     saved.ext_usage["anthropic"] = {"start": X.period_start("day", datetime.now()).timestamp(), "used": 1000,
                                     "allowed": 1000}
@@ -968,7 +968,7 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     n0 = len(S["bodies"])
     pet.accounts.ext_p("anthropic")["limit"] = 0                # (the other model: no limit for the test)
     pet.model_choice.on_model_menu("chatmodel:anthropic:claude-haiku-5-5")
-    wait(lambda: not pet._task_active)
+    wait(lambda: not pet.session.task_active)
     check("SWITCH MODEL: the model menu (with the Claude models) - picking one goes on with it",
           shown and "chatmodels_anthropic" in keys and len(S["bodies"]) == n0 + 1
           and S["bodies"][-1]["model"] == "claude-haiku-5-5", str(keys))
@@ -984,13 +984,13 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
           and "lifts" in text and "today at" in text, text[:160])
     if pop is not None:
         pop._finish(False)
-    wait(lambda: not pet._task_active)
+    wait(lambda: not pet.session.task_active)
     # context windows in the app -----------------------------------------------------------------------------
     local, default = pet.chat_state.chat_model, pet.cfg.model
     pet.chat_state.chat_model, pet.cfg.model = None, "qwen3.5:9b"
-    b_local = pet._ctx_budget()
+    b_local = pet.session._ctx_budget()
     pet.chat_state.chat_model, pet.cfg.model = "anthropic:claude-haiku-5-5", default
-    b_claude = pet._ctx_budget()
+    b_claude = pet.session._ctx_budget()
     pet.accounts.ext_p("anthropic")["limit"] = 0
     S["mode"] = "too_long_once"
     n0 = len(S["bodies"])
@@ -1001,14 +1001,14 @@ def app_checks(creds) -> None:  # noqa: C901 - a linear test
     check("Claude uses its own window (968k), local models keep num_ctx; 'too long' -> a smaller budget is kept for "
           "that model and the request is sent again, shortened",
           b_local == pet.cfg.num_ctx and b_claude == 968_000 and len(S["bodies"]) == n0 + 2 and "Hello" in reply
-          and X.MIN_BUDGET <= learned < 968_000 and pet._ctx_budget() == learned and noted,
+          and X.MIN_BUDGET <= learned < 968_000 and pet.session._ctx_budget() == learned and noted,
           f"{b_local} {b_claude} bodies+{len(S['bodies']) - n0} learned={learned} reply={reply[:40]!r}")
     S["mode"] = "too_long"
     n0 = len(S["bodies"])
     say("and again")
     err = next((mm.text for mm in reversed(chat.msgs) if mm.role == "error"), "")
     check("...still too long after two shorter tries: the chat says so (new chat)",
-          len(S["bodies"]) == n0 + 3 and "longer than" in err and not pet._task_active, err[:120])
+          len(S["bodies"]) == n0 + 3 and "longer than" in err and not pet.session.task_active, err[:120])
     S["mode"] = "text"
     pet.accounts.ext_p("anthropic").pop("ctx_learned", None)
     pet.chat_state.chat_model = local

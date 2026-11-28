@@ -509,7 +509,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     def say(text: str) -> None:
         n = len(pet.popups.open)
         pet._on_user_message(text)
-        wait(lambda: (pet.worker is None and not pet._task_active) or chat.choice.isVisible()
+        wait(lambda: (pet.session.worker is None and not pet.session.task_active) or chat.choice.isVisible()
              or chat._confirm_cb is not None or len(pet.popups.open) > n, 90)
 
     S["script"] = [reply("Meow, hi!")]
@@ -528,24 +528,24 @@ def app_checks() -> None:  # noqa: C901 - a linear test
     asked = chat._confirm_cb is not None and chat.confirm.isVisible()
     if asked:
         chat._answer("no")                              # (declined: nothing opens)
-    wait(lambda: not pet._task_active, 60)
+    wait(lambda: not pet.session.task_active, 60)
     declined = any(mm.get("role") == "tool" and "declined" in str(mm.get("content")) for mm in pet.chat_state.history)
     sent = any("declined" in json.dumps(b.get("messages", [])) for b in S["bodies"][-1:])
     check("a tool that needs a yes is asked in the chat (as with every model) - declined, the model hears so",
           asked and declined and sent, f"asked={asked} declined={declined} sent={sent}")
     # Copilot's web_fetch asks through the app (like read_web_page) ------------------------------------------
     answers: list = []
-    pet._task_active = True
-    pet._copilot_permission("https://example.com/a", answers.append)
+    pet.session.task_active = True
+    pet.session._copilot_permission("https://example.com/a", answers.append)
     card1 = chat._confirm_cb is not None and "let Copilot read the web page https://example.com/a" in \
         chat.confirm_label.text()
     chat._answer("no")
-    pet._copilot_permission("https://example.com/b", answers.append)
+    pet.session._copilot_permission("https://example.com/b", answers.append)
     chat._answer("always")
-    pet._copilot_permission("https://example.com/c", answers.append)
+    pet.session._copilot_permission("https://example.com/c", answers.append)
     card3 = chat._confirm_cb is not None
-    pet._task_active = False
-    pet._copilot_permission("https://example.com/d", answers.append)
+    pet.session.task_active = False
+    pet.session._copilot_permission("https://example.com/d", answers.append)
     check("Copilot wants a page: the confirmation card (no -> not read; ALWAYS -> 'web' is remembered and the next "
           "page is read without asking - like read_web_page); no running task -> refused",
           card1 and answers == [False, True, True, False] and not card3 and "web" in saved.auto_approved_tools,
@@ -564,7 +564,7 @@ def app_checks() -> None:  # noqa: C901 - a linear test
           and "2,000" in card and "3,120 of 20,000" in card, f"{labels} {card[:160]}")
     if labels:
         chat._choice_btns[1].click()
-    wait(lambda: not pet._task_active, 60)
+    wait(lambda: not pet.session.task_active, 60)
     reply3 = next((mm.text for mm in reversed(chat.msgs) if mm.role == "cat"), "")
     check("RAISE: the limit is raised until the month ends, and the request goes on",
           pet._credit_budget().allowed() == 3000 and "Still here!" in reply3, f"{pet._credit_budget().allowed()} {reply3!r}")
@@ -580,17 +580,17 @@ def app_checks() -> None:  # noqa: C901 - a linear test
           and pop.title == "Copilot allowance used up" and "Dec 1" in text, text[:160])
     if pop is not None:
         pop._finish(False)
-    wait(lambda: not pet._task_active)
+    wait(lambda: not pet.session.task_active)
     S["script"] = []
     # new chat, quit -------------------------------------------------------------------------------------------------
-    sid = pet._copilot.session_id if pet._copilot is not None else ""
+    sid = pet.session._copilot.session_id if pet.session._copilot is not None else ""
     pet.new_chat()
     time.sleep(2.0)
     left = CC._LOOP.run(CC._RT.client.list_sessions(), 30) if CC._RT.client is not None else []
-    check("new chat: the Copilot session is deleted", bool(sid) and pet._copilot is None
+    check("new chat: the Copilot session is deleted", bool(sid) and pet.session._copilot is None
           and all(x.session_id != sid for x in left))
     proc = getattr(CC._RT.client, "_cli_process", None)
-    pet._stop_copilot()
+    pet.session.stop_copilot()
     gone = proc is not None and proc.poll() is not None
     check("quit / sign-out: GitHub's runtime stops", CC._RT.client is None and gone,
           f"pid {getattr(proc, 'pid', None)} exit {proc.poll() if proc is not None else None}")

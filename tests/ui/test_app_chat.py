@@ -43,14 +43,14 @@ def test_a_message_goes_to_the_model_and_the_answer_streams_back(chat_pet, worke
     assert w.started and w.model == "qwen3.5:35b-a3b" and w.think is True
     assert w.messages[0]["role"] == "system" and w.messages[-1] == {"role": "user", "content": "hello there"}
     assert w.tools and any(t["function"]["name"] == "get_time" for t in w.tools)
-    assert pet._task_active and pet.chat_ui.chat.send_btn.text() == "STOP"
+    assert pet.session.task_active and pet.chat_ui.chat.send_btn.text() == "STOP"
     w.events.thinking(50)
     assert pet.chat_ui.chat.msgs[-1].text == "💭 thinking… (10 words)"
     w.events.token("Mrr")
     w.events.token("ow!")
     assert pet.chat_ui.chat.msgs[-1].text == "Mrrow!"
     w.events.done("Mrrow! Hi.", [])
-    assert pet.chat_ui.chat.msgs[-1].text == "Mrrow! Hi." and not pet._task_active and pet.worker is None
+    assert pet.chat_ui.chat.msgs[-1].text == "Mrrow! Hi." and not pet.session.task_active and pet.session.worker is None
     assert pet.chat_state.history[-1] == {"role": "assistant", "content": "Mrrow! Hi."}
     assert pet.chat_ui.chat.send_btn.text() == "SEND"
 
@@ -58,7 +58,7 @@ def test_a_message_goes_to_the_model_and_the_answer_streams_back(chat_pet, worke
 def test_signals_from_an_old_worker_are_ignored(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "one")
     old = workers[-1]
-    chat_pet._cancel_chat()
+    chat_pet.session.cancel_chat()
     assert old.cancelled and chat_pet.chat_ui.chat.msgs[-1].text == "(stopped)"
     old.events.token("late")
     old.events.done("late", [])
@@ -75,7 +75,7 @@ def test_a_tool_call_runs_and_the_model_gets_the_result(chat_pet, workers) -> No
     assert any(m.role == "info" and m.text.startswith("It is ") for m in pet.chat_ui.chat.msgs)
     assert workers[-1].think is False                            # (routine steps don't think)
     workers[-1].events.done("It's teatime.", [])
-    assert not pet._task_active and pet._tool_round == 1
+    assert not pet.session.task_active and pet.session._tool_round == 1
 
 
 def test_tool_calls_written_as_text_are_understood(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
@@ -106,7 +106,7 @@ def test_auto_mode_does_it_without_asking(chat_pet, workers, app_env) -> None:  
     _say(pet, "copy purr")
     workers[-1].events.done("", [{"name": "copy_to_clipboard", "arguments": {"text": "purr"}}])
     assert pet.chat_ui.chat._confirm_cb is None and app_env.clipboard.text() == "purr"
-    assert pet._auto_actions == 1 and pet.chat_ui.chat.msgs[-2].text.endswith("(auto)")
+    assert pet.session._auto_actions == 1 and pet.chat_ui.chat.msgs[-2].text.endswith("(auto)")
 
 
 def test_an_unknown_tool_is_reported_to_the_model(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
@@ -120,20 +120,20 @@ def test_repeating_the_same_call_stops_the_task(chat_pet, workers) -> None:  # t
     _say(chat_pet, "loop")
     for _ in range(3):
         workers[-1].events.done("", [{"name": "get_time", "arguments": {}}])
-    assert not chat_pet._task_active
+    assert not chat_pet.session.task_active
     assert "I keep doing the same thing (get time)" in chat_pet.chat_ui.chat.msgs[-1].text
 
 
 def test_a_failed_request_shows_an_error(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "hi")
     workers[-1].events.failed("offline", "connection refused")
-    assert chat_pet.chat_ui.chat.msgs[-1].role == "error" and not chat_pet._task_active
+    assert chat_pet.chat_ui.chat.msgs[-1].role == "error" and not chat_pet.session.task_active
 
 
 def test_a_model_without_tools_is_asked_again_with_text_tools(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     _say(chat_pet, "hi")
     workers[-1].events.failed("no_tools", "")
-    assert not chat_pet.native_tools and len(workers) == 2 and workers[-1].tools is None
+    assert not chat_pet.session.native_tools and len(workers) == 2 and workers[-1].tools is None
 
 
 def test_a_promise_to_wait_later_is_questioned(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
@@ -141,20 +141,20 @@ def test_a_promise_to_wait_later_is_questioned(chat_pet, workers) -> None:  # ty
     workers[-1].events.done("Sure, I'll let you know when it's done!", [])
     assert len(workers) == 2 and chat_pet.chat_state.history[-1]["_tool"] and "wait_for" in chat_pet.chat_state.history[-1]["content"]
     workers[-1].events.done("Sorry, I can't wait for that.", [])
-    assert not chat_pet._task_active
+    assert not chat_pet.session.task_active
 
 
 @pytest.mark.parametrize(("text", "promise"), [
     ("I'll let you know when it arrives.", True), ("I will keep an eye on it.", True),
     ("Ich sage dir Bescheid.", True), ("I'll wait for your answer.", False), ("Done!", False)])
 def test_broken_promise_detection(pet, text: str, promise: bool) -> None:  # type: ignore[no-untyped-def]
-    assert pet._broken_promise(text) is promise
+    assert pet.session._broken_promise(text) is promise
 
 
 def test_online_only_pc_without_an_online_model(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
     chat_pet.cfg.ai_mode = "online"
     _say(chat_pet, "hi")
-    assert workers == [] and not chat_pet._task_active and chat_pet.chat_ui.chat.msgs[-1].role == "info"
+    assert workers == [] and not chat_pet.session.task_active and chat_pet.chat_ui.chat.msgs[-1].role == "info"
 
 
 def test_an_external_model_that_isnt_connected(chat_pet, workers) -> None:  # type: ignore[no-untyped-def]
@@ -177,9 +177,9 @@ def test_external_workers_are_built_per_provider(chat_pet, monkeypatch) -> None:
     monkeypatch.setattr(openai_client, "OpenAIChat", type("OpenAIChat", (Fake,), {}))
     chat_pet.creds.set("anthropic_key", "k")
     chat_pet.creds.set("openai_key", "k")
-    chat_pet._begin_task()
-    w1 = chat_pet._ext_worker("anthropic", "m1", [{"role": "system", "content": "s"}])
-    w2 = chat_pet._ext_worker("openai", "m2", [])
+    chat_pet.session.begin_task()
+    w1 = chat_pet.session._ext_worker("anthropic", "m1", [{"role": "system", "content": "s"}])
+    w2 = chat_pet.session._ext_worker("openai", "m2", [])
     assert [m[0] for m in made] == ["AnthropicChat", "OpenAIChat"]
     req = made[0][1][0]
     assert req.model == "m1" and req.auth == "key" and w1.job.web is True and w2.job.web is True
@@ -198,10 +198,10 @@ def test_a_copilot_request_reports_credits_and_pages(chat_pet, monkeypatch) -> N
 
     monkeypatch.setattr(copilot_client, "CopilotJob", make)
     chat_pet.creds.set("copilot_key", "k")
-    chat_pet._begin_task()
-    w = chat_pet._ext_worker("copilot", "m3", [{"role": "system", "content": "be a cat"}])
+    chat_pet.session.begin_task()
+    w = chat_pet.session._ext_worker("copilot", "m3", [{"role": "system", "content": "be a cat"}])
     req = made[0].req
-    assert req.conversation is chat_pet._copilot and req.history is chat_pet.chat_state.history and req.system == "be a cat"
+    assert req.conversation is chat_pet.session._copilot and req.history is chat_pet.chat_state.history and req.system == "be a cat"
     assert req.auth == "key" and req.web is True and (w.provider, w.model, w.local) == ("copilot", "m3", False)
     made[0].events.credits(0.5)
     assert chat_pet._credit_budget().used() == 0.5
@@ -251,10 +251,10 @@ def test_new_chat_and_history_commands(chat_pet, workers) -> None:  # type: igno
 
 def test_force_end_asks_and_never_involves_the_model(chat_pet, workers, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     ran: list = []  # type: ignore[type-arg]
-    monkeypatch.setattr(chat_pet.toolbox, "prepare", lambda name, args, internal=False: (
-        chat_pet.toolbox.specs[name], dict(args)))
-    monkeypatch.setattr(chat_pet.toolbox, "describe", lambda spec, args: f"end {args['target']}")
-    monkeypatch.setattr(chat_pet.toolbox, "run", lambda spec, args: (ran.append(args), "Ended Teams.")[1])
+    monkeypatch.setattr(chat_pet.session.toolbox, "prepare", lambda name, args, internal=False: (
+        chat_pet.session.toolbox.specs[name], dict(args)))
+    monkeypatch.setattr(chat_pet.session.toolbox, "describe", lambda spec, args: f"end {args['target']}")
+    monkeypatch.setattr(chat_pet.session.toolbox, "run", lambda spec, args: (ran.append(args), "Ended Teams.")[1])
     _say(chat_pet, "/force end the app teams")
     assert workers == [] and "end teams?" in chat_pet.chat_ui.chat.confirm_label.text()
     chat_pet.chat_ui.chat.yes_btn.click()
@@ -282,7 +282,7 @@ def test_turns_and_rounds(pet) -> None:  # type: ignore[no-untyped-def]
     assert [len(t) for t in turns] == [4, 5]                     # ("continue" stays in its task)
     rounds = context.rounds(turns[1][1:])
     assert [[m["role"] for m in r] for r in rounds] == [["user"], ["assistant"], ["user"], ["assistant"]]
-    assert pet._task_request() == "second question"
+    assert pet.session.task_request() == "second question"
 
 
 def test_summarize_keeps_the_request_the_steps_and_the_answer(pet) -> None:  # type: ignore[no-untyped-def]
@@ -302,7 +302,7 @@ def test_the_context_keeps_the_request_and_the_newest_steps(pet) -> None:  # typ
         pet.chat_state.history.append({"role": "assistant", "content": f"step {i}",
                             "tool_calls": [{"function": {"name": "get_time", "arguments": {}}}]})
         pet.chat_state.history.append({"role": "tool", "content": f"result {i} " + "z" * 600, "tool_name": "get_time"})
-    ctx = pet._build_context()
+    ctx = pet.session._build_context()
     assert ctx[0]["content"].startswith("do the long task")
     assert ctx[-1]["content"].startswith("result 59 ")
     assert context.tokens(ctx) < 12_000
@@ -311,9 +311,9 @@ def test_the_context_keeps_the_request_and_the_newest_steps(pet) -> None:  # typ
 
 def test_the_context_is_extended_during_a_task(pet) -> None:  # type: ignore[no-untyped-def]
     pet.chat_state.history[:] = [{"role": "user", "content": "go"}]
-    first = pet._context()
+    first = pet.session._context()
     pet.chat_state.history.append({"role": "assistant", "content": "ok"})
-    second = pet._context()
+    second = pet.session._context()
     assert second[:len(first)] == first and second[-1] == {"role": "assistant", "content": "ok"}
 
 
@@ -323,7 +323,7 @@ def test_the_context_is_extended_during_a_task(pet) -> None:  # type: ignore[no-
 def test_when_the_model_thinks(pet, effort, think, last_user: bool, want: bool) -> None:  # type: ignore[no-untyped-def]
     pet.chat_state.chat_effort, pet.cfg.think = effort, think
     pet.chat_state.history[:] = [{"role": "user", "content": "x"}] if last_user else [{"role": "tool", "content": "y"}]
-    assert pet._think_now() is want
+    assert pet.session._think_now() is want
 
 
 # ---------------------------------------------------------------- the chat history
@@ -371,26 +371,26 @@ def test_the_chat_layout_is_remembered(chat_pet, app_env) -> None:  # type: igno
 # ---------------------------------------------------------------- watches, timers and other tool hooks
 def test_a_timer_rings(pet) -> None:  # type: ignore[no-untyped-def]
     pet.chat_ui.ensure_chat()
-    text = pet._tool_set_timer(90, "tea")
-    assert text == "Timer 'tea' set for 1.5 min." and len(pet._user_timers) == 1
-    assert pet._tool_set_timer(3 * 3600, "nap") == "Timer 'nap' set for 3.0 h."
-    tm = pet._user_timers[0]
-    pet._timer_fired("tea", tm)
-    assert tm not in pet._user_timers and pet.chat_ui.chat.msgs[-1].text == "⏰ Time's up: tea"
-    for t in pet._user_timers:
+    text = pet.session.tool_set_timer(90, "tea")
+    assert text == "Timer 'tea' set for 1.5 min." and len(pet.session._user_timers) == 1
+    assert pet.session.tool_set_timer(3 * 3600, "nap") == "Timer 'nap' set for 3.0 h."
+    tm = pet.session._user_timers[0]
+    pet.session._timer_fired("tea", tm)
+    assert tm not in pet.session._user_timers and pet.chat_ui.chat.msgs[-1].text == "⏰ Time's up: tea"
+    for t in pet.session._user_timers:
         t.stop()
 
 
 def test_cat_actions_wait_for_minigames(pet) -> None:  # type: ignore[no-untyped-def]
-    assert "minigame" not in pet._tool_cat_action("happy")
+    assert "minigame" not in pet.session.tool_cat_action("happy")
     pet.saved.tutorials_seen.append("ball")
     pet.start()
     pet.minigames.start_minigame("ball")
-    assert "in the middle of a minigame" in pet._tool_cat_action("happy")
+    assert "in the middle of a minigame" in pet.session.tool_cat_action("happy")
 
 
 def test_clipboard_hook(pet, app_env) -> None:  # type: ignore[no-untyped-def]
-    assert pet._tool_clipboard("abc") == "Copied 3 characters to the clipboard."
+    assert pet.session.tool_clipboard("abc") == "Copied 3 characters to the clipboard."
     assert app_env.clipboard.text() == "abc"
 
 
@@ -400,9 +400,9 @@ def test_a_fired_watch_wakes_the_chat(chat_pet, workers, monkeypatch) -> None:  
     from pixelcat.llm.watch import Watch
 
     w = Watch(7, "time", "the kettle", then="say hi", request="tea?", started=time.time())
-    chat_pet._on_watch_fired(w, "The kettle is done", False)
+    chat_pet.session.on_watch_fired(w, "The kettle is done", False)
     assert chat_pet.chat_ui.chat.msgs[-2].role == "event" and "🔔 The kettle is done" in chat_pet.chat_ui.chat.msgs[-2].text
-    assert chat_pet._task_active and chat_pet._task_wake and workers
+    assert chat_pet.session.task_active and chat_pet.session._task_wake and workers
     assert "You were waiting for: the kettle" in chat_pet.chat_state.history[-1]["content"]
     workers[-1].events.done("Your tea is ready!", [])
-    assert not chat_pet._task_active
+    assert not chat_pet.session.task_active

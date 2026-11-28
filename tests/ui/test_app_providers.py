@@ -412,9 +412,9 @@ def test_stopping_copilot_stops_nothing_when_no_provider_ever_ran(pet, monkeypat
     monkeypatch.setattr(threading, "Thread", lambda *a, **kw: threads.append(kw))
     for prov in pet.providers.values():
         monkeypatch.setattr(prov, "active", lambda: False)
-    pet._copilot = session = _Session()
-    pet._stop_copilot(background=True)
-    assert threads == [] and pet._copilot is session and session.closed == []
+    pet.session._copilot = session = _Session()
+    pet.session.stop_copilot(background=True)
+    assert threads == [] and pet.session._copilot is session and session.closed == []
 
 
 def test_stopping_copilot_closes_its_session_and_stops_the_providers(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -422,16 +422,16 @@ def test_stopping_copilot_closes_its_session_and_stops_the_providers(pet, monkey
     for p, prov in pet.providers.items():
         monkeypatch.setattr(prov, "active", lambda p=p: p == "copilot")
         monkeypatch.setattr(prov, "shutdown", lambda timeout, p=p: stopped.append((p, timeout)))
-    pet._copilot = session = _Session()
-    pet._stop_copilot()
-    assert pet._copilot is None and session.closed == [3.0]
+    pet.session._copilot = session = _Session()
+    pet.session.stop_copilot()
+    assert pet.session._copilot is None and session.closed == [3.0]
     assert stopped == [(p, 4.0) for p in pet.providers]
 
 
 # ---------------------------------------------------------------- limits while chatting
 def _task(pet) -> None:  # type: ignore[no-untyped-def]
     pet.chat_ui.ensure_chat()
-    pet._begin_task()
+    pet.session.begin_task()
 
 
 @pytest.mark.parametrize(("p", "used", "status"), [("anthropic", 0, "ok"), ("anthropic", 1_000_000, "soft"),
@@ -450,7 +450,7 @@ def test_token_limit_gate(pet, p: str, used: int, status: str) -> None:  # type:
 
 def test_raising_the_token_limit_goes_on(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     requests: list[bool] = []
-    monkeypatch.setattr(pet, "_request", lambda: requests.append(True))
+    monkeypatch.setattr(pet.session, "request", lambda: requests.append(True))
     _task(pet)
     pet.accounts.budget("anthropic").add(1_000_000)
     pet._ext_gate("anthropic")
@@ -464,14 +464,14 @@ def test_switching_or_stopping_at_the_token_limit(pet, monkeypatch) -> None:  # 
     monkeypatch.setattr(pet.model_choice, "open_model_menu", lambda: opened.append(True))
     _task(pet)
     pet._limit_answer("openai", "switch")
-    assert pet._resume_after_switch and opened == [True]
+    assert pet.session.resume_after_switch and opened == [True]
     pet._limit_answer("openai", "stop")
-    assert not pet._task_active and "I stopped here" in pet.chat_ui.chat.msgs[-1].text
+    assert not pet.session.task_active and "I stopped here" in pet.chat_ui.chat.msgs[-1].text
 
 
 def test_copilot_credit_gate(pet, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     requests: list[bool] = []
-    monkeypatch.setattr(pet, "_request", lambda: requests.append(True))
+    monkeypatch.setattr(pet.session, "request", lambda: requests.append(True))
     _task(pet)
     pet._on_copilot_credits(5000)
     assert pet._credit_budget().used() == 5000 and not pet._credit_gate()
@@ -496,8 +496,8 @@ def test_provider_limit_popups(pet, app_env, why: str, title: str, url) -> None:
 
 
 def test_used_tokens_are_counted(pet) -> None:  # type: ignore[no-untyped-def]
-    pet._on_ext_used("anthropic", 1200)
-    pet._on_ext_used("anthropic", 800)
+    pet.session._on_ext_used("anthropic", 1200)
+    pet.session._on_ext_used("anthropic", 800)
     assert pet.accounts.budget("anthropic").used() == 2000
 
 

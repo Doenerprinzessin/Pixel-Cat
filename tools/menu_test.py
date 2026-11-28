@@ -81,8 +81,8 @@ def name_and_chat_checks(pet, m, row) -> None:  # type: ignore[no-untyped-def]  
     check("the AI is told its name (and is 'Pixel' without one)",
           build_system_prompt([], naming.ai()).startswith("You are Mochi, a tiny")
           and build_system_prompt([]).startswith("You are Pixel, a tiny"))
-    check("a renamed cat gets a fresh Copilot session with the next message", pet._copilot_stale is True)
-    pet._copilot_stale = False
+    check("a renamed cat gets a fresh Copilot session with the next message", pet.session.copilot_stale is True)
+    pet.session.copilot_stale = False
     check("the name stays on this PC: not part of an exported progress file",
           "cat_name" not in persistence.progress_of(pet.saved))
     st = persistence._from_dict({"cat_name": 5, "chat_size": "big", "chat_full": "yes"})
@@ -325,16 +325,16 @@ def history_and_effort_checks(pet) -> None:  # type: ignore[no-untyped-def]  # n
               "chateffort:default", "chateffort:low", "chateffort:medium", "chateffort:high"]
           and m.children[1].note == "NO THINKING" and m.children[0].checked, str([c.label for c in m.children]))
     pet.model_choice.on_model_menu("chateffort:high")
-    check("High: this chat always thinks; the button shows it", pet.chat_state.chat_effort == "high" and pet._think_now() is True
+    check("High: this chat always thinks; the button shows it", pet.chat_state.chat_effort == "high" and pet.session._think_now() is True
           and chat.model_btn.text().endswith("· HIGH") and chat._model_temp and effort_menu().children[3].checked,
           chat.model_btn.text())
     pet.model_choice.on_model_menu("chateffort:low")
-    low = pet._think_now()
+    low = pet.session._think_now()
     pet.model_choice.on_model_menu("chateffort:medium")
     pet.chat_state.history[:] = [{"role": "user", "content": "hi"}]
-    planning = pet._think_now()
+    planning = pet.session._think_now()
     pet.chat_state.history.append({"role": "user", "content": "[tool result for wait] ok", "_tool": True})
-    routine = pet._think_now()
+    routine = pet.session._think_now()
     check("Low never thinks; Medium thinks when planning, not for routine steps",
           low is False and planning is True and routine is False)
     pet.model_choice.on_model_menu("chateffort:default")

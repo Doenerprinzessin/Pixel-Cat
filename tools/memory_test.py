@@ -52,7 +52,7 @@ def main() -> int:
                       **({"images": ["A" * 1000]} if k == 11 else {})})
         h.append({"role": "assistant", "content": f"Done with task {t}! (=^･ω･^=)"})
     h.append({"role": "user", "content": "And now the current request."})
-    ctx = pet._context()
+    ctx = pet.session._context()
     users = [m["content"] for m in ctx if m["role"] == "user"]
     tokens = context.tokens(ctx)
     check("every earlier request is still remembered (condensed)", all(f"w{t}" in " ".join(users) for t in range(14)),
@@ -66,11 +66,11 @@ def main() -> int:
         h.append({"role": "user", "content": f"Later request {t}: " + "details " * 150})
         h.append({"role": "assistant", "content": "Answer " + "words " * 150})
     h.append({"role": "user", "content": "final question"})
-    ctx = pet._context()
+    ctx = pet.session._context()
     tokens = context.tokens(ctx)
     check("very long chats keep the newest exchanges within budget",
-          tokens < pet.cfg.num_ctx - 2500 and "Later request 79" in str(ctx) and pet._forgotten > 0,
-          f"~{tokens} tokens, {pet._forgotten} oldest exchanges left out")
+          tokens < pet.cfg.num_ctx - 2500 and "Later request 79" in str(ctx) and pet.session._forgotten > 0,
+          f"~{tokens} tokens, {pet.session._forgotten} oldest exchanges left out")
 
     # ---- one very long desktop task: the request must survive, everything must fit
     h.clear()
@@ -80,21 +80,21 @@ def main() -> int:
             {"function": {"name": "look_at_screen" if k % 2 else "read_window", "arguments": {"target": "editor"}}}]})
         h.append({"role": "tool", "tool_name": "read_window", "content": f"Window step {k}\n" + "element list " * 500,
                   **({"images": ["B" * 2000]} if k == 39 else {})})
-    ctx = pet._context()
+    ctx = pet.session._context()
     tokens = context.tokens(ctx)
     check("long task: the user's request is always first", "THE GOAL" in str(ctx[0]["content"]))
     check("long task: everything fits the context", tokens <= pet.cfg.num_ctx - 2000 - 1500,
-          f"~{tokens} tokens for messages, {pet._dropped_steps} oldest steps left out")
+          f"~{tokens} tokens for messages, {pet.session._dropped_steps} oldest steps left out")
     check("long task: the newest step is complete, with its screenshot",
           "Window step 39" in str(ctx[-1]["content"]) and bool(ctx[-1].get("images"))
           and len(str(ctx[-1]["content"])) > 3000)
     # during a task the context only grows at the end (so Ollama can reuse its cache) ...
-    pet._sent = None
-    first = pet._context()
+    pet.session._sent = None
+    first = pet.session._context()
     h.append({"role": "assistant", "content": "Step 40", "tool_calls": [
         {"function": {"name": "type_text", "arguments": {"text": "owl"}}}]})
     h.append({"role": "tool", "tool_name": "type_text", "content": "Typed 3 characters."})
-    second = pet._context()
+    second = pet.session._context()
     check("during a task the context only grows at the end (cache-friendly)",
           second[:len(first)] == first and len(second) == len(first) + 2)
     # ... until it gets close to full: then it is compacted once
@@ -107,8 +107,8 @@ def main() -> int:
         h.append({"role": "tool", "tool_name": "look_at_screen" if big else "type_text",
                   "content": ("element list " * 200) if big else f"Typed 7 characters. Checked: arrived exactly.",
                   **({"images": ["C" * 2000]} if big else {})})
-        before = list(getattr(pet, "_sent", None) or [])
-        ctx = pet._context()
+        before = list(getattr(pet.session, "_sent", None) or [])
+        ctx = pet.session._context()
         rebuilds += ctx[:len(before)] != before
     check("compaction is rare: most steps stay cache-friendly", rebuilds <= 4, f"{rebuilds} rebuilds in 49 steps")
     tokens = context.tokens(ctx)
@@ -118,19 +118,19 @@ def main() -> int:
     h.append({"role": "assistant", "content": "I'm taking a breath here."})
     pet._on_user_message = pet._on_user_message  # (real method used below via its regex)
     h.append({"role": "user", "content": "continue", "_continue": bool(pet._CONTINUE_RE.match("continue"))})
-    ctx = pet._context()
+    ctx = pet.session._context()
     check("'continue' keeps the original request at the start", "THE GOAL" in str(ctx[0]["content"])
           and any(m.get("content") == "continue" for m in ctx))
     # stuck detection instead of a fixed step limit
-    pet._call_sigs, pet._fail_streak = [], 0
+    pet.session._call_sigs, pet.session._fail_streak = [], 0
     same = [{"name": "click", "arguments": {"element": 4}}]
-    r = [pet._stuck(same) for _ in range(3)]
+    r = [pet.session._stuck(same) for _ in range(3)]
     check("repeating the same click 3x counts as stuck", r[0] == "" and r[1] == "" and "same thing" in r[2], r[2])
-    pet._call_sigs = []
-    r = [pet._stuck([{"name": "scroll", "arguments": {"direction": "down"}}]) for _ in range(5)]
+    pet.session._call_sigs = []
+    r = [pet.session._stuck([{"name": "scroll", "arguments": {"direction": "down"}}]) for _ in range(5)]
     check("scrolling down several times is normal", all(x == "" for x in r))
-    pet._call_sigs = []
-    r = [pet._stuck([{"name": "type_text", "arguments": {"text": f"item {i}"}}]) for i in range(40)]
+    pet.session._call_sigs = []
+    r = [pet.session._stuck([{"name": "type_text", "arguments": {"text": f"item {i}"}}]) for i in range(40)]
     check("40 different steps never count as stuck", all(x == "" for x in r))
 
     if "--long" in sys.argv:
@@ -139,8 +139,8 @@ def main() -> int:
     if "--chat" in sys.argv:
         pet.chat_state.history.clear()
         tool_log: list[str] = []
-        real_run = pet.toolbox.run
-        pet.toolbox.run = lambda spec, a: (tool_log.append(spec.name), real_run(spec, a))[1]  # type: ignore[method-assign]
+        real_run = pet.session.toolbox.run
+        pet.session.toolbox.run = lambda spec, a: (tool_log.append(spec.name), real_run(spec, a))[1]  # type: ignore[method-assign]
         pet.chat_ui.open_chat()
         chat = pet.chat_ui.chat
         assert chat is not None
@@ -153,7 +153,7 @@ def main() -> int:
                 app.processEvents()
                 if chat._confirm_cb is not None:
                     chat._answer("no")
-                if not pet._task_active and pet.worker is None and pet._tool_thread is None:
+                if not pet.session.task_active and pet.session.worker is None and pet.session._tool_thread is None:
                     break
                 time.sleep(0.02)
             out = [m.text for m in chat.msgs[n0:] if m.role == "cat"]
@@ -196,15 +196,15 @@ def long_task(pet, app, check) -> None:  # type: ignore[no-untyped-def]
     chat = pet.chat_ui.chat
     assert chat is not None
     calls: list[str] = []
-    real_run = pet.toolbox.run
-    pet.toolbox.run = lambda spec, a: (calls.append(spec.name), real_run(spec, a))[1]  # type: ignore[method-assign]
+    real_run = pet.session.toolbox.run
+    pet.session.toolbox.run = lambda spec, a: (calls.append(spec.name), real_run(spec, a))[1]  # type: ignore[method-assign]
     animals = ("cat dog cow pig hen fox owl bat elk yak ant bee eel emu gnu ram ape asp boa cod "
                "doe ewe hog jay kid koi pug rat roe sow tit vole wren zebu lynx mole").split()
     msg = ("In the window 'PixelCat Test Editor' click into the big editor, then type these animals ONE PER "
            "type_text CALL (each followed by a new line, never several in one call): " + ", ".join(animals)
            + ". When all are written, click the Save button.")
     t0 = time.time()
-    pet._sent = None
+    pet.session._sent = None
     pet._on_user_message(msg)
     paused = False
     end = time.time() + 900
@@ -214,7 +214,7 @@ def long_task(pet, app, check) -> None:  # type: ignore[no-untyped-def]
             text = chat.confirm_label.text()
             chat._answer("always" if "PixelCat Test Editor" in text and chat.always_btn.isVisible()
                          else "yes" if "PixelCat Test Editor" in text else "no")
-        if not pet._task_active and pet.worker is None and pet._tool_thread is None:
+        if not pet.session.task_active and pet.session.worker is None and pet.session._tool_thread is None:
             last = chat.msgs[-1].text if chat.msgs else ""
             if ("continue" in last.lower() or "taking a breath" in last.lower()) and not paused:
                 paused = True
@@ -239,7 +239,7 @@ def long_task(pet, app, check) -> None:  # type: ignore[no-untyped-def]
         if "text" in data:
             state = data
     words = [w for w in state.get("text", "").split() if w]
-    print(f"  {time.time() - t0:.0f}s, {len(calls)} tool calls, rounds={pet._tool_round}, "
+    print(f"  {time.time() - t0:.0f}s, {len(calls)} tool calls, rounds={pet.session._tool_round}, "
           f"editor has {len(words)} words, status={state.get('status')}", flush=True)
     check("long task runs past 30 steps without pausing", len(calls) > 30 and not paused,
           f"{len(calls)} tool calls, paused={paused}")

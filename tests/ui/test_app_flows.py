@@ -176,25 +176,25 @@ def test_a_too_long_request_is_shortened_and_sent_again(pet, claude) -> None:  #
     assert len(claude) == 2 and pet.accounts.ext_p("anthropic")["ctx_learned"]["m1"] >= external.MIN_BUDGET
     assert "shortened the older parts" in pet.chat_ui.chat.msgs[-2].text
     learned = pet.accounts.ext_p("anthropic")["ctx_learned"]["m1"]
-    assert pet._ctx_budget() == learned
+    assert pet.session._ctx_budget() == learned
     claude[-1].events.failed("too_long", "{}")
     claude[-1].events.failed("too_long", "{}")
-    assert len(claude) == 3 and pet.chat_ui.chat.msgs[-1].role == "error" and not pet._task_active
+    assert len(claude) == 3 and pet.chat_ui.chat.msgs[-1].role == "error" and not pet.session.task_active
 
 
 def test_a_provider_limit_pauses_the_task(pet, claude) -> None:  # type: ignore[no-untyped-def]
     _say(pet, "hi")
     claude[-1].limit("rate", None)
-    assert pet.popups.open[-1].title == "Rate limit reached" and pet._task_active
+    assert pet.popups.open[-1].title == "Rate limit reached" and pet.session.task_active
     pet.popups.open[-1].no.click()
-    assert not pet._task_active
+    assert not pet.session.task_active
 
 
 @pytest.mark.parametrize("kind", ["auth", "ext_offline", "refused"])
 def test_other_external_failures_end_the_task(pet, claude, kind: str) -> None:  # type: ignore[no-untyped-def]
     _say(pet, "hi")
     claude[-1].events.failed(kind, "detail")
-    assert pet.chat_ui.chat.msgs[-1].role == "error" and not pet._task_active
+    assert pet.chat_ui.chat.msgs[-1].role == "error" and not pet.session.task_active
 
 
 @pytest.mark.parametrize(("p", "mid", "info", "budget"), [
@@ -203,7 +203,7 @@ def test_other_external_failures_end_the_task(pet, claude, kind: str) -> None:  
 def test_context_budget_per_provider(pet, p: str, mid: str, info: dict, budget: int) -> None:  # type: ignore[no-untyped-def,type-arg]
     pet.accounts.ext_p(p)["models"] = [{"id": mid, "name": "M", **info}]
     pet.cfg.model = f"{p}:{mid}"
-    assert pet._ctx_budget() == budget
+    assert pet.session._ctx_budget() == budget
 
 
 # ---------------------------------------------------------------- Copilot reads a web page
@@ -211,21 +211,21 @@ def test_context_budget_per_provider(pet, p: str, mid: str, info: dict, budget: 
                                                              (False, ["read_web_page"], False)])
 def test_copilot_page_read_permission(pet, auto_mode: bool, approved: list, asks: bool) -> None:  # type: ignore[no-untyped-def,type-arg]
     pet.chat_ui.ensure_chat()
-    pet._begin_task()
+    pet.session.begin_task()
     pet.saved.auto_mode = auto_mode
     pet.saved.auto_approved_tools[:] = approved
     replies: list[bool] = []
-    pet._copilot_permission("https://example.com", replies.append)
+    pet.session._copilot_permission("https://example.com", replies.append)
     if asks:
         assert replies == [] and "let Copilot read the web page https://example.com?" in pet.chat_ui.chat.confirm_label.text()
         pet.chat_ui.chat.always_btn.click()
-        assert pet.saved.auto_approved_tools == [pet.toolbox.specs["read_web_page"].group]
+        assert pet.saved.auto_approved_tools == [pet.session.toolbox.specs["read_web_page"].group]
     assert replies == [True] and pet.chat_ui.chat.msgs[-1].text.startswith("🌐 Copilot reads https://example.com")
 
 
 def test_copilot_page_read_without_a_task_is_refused(pet) -> None:  # type: ignore[no-untyped-def]
     replies: list[bool] = []
-    pet._copilot_permission("https://example.com", replies.append)
+    pet.session._copilot_permission("https://example.com", replies.append)
     assert replies == [False]
 
 
@@ -236,12 +236,12 @@ def _watch(i: int = 1) -> Watch:
 
 def test_a_wake_waits_while_the_cat_is_busy(pet, workers) -> None:  # type: ignore[no-untyped-def]
     pet.chat_ui.ensure_chat()
-    pet._begin_task()
-    pet._on_watch_fired(_watch(), "It happened", False)
-    assert workers == [] and len(pet._wakes) == 1
-    pet._end_task()
-    pet._drain_wakes()
-    assert pet._wakes == [] and len(workers) == 1 and pet._task_wake
+    pet.session.begin_task()
+    pet.session.on_watch_fired(_watch(), "It happened", False)
+    assert workers == [] and len(pet.session._wakes) == 1
+    pet.session.end_task()
+    pet.session._drain_wakes()
+    assert pet.session._wakes == [] and len(workers) == 1 and pet.session._task_wake
     workers[-1].events.done("Done: it happened.", [])
     assert pet.brain.bubble.kind == "bubble_exclaim"
 
@@ -250,11 +250,11 @@ def test_a_wake_waits_while_the_user_is_typing(pet, workers) -> None:  # type: i
     chat = pet.chat_ui.ensure_chat()
     chat.show()
     chat.input.setText("half a sentence")
-    pet._on_watch_fired(_watch(), "x", True)
-    assert workers == [] and pet._wake_timer.isActive()
-    pet._wake_timer.stop()
+    pet.session.on_watch_fired(_watch(), "x", True)
+    assert workers == [] and pet.session._wake_timer.isActive()
+    pet.session._wake_timer.stop()
     chat.input.setText("")
-    pet._drain_wakes()
+    pet.session._drain_wakes()
     assert workers and "Tell the user briefly, and offer to keep waiting." in pet.chat_state.history[-1]["content"]
 
 
@@ -262,7 +262,7 @@ def test_watch_bar_and_cancel(pet) -> None:  # type: ignore[no-untyped-def]
     chat = pet.chat_ui.ensure_chat()
     with pet.watches._lock:
         pet.watches._watches.append(_watch(5))
-    pet._on_watches_changed()
+    pet.session.on_watches_changed()
     assert "thing 5" in chat.watch_bar.text()
     assert "watching 1 thing" in pet.tray.toolTip()
     chat.watch_cancel_requested.emit(5)

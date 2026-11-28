@@ -215,7 +215,7 @@ def app_env(monkeypatch: pytest.MonkeyPatch, desktop: Desktop, tmp_path, fake_pl
 
 
 def _close_all(pet: Any) -> None:
-    for th in [*pet._live_tools, pet._tool_thread, pet.worker, *pet._live_workers]:
+    for th in [*pet.session.live_tools, pet.session._tool_thread, pet.session.worker, *pet.session._live_workers]:
         if th is not None and hasattr(th, "isRunning") and th.isRunning():
             th.wait(5000)                           # (a QThread destroyed while running aborts Python)
     for tm in pet.findChildren(type(pet.tick_timer)):

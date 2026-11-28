@@ -57,7 +57,7 @@ class FakeToolBox:
 @pytest.fixture
 def loop(pet, workers):  # type: ignore[no-untyped-def]
     tb = FakeToolBox()
-    pet.toolbox = tb
+    pet.session.toolbox = tb
     pet.chat_ui.open_chat()
     pet.tb = tb
     return pet
@@ -83,13 +83,13 @@ def test_tool_call_then_result_then_final_answer(loop, workers) -> None:  # type
     assert len(workers) == 1 and [t["function"]["name"] for t in workers[0].tools] == ["ping"]
     workers[0].events.done("Pinging!", [call("ping", n=1)])
     assert loop.tb.ran == [("ping", {"n": 1})]
-    assert len(workers) == 2 and loop._task_active and loop._tool_round == 1
+    assert len(workers) == 2 and loop.session.task_active and loop.session._tool_round == 1
     second = workers[1].messages
     assert second[0]["role"] == "system" and [m["role"] for m in second[1:]] == ["user", "assistant", "tool"]
     assert second[-1] == {"role": "tool", "content": "ping done 1", "tool_name": "ping"}
     assert any(m.role == "info" and m.text == "ping done 1" for m in loop.chat_ui.chat.msgs)
     workers[1].events.done("All pinged.", [])
-    assert not loop._task_active and loop.worker is None
+    assert not loop.session.task_active and loop.session.worker is None
     assert roles(loop) == ["user", "assistant", "tool", "assistant"]
     assert loop.chat_state.history[1]["tool_calls"] == [{"function": {"name": "ping", "arguments": {"n": 1}}}]
     assert loop.chat_ui.chat.msgs[-1].text == "All pinged." and loop.chat_ui.chat.send_btn.text() == "SEND"
@@ -101,14 +101,14 @@ def test_several_calls_in_one_reply_run_in_order_then_one_request(loop, workers)
     ask(loop, "both")
     workers[0].events.done("", [call("a", n=1), call("b", n=2), call("a", n=3)])
     assert [r[0] for r in loop.tb.ran] == ["a", "b", "a"]
-    assert len(workers) == 2 and loop._tool_round == 1
+    assert len(workers) == 2 and loop.session._tool_round == 1
     assert roles(loop) == ["user", "assistant", "tool", "tool", "tool"]
 
 
 def test_a_reply_without_calls_ends_the_task(loop, workers) -> None:  # type: ignore[no-untyped-def]
     ask(loop, "hi")
     workers[0].events.done("Meow.", [])
-    assert not loop._task_active and len(workers) == 1
+    assert not loop.session.task_active and len(workers) == 1
 
 
 def test_tool_output_with_a_picture_keeps_only_the_newest(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -124,7 +124,7 @@ def test_tool_output_with_a_picture_keeps_only_the_newest(loop, workers) -> None
 
 def test_text_tool_protocol_puts_results_in_user_messages(loop, workers) -> None:  # type: ignore[no-untyped-def]
     loop.tb.add("ping")
-    loop.native_tools = False
+    loop.session.native_tools = False
     ask(loop, "ping")
     assert workers[0].tools is None
     workers[0].events.done('<tool_call>{"name": "ping", "arguments": {"n": 4}}</tool_call>', [])
@@ -139,13 +139,13 @@ def test_the_step_limit_pauses_the_task_and_continue_goes_on(loop, workers) -> N
     ask(loop, "do many steps")
     for i in range(3):
         workers[-1].events.done("", [call("step", n=i)])
-    assert len(loop.tb.ran) == 3 and loop._tool_round == 3 and loop._task_active
+    assert len(loop.tb.ran) == 3 and loop.session._tool_round == 3 and loop.session.task_active
     workers[-1].events.done("", [call("step", n=99)])
-    assert len(loop.tb.ran) == 3 and not loop._task_active
+    assert len(loop.tb.ran) == 3 and not loop.session.task_active
     assert "That was 3 steps in a row" in loop.chat_ui.chat.msgs[-1].text and len(workers) == 4
     ask(loop, "continue")
     assert loop.chat_state.history[-1] == {"role": "user", "content": "continue", "_continue": True}
-    assert loop._tool_round == 0 and loop._task_active and len(workers) == 5
+    assert loop.session._tool_round == 0 and loop.session.task_active and len(workers) == 5
     workers[-1].events.done("", [call("step", n=100)])
     assert len(loop.tb.ran) == 4
 
@@ -157,9 +157,9 @@ def test_waiting_rounds_do_not_count_as_steps(loop, workers) -> None:  # type: i
     ask(loop, "wait a bit")
     for i in range(3):
         workers[-1].events.done("", [call("wait", n=i)])
-    assert loop._tool_round == 0 and len(loop.tb.ran) == 3
+    assert loop.session._tool_round == 0 and len(loop.tb.ran) == 3
     workers[-1].events.done("", [call("step", n=1), call("wait", n=9)])
-    assert loop._tool_round == 1
+    assert loop.session._tool_round == 1
 
 
 @pytest.mark.parametrize(("name", "repeats"), [("ping", 3), ("scroll", 6)])
@@ -168,9 +168,9 @@ def test_repeating_the_same_call_stops(loop, workers, name: str, repeats: int) -
     ask(loop, "go")
     for _ in range(repeats - 1):
         workers[-1].events.done("", [call(name, n=1)])
-    assert loop._task_active and len(loop.tb.ran) == repeats - 1
+    assert loop.session.task_active and len(loop.tb.ran) == repeats - 1
     workers[-1].events.done("", [call(name, n=1)])
-    assert not loop._task_active and len(loop.tb.ran) == repeats - 1
+    assert not loop.session.task_active and len(loop.tb.ran) == repeats - 1
     assert "I keep doing the same thing" in loop.chat_ui.chat.msgs[-1].text
 
 
@@ -181,9 +181,9 @@ def test_a_tool_error_goes_back_to_the_model(loop, workers) -> None:  # type: ig
     loop.tb.add("poke", run=broken)
     ask(loop, "poke")
     workers[0].events.done("", [call("poke", n=1)])
-    assert loop.chat_state.history[-1]["content"] == "error: the window is gone" and loop._fail_streak == 1
+    assert loop.chat_state.history[-1]["content"] == "error: the window is gone" and loop.session._fail_streak == 1
     assert loop.chat_ui.chat.msgs[-2].role == "error" and "poke didn't work: the window is gone" in loop.chat_ui.chat.msgs[-2].text
-    assert len(workers) == 2 and loop._task_active and workers[1].think is True      # (it thinks after a failure)
+    assert len(workers) == 2 and loop.session.task_active and workers[1].think is True      # (it thinks after a failure)
 
 
 def test_an_unexpected_exception_in_a_tool_is_reported_too(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -201,9 +201,9 @@ def test_failing_again_and_again_stops(loop, workers) -> None:  # type: ignore[n
     ask(loop, "poke")
     for i in range(4):
         workers[-1].events.done("", [call("poke", n=i)])
-    assert loop._fail_streak == 4 and loop._task_active
+    assert loop.session._fail_streak == 4 and loop.session.task_active
     workers[-1].events.done("", [call("poke", n=9)])
-    assert not loop._task_active and "Several steps in a row didn't work" in loop.chat_ui.chat.msgs[-1].text
+    assert not loop.session.task_active and "Several steps in a row didn't work" in loop.chat_ui.chat.msgs[-1].text
 
 
 def test_a_success_resets_the_failures(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -212,7 +212,7 @@ def test_a_success_resets_the_failures(loop, workers) -> None:  # type: ignore[n
     ask(loop, "go")
     workers[-1].events.done("", [call("poke", n=1)])
     workers[-1].events.done("", [call("ping", n=1)])
-    assert loop._fail_streak == 0
+    assert loop.session._fail_streak == 0
 
 
 def test_an_unknown_tool_is_an_error_result_and_the_next_call_still_runs(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -263,7 +263,7 @@ def test_auto_mode_acts_up_to_its_limit_then_asks(loop, workers) -> None:  # typ
     loop.set_auto_mode(True)
     ask(loop, "go")
     workers[-1].events.done("", [call("click", n=0), call("act", n=1), call("act", n=2), call("act", n=3)])
-    assert [r[1]["n"] for r in loop.tb.ran] == [0, 1, 2] and loop._auto_actions == 2      # (clicks don't count)
+    assert [r[1]["n"] for r in loop.tb.ran] == [0, 1, 2] and loop.session._auto_actions == 2      # (clicks don't count)
     assert loop.chat_ui.chat._confirm_cb is not None
     loop.chat_ui.chat.yes_btn.click()
     assert [r[1]["n"] for r in loop.tb.ran] == [0, 1, 2, 3]
@@ -285,7 +285,7 @@ def test_stop_while_the_model_is_answering(loop, workers) -> None:  # type: igno
     ask(loop, "long answer")
     workers[0].events.token("Once upon")
     loop.chat_ui.chat.send_btn.click()                            # (it reads STOP)
-    assert workers[0].cancelled and not loop._task_active and loop.agent.cancel.is_set()
+    assert workers[0].cancelled and not loop.session.task_active and loop.session.agent.cancel.is_set()
     assert loop.chat_ui.chat.msgs[-1].text == "(stopped)"
     workers[0].events.done("Once upon a time", [call("anything")])
     assert loop.chat_state.history[-1]["role"] == "user" and len(workers) == 1
@@ -296,15 +296,15 @@ def test_stop_while_a_card_asks(loop, workers) -> None:  # type: ignore[no-untyp
     ask(loop, "close it")
     workers[0].events.done("", [call("close")])
     cb = loop.chat_ui.chat._confirm_cb
-    loop._on_escape()
-    assert not loop._task_active and loop.chat_ui.chat._confirm_cb is None and not loop.chat_ui.chat.confirm.isVisibleTo(loop.chat_ui.chat)
+    loop.session.on_escape()
+    assert not loop.session.task_active and loop.chat_ui.chat._confirm_cb is None and not loop.chat_ui.chat.confirm.isVisibleTo(loop.chat_ui.chat)
     cb("yes")                                             # (a late answer does nothing)
     assert loop.tb.ran == [] and len(workers) == 1
 
 
 def test_escape_without_a_task_does_nothing(loop, workers) -> None:  # type: ignore[no-untyped-def]
     n = len(loop.chat_ui.chat.msgs)
-    loop._on_escape()
+    loop.session.on_escape()
     assert len(loop.chat_ui.chat.msgs) == n
 
 
@@ -318,11 +318,11 @@ def test_stop_while_a_background_tool_runs(loop, workers, qtbot) -> None:  # typ
     loop.tb.add("slow", run=slow, background=True, group="desktop")
     ask(loop, "do the slow thing")
     workers[0].events.done("", [call("slow")])
-    assert loop._tool_thread is not None and loop.esc_watch.active
-    loop._cancel_chat()
-    assert not loop._task_active and not loop.esc_watch.active and loop.chat_ui.chat.msgs[-1].text == "(stopped)"
+    assert loop.session._tool_thread is not None and loop.session.esc_watch.active
+    loop.session.cancel_chat()
+    assert not loop.session.task_active and not loop.session.esc_watch.active and loop.chat_ui.chat.msgs[-1].text == "(stopped)"
     release.set()
-    qtbot.waitUntil(lambda: loop._tool_thread is None and not loop._live_tools, timeout=3000)
+    qtbot.waitUntil(lambda: loop.session._tool_thread is None and not loop.session.live_tools, timeout=3000)
     assert loop.chat_state.history[-1] == {"role": "tool", "content": "finally done", "tool_name": "slow"}
     assert len(workers) == 1                              # (the result is kept, nothing is asked any more)
     assert not any(m.text == "finally done" for m in loop.chat_ui.chat.msgs)
@@ -333,7 +333,7 @@ def test_a_background_tool_result_continues_the_task(loop, workers, qtbot) -> No
     ask(loop, "go")
     workers[0].events.done("", [call("slow")])
     qtbot.waitUntil(lambda: len(workers) == 2, timeout=3000)
-    assert loop.chat_state.history[-1]["content"] == "slow done" and loop._tool_thread is None
+    assert loop.chat_state.history[-1]["content"] == "slow done" and loop.session._tool_thread is None
 
 
 def test_a_new_chat_stops_the_task_and_forgets_it(loop, workers) -> None:  # type: ignore[no-untyped-def]
@@ -341,15 +341,15 @@ def test_a_new_chat_stops_the_task_and_forgets_it(loop, workers) -> None:  # typ
     ask(loop, "close it")
     workers[0].events.done("", [call("close")])
     loop.new_chat()
-    assert not loop._task_active and loop.chat_state.history == [] and loop._pending_calls == []
-    assert loop.chat_ui.chat._confirm_cb is None and loop.agent.cancel.is_set()
+    assert not loop.session.task_active and loop.chat_state.history == [] and loop.session._pending_calls == []
+    assert loop.chat_ui.chat._confirm_cb is None and loop.session.agent.cancel.is_set()
 
 
 def test_a_new_message_after_a_stop_is_a_new_task(loop, workers) -> None:  # type: ignore[no-untyped-def]
     loop.tb.add("ping")
     ask(loop, "one")
-    first = loop._task_id
-    loop._cancel_chat()
+    first = loop.session._task_id
+    loop.session.cancel_chat()
     ask(loop, "two")
-    assert loop._task_id > first + 1 and loop._task_active and not loop.agent.cancel.is_set()
+    assert loop.session._task_id > first + 1 and loop.session.task_active and not loop.session.agent.cancel.is_set()
     assert [m["content"] for m in workers[-1].messages if m["role"] == "user"] == ["one", "two"]

@@ -55,7 +55,7 @@ def main() -> int:
                       providers=build_providers())
     pet.save = lambda: None
     pet.start()
-    tb = pet.toolbox
+    tb = pet.session.toolbox
 
     def pump(seconds: float, until=None) -> bool:  # type: ignore[no-untyped-def]
         end = time.time() + seconds
@@ -157,9 +157,9 @@ def main() -> int:
                     ok = "PixelCat test window" in text
                     print("  card:", text.replace("<b>", "").replace("</b>", "")[:140], "->", approve if ok else "no", flush=True)
                     chat._answer(approve if ok else "no")
-                if pet.worker is None and not chat._busy and chat._confirm_cb is None and not pet._pending_calls:
+                if pet.session.worker is None and not chat._busy and chat._confirm_cb is None and not pet.session._pending_calls:
                     pump(0.3)
-                    if pet.worker is None and not chat._busy:
+                    if pet.session.worker is None and not chat._busy:
                         break
                 time.sleep(0.02)
             return [f"{m.role}: {m.text}" for m in chat.msgs[n0:]]
